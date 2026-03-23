@@ -13,7 +13,10 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Unicode-DFS-2016",
-    "GPL-3.0",
+    "GPL-3.0-only",
+    "AGPL-3.0-only",
+    "CC0-1.0",
+    "Artistic-2.0",
     "Zlib",
     "OpenSSL",
 ]
