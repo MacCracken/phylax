@@ -20,6 +20,9 @@ All notable changes to Phylax will be documented in this file.
 - Watch tokio runtime reuse (created once, not per-triage)
 - Removed dead `TriageRequest`/`TriageResponse` types from `ai.rs`
 - Eliminated scan duplication in `cmd_scan` (now calls `run_scan`)
+- Multi-file and directory scanning: `phylax scan file1 file2 dir/` with recursive walk
+- `collect_files()` — recursive directory walker with size filtering
+- Summary output for multi-file scans (clean/findings count, total duration)
 - 212 tests (208 unit + 4 integration)
 
 ## [0.22.3] - 2026-03-22

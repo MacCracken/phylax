@@ -27,10 +27,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Scan a file for threats
+    /// Scan files or directories for threats
     Scan {
-        /// Path to the file to scan
-        path: PathBuf,
+        /// Paths to scan (files or directories)
+        paths: Vec<PathBuf>,
 
         /// TOML file containing YARA rules
         #[arg(short, long)]
@@ -155,14 +155,14 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Scan {
-            path,
+            paths,
             rules,
             block_size,
             triage,
             hoosh_url,
             hoosh_model,
         } => cmd_scan(
-            &path,
+            &paths,
             rules.as_deref(),
             block_size,
             triage,
@@ -209,8 +209,42 @@ fn main() -> Result<()> {
 // Shared scan logic
 // ---------------------------------------------------------------------------
 
-/// Run a complete scan on a file and return the result.
-fn run_scan(path: &Path, rules_path: Option<&Path>) -> Result<ScanResult> {
+/// Collect all scannable files from a list of paths (files or directories).
+fn collect_files(paths: &[PathBuf], max_file_size: u64) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for path in paths {
+        if path.is_file() {
+            if let Ok(meta) = std::fs::metadata(path) {
+                if meta.len() <= max_file_size {
+                    files.push(path.clone());
+                } else {
+                    warn!(path = %path.display(), size = meta.len(), "skipping oversized file");
+                }
+            }
+        } else if path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                let mut subpaths: Vec<PathBuf> =
+                    entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+                subpaths.sort();
+                files.extend(collect_files(&subpaths, max_file_size));
+            }
+        }
+    }
+    files
+}
+
+/// Load YARA rules from a file, or return an empty engine.
+fn load_yara_engine(rules_path: Option<&Path>) -> Result<YaraEngine> {
+    let mut engine = YaraEngine::new();
+    if let Some(rp) = rules_path {
+        let rules_str = std::fs::read_to_string(rp)?;
+        engine.load_rules_toml(&rules_str)?;
+    }
+    Ok(engine)
+}
+
+/// Run a complete scan on a file using a pre-loaded YARA engine.
+fn run_scan_with_engine(path: &Path, engine: &YaraEngine) -> Result<ScanResult> {
     let config = ScanConfig::default();
     let metadata = std::fs::metadata(path)?;
     if metadata.len() > config.max_file_size {
@@ -224,12 +258,6 @@ fn run_scan(path: &Path, rules_path: Option<&Path>) -> Result<ScanResult> {
     let data = std::fs::read(path)?;
     let start = std::time::Instant::now();
     let analysis = analyze(&data);
-
-    let mut engine = YaraEngine::new();
-    if let Some(rp) = rules_path {
-        let rules_str = std::fs::read_to_string(rp)?;
-        engine.load_rules_toml(&rules_str)?;
-    }
 
     let yara_findings = engine.scan(&data);
     let mut analyze_findings =
@@ -245,6 +273,12 @@ fn run_scan(path: &Path, rules_path: Option<&Path>) -> Result<ScanResult> {
         scan_duration: start.elapsed(),
         scanner_version: VERSION.to_string(),
     })
+}
+
+/// Convenience: load rules and scan a single file.
+fn run_scan(path: &Path, rules_path: Option<&Path>) -> Result<ScanResult> {
+    let engine = load_yara_engine(rules_path)?;
+    run_scan_with_engine(path, &engine)
 }
 
 /// Send findings to hoosh for LLM triage and print results.
@@ -284,81 +318,161 @@ async fn triage_findings(findings: &[ThreatFinding], hoosh_url: &str, model: &st
 // ---------------------------------------------------------------------------
 
 fn cmd_scan(
-    path: &Path,
+    paths: &[PathBuf],
     rules_path: Option<&Path>,
     block_size: usize,
     do_triage: bool,
     hoosh_url: &str,
     hoosh_model: &str,
 ) -> Result<()> {
-    info!(path = %path.display(), "starting scan");
+    let config = ScanConfig::default();
+    let files = collect_files(paths, config.max_file_size);
 
-    // Read file for display details (entropy profile needs block_size)
-    let data = std::fs::read(path)?;
+    if files.is_empty() {
+        println!("No scannable files found.");
+        return Ok(());
+    }
 
-    println!("Scanning: {}", path.display());
-    println!("Size: {} bytes", data.len());
-    println!();
+    let multi = files.len() > 1;
+    if multi {
+        println!("Scanning {} file(s)...", files.len());
+        println!();
+    }
 
-    let analysis = analyze(&data);
-    println!("[Magic Bytes] File type: {}", analysis.file_type);
-    println!("[SHA-256]     {}", analysis.sha256);
+    // Load YARA rules once for all files
+    let engine = load_yara_engine(rules_path)?;
 
-    let entropy = analysis.entropy;
-    println!(
-        "[Entropy]     {entropy:.4} bits/byte {}",
-        if is_suspicious_entropy(entropy) {
-            "(SUSPICIOUS)"
-        } else {
-            "(normal)"
+    let mut total_findings = 0usize;
+    let mut total_clean = 0usize;
+    let mut all_results = Vec::new();
+    let overall_start = std::time::Instant::now();
+
+    for file in &files {
+        info!(path = %file.display(), "starting scan");
+
+        let data = match std::fs::read(file) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(path = %file.display(), error = %e, "failed to read file");
+                if !multi {
+                    anyhow::bail!("failed to read {}: {e}", file.display());
+                }
+                println!("[ERROR] {} — {e}", file.display());
+                continue;
+            }
+        };
+
+        if !multi {
+            println!("Scanning: {}", file.display());
+            println!("Size: {} bytes", data.len());
+            println!();
+
+            let analysis = analyze(&data);
+            println!("[Magic Bytes] File type: {}", analysis.file_type);
+            println!("[SHA-256]     {}", analysis.sha256);
+
+            let entropy = analysis.entropy;
+            println!(
+                "[Entropy]     {entropy:.4} bits/byte {}",
+                if is_suspicious_entropy(entropy) {
+                    "(SUSPICIOUS)"
+                } else {
+                    "(normal)"
+                }
+            );
+
+            let profile = entropy_profile(&data, block_size);
+            if !profile.is_empty() {
+                let max_block = profile
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.total_cmp(b.1))
+                    .unwrap();
+                println!(
+                    "[Profile]     {} blocks, max entropy {:.4} at block {}",
+                    profile.len(),
+                    max_block.1,
+                    max_block.0,
+                );
+            }
+
+            if let Some(rp) = rules_path {
+                println!("[YARA]        Rules from {}", rp.display());
+            }
         }
-    );
 
-    let profile = entropy_profile(&data, block_size);
-    if !profile.is_empty() {
-        let max_block = profile
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
-            .unwrap();
+        match run_scan_with_engine(file, &engine) {
+            Ok(result) => {
+                let n = result.findings.len();
+                if multi {
+                    if n == 0 {
+                        println!(
+                            "  {} — clean ({:.2?})",
+                            file.display(),
+                            result.scan_duration
+                        );
+                        total_clean += 1;
+                    } else {
+                        println!(
+                            "  {} — {} finding(s) ({:.2?})",
+                            file.display(),
+                            n,
+                            result.scan_duration
+                        );
+                        for f in &result.findings {
+                            println!(
+                                "    [{severity}] {rule}: {desc}",
+                                severity = f.severity,
+                                rule = f.rule_name,
+                                desc = f.description,
+                            );
+                        }
+                    }
+                } else {
+                    println!();
+                    if n == 0 {
+                        println!("Result: CLEAN ({:.2?})", result.scan_duration);
+                    } else {
+                        println!("Result: {n} FINDING(S) ({:.2?})", result.scan_duration);
+                        println!();
+                        for f in &result.findings {
+                            println!(
+                                "  [{severity}] {rule}: {desc}",
+                                severity = f.severity,
+                                rule = f.rule_name,
+                                desc = f.description,
+                            );
+                        }
+                    }
+                }
+                total_findings += n;
+                all_results.push(result);
+            }
+            Err(e) => {
+                warn!(path = %file.display(), error = %e, "scan failed");
+                println!("  {} — error: {e}", file.display());
+            }
+        }
+    }
+
+    if multi {
+        let elapsed = overall_start.elapsed();
+        println!();
         println!(
-            "[Profile]     {} blocks, max entropy {:.4} at block {}",
-            profile.len(),
-            max_block.1,
-            max_block.0,
+            "Summary: {} file(s) scanned, {} clean, {} with findings ({elapsed:.2?})",
+            files.len(),
+            total_clean,
+            files.len() - total_clean,
         );
     }
 
-    if let Some(rp) = rules_path {
-        println!("[YARA]        Rules from {}", rp.display());
-    }
-
-    // Use run_scan for the actual scan result
-    let result = run_scan(path, rules_path)?;
-    let duration = result.scan_duration;
-    let total = result.findings.len();
-
-    println!();
-    if total == 0 {
-        info!(duration = ?duration, "scan complete — clean");
-        println!("Result: CLEAN ({duration:.2?})");
-    } else {
-        info!(duration = ?duration, findings = total, "scan complete — threats detected");
-        println!("Result: {total} FINDING(S) ({duration:.2?})");
-        println!();
-        for f in &result.findings {
-            println!(
-                "  [{severity}] {rule}: {desc}",
-                severity = f.severity,
-                rule = f.rule_name,
-                desc = f.description,
-            );
-        }
-    }
-
-    if do_triage && total > 0 {
+    // Triage all findings
+    if do_triage && total_findings > 0 {
+        let all_findings: Vec<_> = all_results.iter().flat_map(|r| &r.findings).collect();
         let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(triage_findings(&result.findings, hoosh_url, hoosh_model));
+        // Clone findings for triage (need owned refs)
+        let owned: Vec<ThreatFinding> = all_findings.into_iter().cloned().collect();
+        rt.block_on(triage_findings(&owned, hoosh_url, hoosh_model));
     }
 
     Ok(())

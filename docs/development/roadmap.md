@@ -2,8 +2,7 @@
 
 ## v1.0.0 — Production
 
-- [ ] API stability guarantee
-- [ ] Multi-file and directory scanning (batch `phylax scan dir/`)
+- [ ] API stability guarantee (`#[must_use]`, review public surface, doc coverage)
 
 ## Non-goals
 
