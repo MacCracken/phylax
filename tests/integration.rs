@@ -4,8 +4,8 @@ use phylax::analyze::{
     FileType, analyze, analyze_findings, detect_file_type, detect_polyglot, entropy_profile,
     escalate_severity, file_sha256, findings_from_analysis, is_suspicious_entropy, shannon_entropy,
 };
-use phylax::core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 use phylax::report::{ReportFormat, ThreatReport};
+use phylax::types::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 use phylax::yara::YaraEngine;
 use std::time::Duration;
 
@@ -179,7 +179,7 @@ fn full_pipeline_scan_escalate_report() {
     );
 
     // Generate report from results
-    let result = phylax::core::ScanResult {
+    let result = phylax::types::ScanResult {
         target: ScanTarget::Memory,
         findings,
         scan_duration: Duration::from_millis(42),
@@ -327,7 +327,7 @@ fn queue_feeds_report() {
     assert_eq!(first.priority, ScanPriority::Critical);
 
     // Simulate scan results from queue
-    let results: Vec<phylax::core::ScanResult> = vec![phylax::core::ScanResult {
+    let results: Vec<phylax::types::ScanResult> = vec![phylax::types::ScanResult {
         target: first.target,
         findings: vec![ThreatFinding::new(
             ScanTarget::File("/a".into()),

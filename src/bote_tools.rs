@@ -58,7 +58,7 @@ pub fn status_handler() -> ToolHandler {
     Arc::new(|_args: Value| {
         json!({
             "status": "ready",
-            "version": crate::core::VERSION,
+            "version": crate::types::VERSION,
             "analyzers": ["entropy", "magic_bytes", "yara", "polyglot", "pe", "elf", "strings"],
         })
     })

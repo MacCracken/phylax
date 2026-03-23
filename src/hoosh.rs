@@ -3,7 +3,7 @@
 //! Sends threat findings to hoosh's OpenAI-compatible `/v1/chat/completions`
 //! endpoint for automated classification and triage.
 
-use crate::core::ThreatFinding;
+use crate::types::ThreatFinding;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 
@@ -158,7 +158,7 @@ impl HooshClient {
     ) -> Vec<anyhow::Result<TriageResult>> {
         let handles: Vec<_> = findings
             .iter()
-            .map(|f| {
+            .map(|f: &ThreatFinding| {
                 let client = self.clone();
                 let finding = f.clone();
                 tokio::spawn(async move { client.triage_finding(&finding).await })
@@ -256,7 +256,7 @@ fn parse_triage_response(content: &str, finding_id: &str, model: &str) -> Triage
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FindingCategory, FindingSeverity, ScanTarget};
+    use crate::types::{FindingCategory, FindingSeverity, ScanTarget};
 
     #[test]
     fn client_defaults() {

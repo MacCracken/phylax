@@ -9,9 +9,9 @@ use tracing_subscriber::EnvFilter;
 use phylax::analyze::{
     analyze, entropy_profile, escalate_severity, findings_from_analysis, is_suspicious_entropy,
 };
-use phylax::core::{ScanConfig, ScanResult, ScanTarget, ThreatFinding, VERSION};
 use phylax::hoosh::HooshClient;
 use phylax::report::{ReportFormat, ThreatReport};
+use phylax::types::{ScanConfig, ScanResult, ScanTarget, ThreatFinding, VERSION};
 use phylax::yara::YaraEngine;
 
 #[derive(Parser)]

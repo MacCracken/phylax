@@ -3,7 +3,7 @@
 //! A bounded, priority-ordered queue for scan requests. Higher-severity
 //! requests are processed first.
 
-use crate::core::{FindingSeverity, ScanTarget};
+use crate::types::{FindingSeverity, ScanTarget};
 use std::collections::BinaryHeap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};

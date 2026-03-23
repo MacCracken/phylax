@@ -1,6 +1,6 @@
 # Benchmarks
 
-Latest: **0.22.3** — 16 groups, 212 tests
+Latest: **0.22.3** — 16 benchmark groups, 231 tests (13 proptest), 3 fuzz targets
 
 ## entropy
 

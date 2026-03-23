@@ -6,7 +6,7 @@
 use phylax::analyze::{
     analyze, analyze_findings, entropy_profile, is_suspicious_entropy, shannon_entropy,
 };
-use phylax::core::ScanTarget;
+use phylax::types::ScanTarget;
 use phylax::yara::YaraEngine;
 use std::env;
 

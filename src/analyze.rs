@@ -1,6 +1,6 @@
 //! Entropy analysis, magic bytes detection, and binary classification.
 
-use crate::core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
+use crate::types::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;

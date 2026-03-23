@@ -2,7 +2,7 @@
 //!
 //! Produces structured reports from scan results in JSON and Markdown formats.
 
-use crate::core::{ScanResult, VERSION};
+use crate::types::{ScanResult, VERSION};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -47,7 +47,10 @@ impl ThreatReport {
     pub fn from_results(results: Vec<ScanResult>) -> Self {
         let total_findings: usize = results.iter().map(|r| r.findings.len()).sum();
         let targets_scanned = results.len();
-        let targets_with_findings = results.iter().filter(|r| r.has_threats()).count();
+        let targets_with_findings = results
+            .iter()
+            .filter(|r: &&ScanResult| r.has_threats())
+            .count();
         let targets_clean = targets_scanned - targets_with_findings;
 
         let mut critical_count = 0;
@@ -58,11 +61,11 @@ impl ThreatReport {
 
         for finding in results.iter().flat_map(|r| &r.findings) {
             match finding.severity {
-                crate::core::FindingSeverity::Critical => critical_count += 1,
-                crate::core::FindingSeverity::High => high_count += 1,
-                crate::core::FindingSeverity::Medium => medium_count += 1,
-                crate::core::FindingSeverity::Low => low_count += 1,
-                crate::core::FindingSeverity::Info => info_count += 1,
+                crate::types::FindingSeverity::Critical => critical_count += 1,
+                crate::types::FindingSeverity::High => high_count += 1,
+                crate::types::FindingSeverity::Medium => medium_count += 1,
+                crate::types::FindingSeverity::Low => low_count += 1,
+                crate::types::FindingSeverity::Info => info_count += 1,
             }
         }
 
@@ -164,7 +167,7 @@ impl ThreatReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
+    use crate::types::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 
     fn sample_results() -> Vec<ScanResult> {
         vec![

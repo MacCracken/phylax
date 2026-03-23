@@ -4,7 +4,7 @@ use phylax::analyze::{
     analyze, analyze_findings, detect_file_type, detect_polyglot, entropy_profile, file_sha256,
     is_suspicious_entropy, shannon_entropy,
 };
-use phylax::core::ScanTarget;
+use phylax::types::ScanTarget;
 use phylax::yara::YaraEngine;
 
 // ---------------------------------------------------------------------------
@@ -556,8 +556,8 @@ fn bench_queue(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_report(c: &mut Criterion) {
-    use phylax::core::{FindingCategory, FindingSeverity, ScanResult, ThreatFinding};
     use phylax::report::{ReportFormat, ThreatReport};
+    use phylax::types::{FindingCategory, FindingSeverity, ScanResult, ThreatFinding};
 
     let mut group = c.benchmark_group("report");
 

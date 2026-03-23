@@ -33,6 +33,7 @@ Status tracking for all direct dependencies.
 | Crate | Version | Purpose |
 |-------|---------|---------|
 | `criterion` | 0.5 | Benchmarking (16 groups) |
+| `proptest` | 1 | Property-based testing (PE, ELF, strings) |
 | `tempfile` | 3 | Temporary dirs for quarantine/watch tests |
 
 ## MSRV

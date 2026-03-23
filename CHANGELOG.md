@@ -57,7 +57,8 @@ Initial release of the Phylax threat detection engine.
 - Regex crate guarantees linear-time pattern matching
 
 ### Quality
-- 212 tests (208 unit + 4 integration; 216 with bote feature)
+- 231 tests (221 unit + 10 integration; 235 with bote feature)
+- 13 proptest property-based tests for PE, ELF, and string extraction parsers
 - 16 benchmark groups with throughput measurement
 - 3 fuzz targets (YARA, analyze, entropy)
 - `scripts/bench-history.sh` — CSV + 3-run Markdown tracking

@@ -2,7 +2,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use phylax::analyze::{analyze, detect_file_type, detect_polyglot};
-use phylax::core::ScanTarget;
+use phylax::types::ScanTarget;
 
 fuzz_target!(|data: &[u8]| {
     // File type detection must never panic

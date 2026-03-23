@@ -3,7 +3,7 @@
 //! Provides pattern types, rule definitions, conditions, and a scanning engine
 //! that performs real byte-level pattern matching.
 
-use crate::core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
+use crate::types::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 use regex::bytes::Regex;
 use serde::Deserialize;
 use tracing::{debug, instrument, trace, warn};

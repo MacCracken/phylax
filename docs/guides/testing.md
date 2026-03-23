@@ -22,14 +22,14 @@ cargo test watch::tests
 
 | Category | Location | Count | Command |
 |----------|----------|-------|---------|
-| Unit tests | `src/*.rs` | 208 | `cargo test` |
-| Integration tests | `tests/integration.rs` | 4 | `cargo test --test integration` |
+| Unit tests | `src/*.rs` | 221 | `cargo test` |
+| Integration tests | `tests/integration.rs` | 10 | `cargo test --test integration` |
+| Property tests | `src/{pe,elf,strings}.rs` | 13 | `cargo test proptest` |
 | Bote feature tests | `src/bote_tools.rs` | 4 | `cargo test --features bote` |
-| Doc tests | Inline in source | 0 | `cargo test --doc` |
 | Fuzz tests | `fuzz/fuzz_targets/` | 3 | `cargo +nightly fuzz run <target>` |
 | Benchmarks | `benches/benchmarks.rs` | 16 groups | `cargo bench` |
 
-**Total: 212 tests** (208 unit + 4 integration; 216 with bote feature)
+**Total: 231 tests** (221 unit + 10 integration; 235 with bote feature)
 
 ## Test Distribution by Module
 
@@ -38,10 +38,10 @@ cargo test watch::tests
 | analyze | 37 | Entropy, magic bytes, SHA-256, polyglot, escalation, findings |
 | yara | 35 | Patterns, conditions, constraints, TOML loading, edge cases |
 | core | 23 | Types, serialization, Display, FromStr, ordering |
+| pe | 20 | Header parsing, sections, flags, truncation, serialization, **5 proptest** |
+| elf | 20 | 32/64-bit, big/little endian, sections, strtab, serialization, **5 proptest** |
 | hoosh | 16 | Client config, prompt building, response parsing, batch |
-| pe | 15 | Header parsing, sections, flags, truncation, serialization |
-| elf | 15 | 32/64-bit, big/little endian, sections, strtab, serialization |
-| strings | 12 | ASCII, UTF-16, filtering, sorting, edge cases |
+| strings | 15 | ASCII, UTF-16, filtering, sorting, edge cases, **3 proptest** |
 | queue | 10 | Priority ordering, FIFO, capacity, target preservation, IDs |
 | watch | 9 | File detection, extension filter, size filter, config |
 | report | 9 | JSON/Markdown rendering, summary, serialization, escaping |
@@ -118,3 +118,4 @@ make bench-history
 - **Edge cases**: empty input, truncated data, oversized files
 - **Error paths**: invalid hex, bad regex, unknown conditions, path traversal
 - **Security**: agent_id validation, daemon path canonicalization
+- **Property-based (proptest)**: parsers never panic on random input, invariants hold across random data

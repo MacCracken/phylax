@@ -110,7 +110,7 @@ make bench-history  # CSV + 3-run Markdown tracking
 make coverage       # HTML coverage report
 ```
 
-212 tests (208 unit + 4 integration) · 16 benchmark groups · 3 fuzz targets
+231 tests (221 unit + 10 integration) · 16 benchmark groups · 3 fuzz targets · 13 proptest property tests
 
 ## License
 
