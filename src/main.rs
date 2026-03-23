@@ -66,6 +66,14 @@ enum Commands {
         /// Hoosh endpoint URL
         #[arg(long, default_value = phylax::hoosh::HOOSH_DEFAULT_URL)]
         hoosh_url: String,
+
+        /// Register with daimon orchestrator
+        #[arg(long)]
+        register: bool,
+
+        /// Daimon endpoint URL
+        #[arg(long, default_value = phylax::daimon::DAIMON_DEFAULT_URL)]
+        daimon_url: String,
     },
 
     /// Generate a threat report from a scan
@@ -165,7 +173,9 @@ fn main() -> Result<()> {
             socket,
             triage,
             hoosh_url,
-        } => cmd_daemon(&socket, triage, &hoosh_url),
+            register,
+            daimon_url,
+        } => cmd_daemon(&socket, triage, &hoosh_url, register, &daimon_url),
         Commands::Report {
             path,
             format,
@@ -354,18 +364,47 @@ fn cmd_scan(
     Ok(())
 }
 
-fn cmd_daemon(socket: &Path, do_triage: bool, hoosh_url: &str) -> Result<()> {
+fn cmd_daemon(
+    socket: &Path,
+    do_triage: bool,
+    hoosh_url: &str,
+    do_register: bool,
+    daimon_url: &str,
+) -> Result<()> {
+    use phylax::daimon::{DaimonClient, HEARTBEAT_INTERVAL};
+
     println!("Phylax daemon v{VERSION}");
     println!("Listening on: {}", socket.display());
     if do_triage {
         println!("Triage:       enabled ({hoosh_url})");
     }
+    if do_register {
+        println!("Daimon:       registering ({daimon_url})");
+    }
     println!();
 
     let hoosh_url = hoosh_url.to_string();
+    let daimon_url = daimon_url.to_string();
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
+        // Register with daimon if requested
+        let daimon_handle = if do_register {
+            let client = DaimonClient::new(&daimon_url);
+            match client.start_lifecycle(HEARTBEAT_INTERVAL).await {
+                Ok(handle) => {
+                    println!("Daimon:       registered (agent_id: {})", handle.agent_id());
+                    Some(handle)
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to register with daimon — continuing without");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let _ = std::fs::remove_file(socket);
         if let Some(parent) = socket.parent() {
             std::fs::create_dir_all(parent)?;
@@ -374,22 +413,33 @@ fn cmd_daemon(socket: &Path, do_triage: bool, hoosh_url: &str) -> Result<()> {
         let listener = tokio::net::UnixListener::bind(socket)?;
         info!(path = %socket.display(), "daemon listening");
 
-        loop {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
-                    info!("client connected");
-                    let hoosh_url = hoosh_url.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, do_triage, &hoosh_url).await {
-                            warn!(error = %e, "client handler error");
-                        }
-                    });
-                }
-                Err(e) => {
-                    error!(error = %e, "accept error");
+        // Handle ctrl-c for graceful shutdown
+        let accept_result: anyhow::Result<()> = async {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, _addr)) => {
+                        info!("client connected");
+                        let hoosh_url = hoosh_url.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_client(stream, do_triage, &hoosh_url).await {
+                                warn!(error = %e, "client handler error");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!(error = %e, "accept error");
+                    }
                 }
             }
         }
+        .await;
+
+        // Graceful shutdown: deregister from daimon
+        if let Some(handle) = daimon_handle {
+            handle.shutdown().await;
+        }
+
+        accept_result
     })
 }
 

@@ -10,9 +10,17 @@ All notable changes to Phylax will be documented in this file.
 - Recursive directory monitoring with extension filtering, file size limits, debounce
 - Auto-scan on file create/modify with full pipeline (YARA, analysis, escalation, optional triage)
 - `WatchConfig`, `WatchEvent`, `WatchHandle` types
-- Removed dead `TriageRequest`/`TriageResponse` types from `ai.rs` (superseded by `hoosh::TriageResult`)
+- Daimon agent lifecycle: `start_lifecycle()` registers, runs heartbeat loop, `shutdown()` deregisters
+- `DaimonHandle` — background heartbeat task with graceful shutdown
+- `DaimonClient::deregister()` — DELETE agent from daimon
+- `phylax daemon --register --daimon-url` flags for orchestrator integration
+- Daemon gracefully deregisters from daimon on shutdown
+- Hoosh client 30s request timeout (was infinite)
+- Watch debounce map periodic cleanup (prevents memory leak in long sessions)
+- Watch tokio runtime reuse (created once, not per-triage)
+- Removed dead `TriageRequest`/`TriageResponse` types from `ai.rs`
 - Eliminated scan duplication in `cmd_scan` (now calls `run_scan`)
-- 205 tests (201 unit + 4 integration)
+- 212 tests (208 unit + 4 integration)
 
 ## [0.22.3] - 2026-03-22
 
