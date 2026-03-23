@@ -1,8 +1,11 @@
 //! Phylax — AI-native threat detection engine for AGNOS.
 //!
-//! Re-exports sub-crates for convenient access.
+//! Provides YARA rule matching, entropy analysis, magic bytes detection,
+//! polyglot file identification, and daimon/hoosh AI integration.
 
-pub use phylax_analyze as analyze;
-pub use phylax_core as core;
-pub use phylax_mcp as mcp;
-pub use phylax_yara as yara;
+pub mod ai;
+pub mod analyze;
+pub mod core;
+pub mod daimon;
+pub mod error;
+pub mod yara;

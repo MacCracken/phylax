@@ -1,9 +1,9 @@
-//! phylax-yara — YARA-compatible rule engine for Phylax.
+//! YARA-compatible rule engine for Phylax.
 //!
 //! Provides pattern types, rule definitions, conditions, and a scanning engine
 //! that performs real byte-level pattern matching.
 
-use phylax_core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
+use crate::core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, trace, warn};
@@ -142,7 +142,7 @@ fn default_pattern_type() -> String {
 /// Parse a hex string like "4d5a90" into bytes.
 fn parse_hex(s: &str) -> Result<Vec<u8>> {
     let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    if !clean.len().is_multiple_of(2) {
+    if clean.len() % 2 != 0 {
         return Err(YaraError::InvalidHex(s.to_string()));
     }
     (0..clean.len())
@@ -176,20 +176,6 @@ impl YaraEngine {
     }
 
     /// Load rules from a TOML string.
-    ///
-    /// Expected format:
-    /// ```toml
-    /// [[rule]]
-    /// name = "detect_elf"
-    /// severity = "medium"
-    /// condition = "any"
-    /// tags = ["elf"]
-    ///
-    /// [[rule.patterns]]
-    /// id = "$elf_magic"
-    /// type = "hex"
-    /// value = "7f454c46"
-    /// ```
     #[instrument(skip(self, toml_str), fields(toml_len = toml_str.len()))]
     pub fn load_rules_toml(&mut self, toml_str: &str) -> Result<usize> {
         let file: RulesFile = toml::from_str(toml_str).map_err(|e| {
@@ -229,7 +215,6 @@ impl YaraEngine {
                     "literal" => YaraPattern::Literal(p.value.as_bytes().to_vec()),
                     "hex" => YaraPattern::Hex(parse_hex(&p.value)?),
                     "regex" => {
-                        // Validate the regex
                         Regex::new(&p.value).map_err(|e| YaraError::InvalidRegex(e.to_string()))?;
                         YaraPattern::Regex(p.value)
                     }

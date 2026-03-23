@@ -1,6 +1,6 @@
-//! phylax-analyze — Entropy analysis, magic bytes detection, and binary classification.
+//! Entropy analysis, magic bytes detection, and binary classification.
 
-use phylax_core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
+use crate::core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -294,7 +294,6 @@ mod tests {
 
     #[test]
     fn entropy_of_two_values() {
-        // 50/50 split of two values => entropy = 1.0
         let mut data = vec![0u8; 512];
         data.extend(vec![1u8; 512]);
         let e = shannon_entropy(&data);
@@ -306,7 +305,6 @@ mod tests {
 
     #[test]
     fn entropy_of_uniform_random_high() {
-        // All 256 byte values equally represented => entropy = 8.0
         let mut data = Vec::with_capacity(256 * 100);
         for _ in 0..100 {
             for b in 0..=255u8 {
@@ -414,7 +412,6 @@ mod tests {
 
     #[test]
     fn sha256_known_value() {
-        // SHA-256 of empty input
         let hash = file_sha256(b"");
         assert_eq!(
             hash,
@@ -443,7 +440,6 @@ mod tests {
 
     #[test]
     fn polyglot_detection() {
-        // Build data: starts as PDF but has embedded ZIP signature
         let mut data = b"%PDF-1.7 some content ".to_vec();
         data.extend_from_slice(b"PK\x03\x04 more data");
         let types = detect_polyglot(&data);
@@ -455,7 +451,6 @@ mod tests {
     fn analyze_findings_clean() {
         let data = vec![0u8; 100];
         let findings = analyze_findings(&data, ScanTarget::Memory);
-        // Low entropy, single type => no findings
         assert!(findings.is_empty());
     }
 

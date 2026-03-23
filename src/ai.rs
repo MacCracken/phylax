@@ -1,8 +1,4 @@
-//! phylax-ai — AI integration for the Phylax threat detection engine.
-//!
-//! Provides daimon agent registration and hoosh LLM triage capabilities.
-
-pub mod daimon;
+//! AI integration — daimon agent registration and hoosh LLM triage.
 
 use serde::{Deserialize, Serialize};
 

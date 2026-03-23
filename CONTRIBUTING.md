@@ -46,20 +46,21 @@ make check   # runs fmt-check + clippy + test + audit
 
 ```
 src/
-├── main.rs              # CLI entry point (scan, daemon, rules, status)
-├── lib.rs               # Re-exports sub-crates
-
-crates/
-├── phylax-core/         # Core types: ScanTarget, ThreatFinding, ScanResult, ScanConfig, PhylaxError
-├── phylax-yara/         # YARA rule engine: literal, hex, regex patterns; TOML loading
-├── phylax-analyze/      # Binary analysis: entropy, magic bytes, SHA-256, polyglot detection
-├── phylax-mcp/          # MCP tool definitions (5 tools for daimon integration)
-└── phylax-ai/           # Daimon agent registration + hoosh LLM triage client
+├── main.rs          # CLI entry point (scan, daemon, rules, status)
+├── lib.rs           # Public API root
+├── error.rs         # PhylaxError enum
+├── core.rs          # ScanTarget, ThreatFinding, ScanResult, ScanConfig
+├── yara.rs          # YARA rule engine: literal, hex, regex patterns; TOML loading
+├── analyze.rs       # Binary analysis: entropy, magic bytes, SHA-256, polyglot detection
+├── ai.rs            # Agent registration, hoosh LLM triage types
+└── daimon.rs        # Daimon orchestrator HTTP client
 ```
+
+MCP tool registration is handled by [bote](https://github.com/MacCracken/bote).
 
 ## Adding a new analyzer
 
-1. Add the analysis function in `crates/phylax-analyze/src/lib.rs` (or a new module)
+1. Add the analysis function in `src/analyze.rs` (or a new module)
 2. Return `Vec<ThreatFinding>` for integration with the scan pipeline
 3. Add unit tests covering edge cases (empty input, truncated data, known-good files)
 4. Wire it into `cmd_scan()` in `src/main.rs`

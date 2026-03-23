@@ -1,8 +1,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use phylax_analyze::{analyze, detect_file_type, detect_polyglot};
-use phylax_core::ScanTarget;
+use phylax::analyze::{analyze, detect_file_type, detect_polyglot};
+use phylax::core::ScanTarget;
 
 fuzz_target!(|data: &[u8]| {
     // File type detection must never panic
@@ -15,5 +15,5 @@ fuzz_target!(|data: &[u8]| {
     let _ = analyze(data);
 
     // Finding generation must never panic
-    let _ = phylax_analyze::analyze_findings(data, ScanTarget::Memory);
+    let _ = phylax::analyze::analyze_findings(data, ScanTarget::Memory);
 });

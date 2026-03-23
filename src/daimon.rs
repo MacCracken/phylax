@@ -1,6 +1,6 @@
-//! daimon — Client for registering with the AGNOS agent orchestrator.
+//! Daimon client — registration and heartbeat with the AGNOS agent orchestrator.
 
-use crate::AgentRegistration;
+use crate::ai::AgentRegistration;
 use serde::{Deserialize, Serialize};
 
 /// Default daimon endpoint.

@@ -3,11 +3,11 @@
 //! Usage:
 //!   cargo run --example scan_file -- <path-to-file>
 
-use phylax_analyze::{
+use phylax::analyze::{
     analyze, analyze_findings, entropy_profile, is_suspicious_entropy, shannon_entropy,
 };
-use phylax_core::ScanTarget;
-use phylax_yara::YaraEngine;
+use phylax::core::ScanTarget;
+use phylax::yara::YaraEngine;
 use std::env;
 
 fn main() {
@@ -19,14 +19,12 @@ fn main() {
     let data = std::fs::read(&path).expect("failed to read file");
     let start = std::time::Instant::now();
 
-    // Binary analysis
     let analysis = analyze(&data);
     println!("File:     {path}");
     println!("Type:     {}", analysis.file_type);
     println!("Size:     {} bytes", analysis.size);
     println!("SHA-256:  {}", analysis.sha256);
 
-    // Entropy
     let entropy = shannon_entropy(&data);
     println!(
         "Entropy:  {entropy:.4} bits/byte {}",
@@ -37,7 +35,6 @@ fn main() {
         }
     );
 
-    // Entropy profile
     let profile = entropy_profile(&data, 4096);
     if let Some((idx, &max)) = profile
         .iter()
@@ -50,7 +47,6 @@ fn main() {
         );
     }
 
-    // YARA scan (empty rule set — add rules via load_rules_toml)
     let engine = YaraEngine::new();
     let yara_findings = engine.scan(&data);
     let analyze_findings = analyze_findings(&data, ScanTarget::File(path.into()));

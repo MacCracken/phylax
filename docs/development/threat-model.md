@@ -12,33 +12,27 @@
 
 ## Attack Surface
 
-### phylax-core
+### core (types and config)
 | Vector | Risk | Mitigation |
 |--------|------|-----------|
 | Malicious ScanTarget paths | Path traversal | Canonical path resolution |
 | Oversized files | Memory exhaustion | `max_file_size` limit (50 MB default) |
 
-### phylax-yara
+### yara (rule engine)
 | Vector | Risk | Mitigation |
 |--------|------|-----------|
 | Malicious regex in rules | ReDoS | `regex` crate (linear-time, no backtracking) |
 | Invalid hex patterns | Parse errors | Strict hex validation with error types |
 | Oversized rule files | Memory exhaustion | Rule count bounded by TOML parser limits |
 
-### phylax-analyze
+### analyze (binary analysis)
 | Vector | Risk | Mitigation |
 |--------|------|-----------|
 | Truncated files | Buffer overread | Bounds-checked slice access |
 | Crafted polyglot files | False negatives | Multiple detection passes, conservative flagging |
 | Entropy calculation on empty input | Division by zero | Handled (returns 0.0 for empty input) |
 
-### phylax-mcp
-| Vector | Risk | Mitigation |
-|--------|------|-----------|
-| Injection via tool parameters | Command injection | Strict JSON schema validation |
-| Unvalidated target_type enum | Invalid state | Enum-only deserialization |
-
-### phylax-ai
+### daimon (HTTP client)
 | Vector | Risk | Mitigation |
 |--------|------|-----------|
 | SSRF via daimon base_url | Network access | Localhost-only default, URL validation |
@@ -46,7 +40,7 @@
 
 ## Unsafe Code
 
-Phylax contains **zero** `unsafe` blocks across all crates.
+Phylax contains **zero** `unsafe` blocks.
 
 ## Supply Chain
 

@@ -6,11 +6,12 @@ use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use phylax_analyze::{
-    analyze, detect_file_type, entropy_profile, is_suspicious_entropy, shannon_entropy,
+use phylax::analyze::{
+    analyze, analyze_findings, detect_file_type, entropy_profile, is_suspicious_entropy,
+    shannon_entropy,
 };
-use phylax_core::{ScanConfig, ScanTarget, VERSION};
-use phylax_yara::YaraEngine;
+use phylax::core::{ScanConfig, ScanTarget, VERSION};
+use phylax::yara::YaraEngine;
 
 #[derive(Parser)]
 #[command(
@@ -159,7 +160,7 @@ fn cmd_scan(path: &PathBuf, rules_path: Option<&std::path::Path>, block_size: us
     }
 
     let yara_findings = engine.scan(&data);
-    let analyze_findings = phylax_analyze::analyze_findings(&data, ScanTarget::File(path.clone()));
+    let analyze_findings = analyze_findings(&data, ScanTarget::File(path.clone()));
 
     let total_findings = yara_findings.len() + analyze_findings.len();
     let duration = start.elapsed();
@@ -189,8 +190,6 @@ fn cmd_daemon() -> Result<()> {
     println!("Phylax daemon v{VERSION}");
     println!("Starting threat detection daemon...");
     println!("Listening for scan requests on /run/agnos/phylax.sock");
-    // In production this would start the tokio runtime and listen.
-    // For now, just indicate readiness.
     println!("Daemon mode not yet fully implemented. Use 'phylax scan' for direct scanning.");
     Ok(())
 }
@@ -235,11 +234,9 @@ fn cmd_rules_list(file: Option<&std::path::Path>) -> Result<()> {
 }
 
 fn cmd_status() -> Result<()> {
-    let tools = phylax_mcp::list_tools();
     println!("Phylax Threat Detection Engine v{VERSION}");
     println!();
     println!("Status:       ready");
-    println!("MCP tools:    {}", tools.len());
     println!("Analyzers:    entropy, magic_bytes, yara, polyglot");
     println!("AI backend:   hoosh (port 8088)");
     println!("Orchestrator: daimon (port 8090)");

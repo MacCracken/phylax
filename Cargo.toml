@@ -1,15 +1,17 @@
-[workspace]
-resolver = "2"
-members = ["crates/*"]
-
-[workspace.package]
-edition = "2024"
-license = "GPL-3.0"
+[package]
+name = "phylax"
 version = "0.1.0"
+edition = "2024"
 rust-version = "1.85"
+license = "GPL-3.0"
+description = "Phylax — AI-native threat detection engine"
 repository = "https://github.com/MacCracken/phylax"
+readme = "README.md"
+keywords = ["security", "threat-detection", "yara", "entropy", "binary-analysis"]
+categories = ["command-line-utilities"]
+exclude = [".claude/", ".github/", "target/"]
 
-[workspace.dependencies]
+[dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
@@ -24,31 +26,6 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
 sha2 = "0.10"
-
-# Internal
-phylax-core = { path = "crates/phylax-core" }
-phylax-yara = { path = "crates/phylax-yara" }
-phylax-analyze = { path = "crates/phylax-analyze" }
-phylax-mcp = { path = "crates/phylax-mcp" }
-phylax-ai = { path = "crates/phylax-ai" }
-
-[package]
-name = "phylax"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "Phylax — AI-native threat detection engine"
-
-[dependencies]
-phylax-core = { workspace = true }
-phylax-yara = { workspace = true }
-phylax-analyze = { workspace = true }
-phylax-mcp = { workspace = true }
-clap = { workspace = true }
-anyhow = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-tokio = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -1,18 +1,17 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 
-use phylax_analyze::{
+use phylax::analyze::{
     analyze, analyze_findings, detect_file_type, detect_polyglot, entropy_profile, file_sha256,
     is_suspicious_entropy, shannon_entropy,
 };
-use phylax_core::ScanTarget;
-use phylax_yara::YaraEngine;
+use phylax::core::ScanTarget;
+use phylax::yara::YaraEngine;
 
 // ---------------------------------------------------------------------------
 // Test data generators
 // ---------------------------------------------------------------------------
 
 fn random_bytes(len: usize) -> Vec<u8> {
-    // Deterministic pseudo-random for reproducible benchmarks
     let mut data = vec![0u8; len];
     let mut state: u64 = 0xdeadbeef;
     for byte in data.iter_mut() {
@@ -23,12 +22,10 @@ fn random_bytes(len: usize) -> Vec<u8> {
 }
 
 fn high_entropy_bytes(len: usize) -> Vec<u8> {
-    // Simulates encrypted/compressed content
     random_bytes(len)
 }
 
 fn low_entropy_bytes(len: usize) -> Vec<u8> {
-    // Simulates repetitive plaintext
     let mut data = vec![0u8; len];
     for (i, byte) in data.iter_mut().enumerate() {
         *byte = b'A' + (i % 26) as u8;
@@ -38,7 +35,6 @@ fn low_entropy_bytes(len: usize) -> Vec<u8> {
 
 fn elf_binary(len: usize) -> Vec<u8> {
     let mut data = random_bytes(len);
-    // ELF magic header
     if data.len() >= 4 {
         data[0] = 0x7f;
         data[1] = 0x45;
@@ -248,7 +244,6 @@ fn bench_analyze(c: &mut Criterion) {
 fn bench_yara(c: &mut Criterion) {
     let mut group = c.benchmark_group("yara");
 
-    // Rule loading throughput
     let toml = sample_rules_toml();
     group.bench_function("load_rules", |b| {
         b.iter(|| {
@@ -257,7 +252,6 @@ fn bench_yara(c: &mut Criterion) {
         });
     });
 
-    // Scanning throughput at various file sizes
     let mut engine = YaraEngine::new();
     engine.load_rules_toml(toml).unwrap();
 
@@ -270,7 +264,6 @@ fn bench_yara(c: &mut Criterion) {
         });
     }
 
-    // Scan with matching content (ELF triggers rule)
     let elf = elf_binary(65536);
     group.throughput(Throughput::Bytes(65536));
     group.bench_function("scan_with_match", |b| {

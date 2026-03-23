@@ -9,9 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-phylax-core = { path = "../crates/phylax-core" }
-phylax-yara = { path = "../crates/phylax-yara" }
-phylax-analyze = { path = "../crates/phylax-analyze" }
+phylax = { path = ".." }
 
 [[bin]]
 name = "fuzz_yara"

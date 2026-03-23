@@ -7,14 +7,18 @@ Phylax (Greek: guardian/watchman) provides real-time threat detection through YA
 ## Architecture
 
 ```
-phylax (CLI + daemon)
-  |
-  +-- phylax-core      Core types: ScanTarget, FindingSeverity, ThreatFinding, ScanResult
-  +-- phylax-yara      YARA-compatible rule engine with literal, hex, and regex patterns
-  +-- phylax-analyze   Shannon entropy, magic bytes, SHA-256, polyglot detection
-  +-- phylax-mcp       MCP tool definitions (5 tools for daimon integration)
-  +-- phylax-ai        Daimon agent registration + hoosh LLM triage client
+src/
+├── main.rs          CLI entry point (scan, daemon, rules, status)
+├── lib.rs           Public API root
+├── error.rs         PhylaxError enum
+├── core.rs          ScanTarget, FindingSeverity, ThreatFinding, ScanResult, ScanConfig
+├── yara.rs          YARA rule engine — literal, hex, regex patterns; TOML loading
+├── analyze.rs       Entropy, magic bytes, SHA-256, polyglot detection
+├── ai.rs            Agent registration, hoosh LLM triage types
+└── daimon.rs        Daimon orchestrator HTTP client
 ```
+
+MCP tool registration is handled externally by [bote](https://github.com/MacCracken/bote).
 
 ## Usage
 
@@ -33,6 +37,9 @@ phylax status
 
 # Run as daemon (planned)
 phylax daemon
+
+# Enable debug logging
+PHYLAX_LOG=debug phylax scan /path/to/file
 ```
 
 ## YARA Rules Format
@@ -67,21 +74,13 @@ Pattern types: `literal` (UTF-8 string), `hex` (hex-encoded bytes), `regex` (byt
 
 Conditions: `all`, `any`, `at_least_N`.
 
-## MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `phylax_scan` | Scan a target for threats |
-| `phylax_rules` | List/search/inspect YARA rules |
-| `phylax_status` | Engine status and statistics |
-| `phylax_quarantine` | Quarantine or release flagged targets |
-| `phylax_report` | Generate threat reports |
-
 ## Building
 
 ```bash
-cargo build --release
-cargo test --workspace
+make check    # fmt + clippy + test + audit
+make build    # release build
+make bench    # run benchmarks
+make coverage # generate HTML coverage report
 ```
 
 ## License

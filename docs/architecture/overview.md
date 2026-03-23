@@ -2,33 +2,22 @@
 
 ## Design Principles
 
-1. **Modular workspace** — each analysis capability is a separate crate
+1. **Single crate** — flat module layout, no workspace overhead
 2. **Zero unsafe code** — memory safety throughout
 3. **Extensible rules** — YARA-compatible TOML rule format
 4. **AI-native** — designed for daimon orchestration and hoosh LLM triage
-5. **MCP-first** — all capabilities exposed as MCP tools
+5. **MCP via bote** — tool registration handled by the bote MCP crate
 
 ## Module Map
 
 ```
-phylax (CLI binary)
-  │
-  ├── phylax-core        Always available — types, errors, config
-  ├── phylax-yara        Rule engine — literal, hex, regex patterns
-  ├── phylax-analyze     Binary analysis — entropy, magic bytes, hashing
-  ├── phylax-mcp         MCP tool definitions (5 tools)
-  └── phylax-ai          Daimon registration + hoosh triage client
-```
-
-## Crate Dependencies
-
-```
-phylax-core  ←── phylax-yara
-     ↑            ↑
-     ├── phylax-analyze
-     ↑
-phylax-mcp  ←── (core, yara, analyze)
-phylax-ai   ←── (core)
+src/
+├── core.rs       Types: ScanTarget, ThreatFinding, ScanResult, ScanConfig
+├── error.rs      PhylaxError enum
+├── yara.rs       Rule engine: literal, hex, regex patterns
+├── analyze.rs    Entropy, magic bytes, SHA-256, polyglot detection
+├── ai.rs         Agent registration, hoosh triage types
+└── daimon.rs     Daimon orchestrator HTTP client
 ```
 
 ## Scan Pipeline
@@ -45,4 +34,4 @@ phylax-ai   ←── (core)
 
 - **daimon** — orchestrator registers phylax as a threat-scanning agent
 - **hoosh** — LLM triage classifies findings for analyst review
-- **MCP clients** — any MCP-compatible tool can invoke phylax capabilities
+- **bote** — MCP protocol layer registers phylax tools for external access

@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use phylax_yara::YaraEngine;
+use phylax::yara::YaraEngine;
 
 fuzz_target!(|data: &[u8]| {
     // Fuzz TOML rule parsing with arbitrary input
