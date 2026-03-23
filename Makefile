@@ -1,4 +1,4 @@
-.PHONY: build test check clippy fmt fmt-check clean release audit deny doc coverage all
+.PHONY: build test check clippy fmt fmt-check clean release audit deny vet doc bench bench-history coverage all
 
 check: fmt-check clippy test audit
 
@@ -9,10 +9,10 @@ fmt-check:
 	cargo fmt --all -- --check
 
 clippy:
-	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --all-targets -- -D warnings
 
 test:
-	cargo test --workspace
+	cargo test
 
 audit:
 	cargo audit
@@ -20,19 +20,25 @@ audit:
 deny:
 	cargo deny check
 
+vet:
+	cargo vet --locked
+
+bench:
+	cargo bench
+
+bench-history:
+	bash scripts/bench-history.sh bench-history.csv bench-latest.md
+
 coverage:
-	cargo llvm-cov --workspace --html --output-dir coverage/
+	cargo llvm-cov --html --output-dir coverage/
 
 build:
-	cargo build --workspace --release
+	cargo build --release
 
 doc:
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
 clean:
 	cargo clean && rm -rf coverage/
-
-release:
-	cargo build --workspace --release
 
 all: check build

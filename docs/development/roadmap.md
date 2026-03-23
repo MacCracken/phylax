@@ -1,14 +1,5 @@
 # Roadmap
 
-## v0.2.0 — Hardening
-
-- [ ] Integration tests for full scan pipeline
-- [ ] Fuzz targets for YARA parsing and binary analysis
-- [ ] `cargo deny` + `cargo vet` in CI
-- [ ] MSRV policy and testing
-- [ ] Coverage target: 80% project, 75% patch
-- [ ] Benchmarks for entropy, hashing, YARA scanning throughput
-
 ## v0.3.0 — Analysis Depth
 
 - [ ] PE header parsing (sections, imports, exports)
@@ -17,10 +8,10 @@
 - [ ] YARA condition enhancements (file size, offset constraints)
 - [ ] Rule severity auto-escalation based on combined signals
 
-## v0.4.0 — Daemon & MCP
+## v0.4.0 — Daemon & Bote
 
 - [ ] Full daemon mode with Unix socket listener
-- [ ] MCP tool implementation (not just definitions)
+- [ ] Bote MCP tool registration (phylax_scan, phylax_rules, phylax_status, phylax_quarantine, phylax_report)
 - [ ] Scan queue with priority scheduling
 - [ ] Quarantine directory management
 - [ ] Report generation (JSON, Markdown)

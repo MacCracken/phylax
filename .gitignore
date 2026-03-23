@@ -25,6 +25,7 @@ coverage/
 
 # Benchmark output (criterion generates large HTML reports)
 criterion/
+bench-history.csv
 
 # Fuzz artifacts
 fuzz/target/

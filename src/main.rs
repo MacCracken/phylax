@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use phylax::analyze::{analyze, analyze_findings, entropy_profile, is_suspicious_entropy};
+use phylax::analyze::{analyze, entropy_profile, findings_from_analysis, is_suspicious_entropy};
 use phylax::core::{ScanConfig, ScanTarget, VERSION};
 use phylax::yara::YaraEngine;
 
@@ -153,7 +153,7 @@ fn cmd_scan(path: &PathBuf, rules_path: Option<&std::path::Path>, block_size: us
     }
 
     let yara_findings = engine.scan(&data);
-    let analyze_findings = analyze_findings(&data, ScanTarget::File(path.clone()));
+    let analyze_findings = findings_from_analysis(&data, &analysis, ScanTarget::File(path.clone()));
 
     let total_findings = yara_findings.len() + analyze_findings.len();
     let duration = start.elapsed();

@@ -230,10 +230,14 @@ pub fn analyze(data: &[u8]) -> BinaryAnalysis {
     }
 }
 
-/// Produce threat findings from binary analysis.
-#[instrument(skip(data), fields(data_len = data.len()))]
-pub fn analyze_findings(data: &[u8], target: ScanTarget) -> Vec<ThreatFinding> {
-    let analysis = analyze(data);
+/// Produce threat findings from a pre-computed analysis.
+///
+/// Use this when you already have a `BinaryAnalysis` to avoid recomputation.
+pub fn findings_from_analysis(
+    data: &[u8],
+    analysis: &BinaryAnalysis,
+    target: ScanTarget,
+) -> Vec<ThreatFinding> {
     let mut findings = Vec::new();
 
     if is_suspicious_entropy(analysis.entropy) {
@@ -257,7 +261,6 @@ pub fn analyze_findings(data: &[u8], target: ScanTarget) -> Vec<ThreatFinding> {
         findings.push(f);
     }
 
-    // Check for polyglot files
     let poly = detect_polyglot(data);
     if poly.len() > 1 {
         debug!(types = ?poly, "polyglot file detected");
@@ -274,6 +277,16 @@ pub fn analyze_findings(data: &[u8], target: ScanTarget) -> Vec<ThreatFinding> {
     }
 
     findings
+}
+
+/// Produce threat findings from binary analysis.
+///
+/// Convenience wrapper that computes analysis internally.
+/// Prefer [`findings_from_analysis`] if you already have a [`BinaryAnalysis`].
+#[instrument(skip(data), fields(data_len = data.len()))]
+pub fn analyze_findings(data: &[u8], target: ScanTarget) -> Vec<ThreatFinding> {
+    let analysis = analyze(data);
+    findings_from_analysis(data, &analysis, target)
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +502,30 @@ mod tests {
             }
         }
         let findings = analyze_findings(&data, ScanTarget::Memory);
+        assert!(findings.iter().any(|f| f.rule_name == "high_entropy"));
+    }
+
+    #[test]
+    fn binary_analysis_serialization_roundtrip() {
+        let a = analyze(b"\x7fELF\x02\x01\x01\x00");
+        let json = serde_json::to_string(&a).unwrap();
+        let parsed: BinaryAnalysis = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.file_type, a.file_type);
+        assert_eq!(parsed.sha256, a.sha256);
+        assert_eq!(parsed.size, a.size);
+    }
+
+    #[test]
+    fn findings_from_precomputed_analysis() {
+        // All 256 byte values = max entropy > 7.5
+        let mut data = Vec::with_capacity(256 * 4);
+        for _ in 0..4 {
+            for b in 0..=255u8 {
+                data.push(b);
+            }
+        }
+        let analysis = analyze(&data);
+        let findings = super::findings_from_analysis(&data, &analysis, ScanTarget::Memory);
         assert!(findings.iter().any(|f| f.rule_name == "high_entropy"));
     }
 

@@ -71,6 +71,30 @@ mod tests {
     }
 
     #[test]
+    fn agent_registration_serialization_roundtrip() {
+        let reg = AgentRegistration::default();
+        let json = serde_json::to_string(&reg).unwrap();
+        let parsed: AgentRegistration = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, reg.name);
+        assert_eq!(parsed.capabilities, reg.capabilities);
+    }
+
+    #[test]
+    fn triage_response_serialization_roundtrip() {
+        let resp = TriageResponse {
+            finding_id: "f-1".into(),
+            classification: "false_positive".into(),
+            confidence: 0.95,
+            explanation: "benign packed binary".into(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: TriageResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.finding_id, "f-1");
+        assert_eq!(parsed.classification, "false_positive");
+        assert!((parsed.confidence - 0.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
     fn triage_request_serialization() {
         let req = TriageRequest {
             finding_id: "abc-123".into(),

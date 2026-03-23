@@ -326,6 +326,96 @@ fn bench_entropy_quality(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Polyglot detection throughput
+// ---------------------------------------------------------------------------
+
+fn bench_polyglot(c: &mut Criterion) {
+    let mut group = c.benchmark_group("polyglot");
+
+    for size in [1024, 65536, 1_048_576] {
+        let data = random_bytes(size);
+        group.throughput(Throughput::Bytes(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("detect", size), &data, |b, data| {
+            b.iter(|| detect_polyglot(black_box(data)));
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Pattern matching micro benchmarks
+// ---------------------------------------------------------------------------
+
+fn bench_pattern_match(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pattern_match");
+    let data = random_bytes(65536);
+    group.throughput(Throughput::Bytes(65536));
+
+    // Literal — short needle
+    let lit_short = phylax::yara::YaraPattern::Literal(b"MZ".to_vec());
+    group.bench_function("literal_2byte", |b| {
+        b.iter(|| lit_short.matches(black_box(&data)));
+    });
+
+    // Literal — longer needle
+    let lit_long = phylax::yara::YaraPattern::Literal(b"This is a longer pattern string".to_vec());
+    group.bench_function("literal_31byte", |b| {
+        b.iter(|| lit_long.matches(black_box(&data)));
+    });
+
+    // Hex — 4 byte
+    let hex_pat = phylax::yara::YaraPattern::Hex(vec![0x7f, 0x45, 0x4c, 0x46]);
+    group.bench_function("hex_4byte", |b| {
+        b.iter(|| hex_pat.matches(black_box(&data)));
+    });
+
+    // Regex — simple
+    let regex_simple = phylax::yara::YaraPattern::regex(r"(?-u)\x7fELF").unwrap();
+    group.bench_function("regex_simple", |b| {
+        b.iter(|| regex_simple.matches(black_box(&data)));
+    });
+
+    // Regex — alternation
+    let regex_alt = phylax::yara::YaraPattern::regex(r"(?-u)(\x7fELF|MZ|%PDF|PK\x03\x04)").unwrap();
+    group.bench_function("regex_alternation", |b| {
+        b.iter(|| regex_alt.matches(black_box(&data)));
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// findings_from_analysis vs analyze_findings (showing no double-compute)
+// ---------------------------------------------------------------------------
+
+fn bench_findings(c: &mut Criterion) {
+    let mut group = c.benchmark_group("findings");
+    let data = random_bytes(65536);
+    group.throughput(Throughput::Bytes(65536));
+
+    group.bench_function("analyze_findings", |b| {
+        b.iter(|| {
+            phylax::analyze::analyze_findings(black_box(&data), ScanTarget::Memory);
+        });
+    });
+
+    group.bench_function("precomputed_findings", |b| {
+        let analysis = analyze(&data);
+        b.iter(|| {
+            phylax::analyze::findings_from_analysis(
+                black_box(&data),
+                black_box(&analysis),
+                ScanTarget::Memory,
+            );
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_entropy,
@@ -336,5 +426,8 @@ criterion_group!(
     bench_yara,
     bench_full_scan,
     bench_entropy_quality,
+    bench_polyglot,
+    bench_pattern_match,
+    bench_findings,
 );
 criterion_main!(benches);

@@ -645,6 +645,67 @@ value = "CC"
     }
 
     #[test]
+    fn load_rules_toml_defaults() {
+        // severity defaults to "medium", condition defaults to "any", type defaults to "literal"
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "defaults_test"
+[[rule.patterns]]
+id = "$a"
+value = "TEST"
+"#;
+        engine.load_rules_toml(toml).unwrap();
+        let rules = engine.rules();
+        assert_eq!(rules[0].severity, FindingSeverity::Medium);
+        assert!(matches!(rules[0].condition, RuleCondition::Any));
+        assert_eq!(engine.scan(b"has TEST in it").len(), 1);
+    }
+
+    #[test]
+    fn parse_hex_uppercase() {
+        assert_eq!(parse_hex("4D5A").unwrap(), vec![0x4d, 0x5a]);
+        assert_eq!(parse_hex("7F454C46").unwrap(), vec![0x7f, 0x45, 0x4c, 0x46]);
+    }
+
+    #[test]
+    fn parse_hex_mixed_case() {
+        assert_eq!(parse_hex("4d5A").unwrap(), vec![0x4d, 0x5a]);
+    }
+
+    #[test]
+    fn parse_hex_empty() {
+        assert_eq!(parse_hex("").unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn multiple_rules_multiple_matches() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "rule_a"
+severity = "low"
+condition = "any"
+[[rule.patterns]]
+id = "$a"
+type = "literal"
+value = "COMMON"
+
+[[rule]]
+name = "rule_b"
+severity = "high"
+condition = "any"
+[[rule.patterns]]
+id = "$b"
+type = "literal"
+value = "COMMON"
+"#;
+        engine.load_rules_toml(toml).unwrap();
+        let findings = engine.scan(b"data with COMMON string");
+        assert_eq!(findings.len(), 2);
+    }
+
+    #[test]
     fn scan_tags_in_metadata() {
         let mut engine = YaraEngine::new();
         engine.add_rule(YaraRule {
