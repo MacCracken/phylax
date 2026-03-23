@@ -53,11 +53,7 @@ impl DaimonClient {
     /// Send a heartbeat to daimon.
     pub async fn heartbeat(&self, agent_id: &str) -> anyhow::Result<()> {
         let url = format!("{}/v1/agents/{}/heartbeat", self.base_url, agent_id);
-        self.client
-            .post(&url)
-            .send()
-            .await?
-            .error_for_status()?;
+        self.client.post(&url).send().await?.error_for_status()?;
         Ok(())
     }
 

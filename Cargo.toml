@@ -6,6 +6,8 @@ members = ["crates/*"]
 edition = "2024"
 license = "GPL-3.0"
 version = "0.1.0"
+rust-version = "1.85"
+repository = "https://github.com/MacCracken/phylax"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -47,3 +49,13 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "benchmarks"
+harness = false
+
+[[example]]
+name = "scan_file"

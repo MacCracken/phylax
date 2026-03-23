@@ -3,7 +3,7 @@
 //! Exposes 5 tools: phylax_scan, phylax_rules, phylax_status, phylax_quarantine, phylax_report.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Definition of an MCP tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,7 +170,12 @@ mod tests {
         let tools = list_tools();
         let scan = tools.iter().find(|t| t.name == "phylax_scan").unwrap();
         let required = scan.input_schema.get("required").unwrap();
-        let req_arr: Vec<&str> = required.as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        let req_arr: Vec<&str> = required
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         assert!(req_arr.contains(&"target"));
         assert!(req_arr.contains(&"target_type"));
     }
@@ -193,7 +198,11 @@ mod tests {
     #[test]
     fn tool_descriptions_non_empty() {
         for tool in list_tools() {
-            assert!(!tool.description.is_empty(), "tool {} has empty description", tool.name);
+            assert!(
+                !tool.description.is_empty(),
+                "tool {} has empty description",
+                tool.name
+            );
         }
     }
 }

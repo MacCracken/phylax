@@ -3,9 +3,12 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use phylax_analyze::{analyze, detect_file_type, entropy_profile, is_suspicious_entropy, shannon_entropy};
+use phylax_analyze::{
+    analyze, detect_file_type, entropy_profile, is_suspicious_entropy, shannon_entropy,
+};
 use phylax_core::{ScanConfig, ScanTarget, VERSION};
 use phylax_yara::YaraEngine;
 
@@ -60,9 +63,12 @@ enum RulesAction {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    // Supports RUST_LOG and PHYLAX_LOG env vars for log filtering.
+    let env_filter = EnvFilter::try_from_env("PHYLAX_LOG")
+        .or_else(|_| EnvFilter::try_from_default_env())
+        .unwrap_or_else(|_| EnvFilter::new("warn"));
+
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let cli = Cli::parse();
 
@@ -86,12 +92,20 @@ fn cmd_scan(path: &PathBuf, rules_path: Option<&std::path::Path>, block_size: us
     // Read the file
     let metadata = std::fs::metadata(path)?;
     if metadata.len() > config.max_file_size {
+        error!(
+            size = metadata.len(),
+            max = config.max_file_size,
+            path = %path.display(),
+            "file exceeds maximum scan size"
+        );
         anyhow::bail!(
             "File too large: {} bytes (max {})",
             metadata.len(),
             config.max_file_size
         );
     }
+
+    info!(path = %path.display(), size = metadata.len(), "starting scan");
 
     let data = std::fs::read(path)?;
     let start = std::time::Instant::now();
@@ -113,7 +127,11 @@ fn cmd_scan(path: &PathBuf, rules_path: Option<&std::path::Path>, block_size: us
     let suspicious = is_suspicious_entropy(entropy);
     println!(
         "[Entropy]     {entropy:.4} bits/byte {}",
-        if suspicious { "(SUSPICIOUS)" } else { "(normal)" }
+        if suspicious {
+            "(SUSPICIOUS)"
+        } else {
+            "(normal)"
+        }
     );
 
     // Entropy profile
@@ -141,16 +159,17 @@ fn cmd_scan(path: &PathBuf, rules_path: Option<&std::path::Path>, block_size: us
     }
 
     let yara_findings = engine.scan(&data);
-    let analyze_findings =
-        phylax_analyze::analyze_findings(&data, ScanTarget::File(path.clone()));
+    let analyze_findings = phylax_analyze::analyze_findings(&data, ScanTarget::File(path.clone()));
 
     let total_findings = yara_findings.len() + analyze_findings.len();
     let duration = start.elapsed();
 
     println!();
     if total_findings == 0 {
+        info!(duration = ?duration, "scan complete — clean");
         println!("Result: CLEAN ({duration:.2?})");
     } else {
+        info!(duration = ?duration, findings = total_findings, "scan complete — threats detected");
         println!("Result: {} FINDING(S) ({duration:.2?})", total_findings);
         println!();
         for f in yara_findings.iter().chain(analyze_findings.iter()) {

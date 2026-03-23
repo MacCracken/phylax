@@ -352,21 +352,36 @@ mod tests {
 
     #[test]
     fn severity_from_str() {
-        assert_eq!("critical".parse::<FindingSeverity>().unwrap(), FindingSeverity::Critical);
-        assert_eq!("HIGH".parse::<FindingSeverity>().unwrap(), FindingSeverity::High);
+        assert_eq!(
+            "critical".parse::<FindingSeverity>().unwrap(),
+            FindingSeverity::Critical
+        );
+        assert_eq!(
+            "HIGH".parse::<FindingSeverity>().unwrap(),
+            FindingSeverity::High
+        );
         assert!("bogus".parse::<FindingSeverity>().is_err());
     }
 
     #[test]
     fn category_display() {
         assert_eq!(FindingCategory::Malware.to_string(), "Malware");
-        assert_eq!(FindingCategory::EmbeddedPayload.to_string(), "Embedded Payload");
+        assert_eq!(
+            FindingCategory::EmbeddedPayload.to_string(),
+            "Embedded Payload"
+        );
     }
 
     #[test]
     fn category_from_str() {
-        assert_eq!("malware".parse::<FindingCategory>().unwrap(), FindingCategory::Malware);
-        assert_eq!("embedded_payload".parse::<FindingCategory>().unwrap(), FindingCategory::EmbeddedPayload);
+        assert_eq!(
+            "malware".parse::<FindingCategory>().unwrap(),
+            FindingCategory::Malware
+        );
+        assert_eq!(
+            "embedded_payload".parse::<FindingCategory>().unwrap(),
+            FindingCategory::EmbeddedPayload
+        );
         assert!("nope".parse::<FindingCategory>().is_err());
     }
 
@@ -413,9 +428,27 @@ mod tests {
         let r = ScanResult {
             target: ScanTarget::Memory,
             findings: vec![
-                ThreatFinding::new(ScanTarget::Memory, FindingCategory::Suspicious, FindingSeverity::Low, "r1", "d1"),
-                ThreatFinding::new(ScanTarget::Memory, FindingCategory::Malware, FindingSeverity::High, "r2", "d2"),
-                ThreatFinding::new(ScanTarget::Memory, FindingCategory::Suspicious, FindingSeverity::Medium, "r3", "d3"),
+                ThreatFinding::new(
+                    ScanTarget::Memory,
+                    FindingCategory::Suspicious,
+                    FindingSeverity::Low,
+                    "r1",
+                    "d1",
+                ),
+                ThreatFinding::new(
+                    ScanTarget::Memory,
+                    FindingCategory::Malware,
+                    FindingSeverity::High,
+                    "r2",
+                    "d2",
+                ),
+                ThreatFinding::new(
+                    ScanTarget::Memory,
+                    FindingCategory::Suspicious,
+                    FindingSeverity::Medium,
+                    "r3",
+                    "d3",
+                ),
             ],
             scan_duration: std::time::Duration::from_millis(50),
             scanner_version: "0.1.0".into(),
@@ -473,12 +506,15 @@ mod tests {
             FindingSeverity::Medium,
         ];
         sevs.sort();
-        assert_eq!(sevs, vec![
-            FindingSeverity::Info,
-            FindingSeverity::Low,
-            FindingSeverity::Medium,
-            FindingSeverity::High,
-            FindingSeverity::Critical,
-        ]);
+        assert_eq!(
+            sevs,
+            vec![
+                FindingSeverity::Info,
+                FindingSeverity::Low,
+                FindingSeverity::Medium,
+                FindingSeverity::High,
+                FindingSeverity::Critical,
+            ]
+        );
     }
 }

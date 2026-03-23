@@ -28,7 +28,10 @@ impl Default for AgentRegistration {
     fn default() -> Self {
         Self {
             name: AGENT_NAME.to_string(),
-            capabilities: AGENT_CAPABILITIES.iter().map(|s| (*s).to_string()).collect(),
+            capabilities: AGENT_CAPABILITIES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }

@@ -1,7 +1,7 @@
 # Build artifacts
 /target/
 
-# Editor/IDE
+# Editor / IDE
 *.swp
 *.swo
 *~
@@ -9,13 +9,37 @@
 .vscode/
 *.iml
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
+# Debugging
+*.pdb
+core
+core.*
 
-# Environment
+# Coverage
+lcov.info
+tarpaulin-report.html
+coverage/
+
+# Benchmark output (criterion generates large HTML reports)
+criterion/
+
+# Fuzz artifacts
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+
+# Proptest persistence (regressions are committed, but not other state)
+proptest-regressions/
+
+# cargo-vet downloads
+supply-chain/.cache/
+
+# Claude Code
+.claude/
+
+# Environment / secrets
 .env
 .env.*

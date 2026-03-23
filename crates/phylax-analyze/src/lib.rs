@@ -4,6 +4,7 @@ use phylax_core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
+use tracing::{debug, instrument, warn};
 
 // ---------------------------------------------------------------------------
 // Entropy analysis
@@ -43,9 +44,7 @@ pub fn entropy_profile(data: &[u8], block_size: usize) -> Vec<f64> {
         return vec![];
     }
 
-    data.chunks(block_size)
-        .map(|chunk| shannon_entropy(chunk))
-        .collect()
+    data.chunks(block_size).map(shannon_entropy).collect()
 }
 
 /// Heuristic: entropy above 7.5 bits/byte is suspicious (likely encrypted or compressed).
@@ -176,10 +175,7 @@ pub fn detect_polyglot(data: &[u8]) -> Vec<FileType> {
         // Search after the first few bytes (skip header)
         if data.len() > sig.len() + 4 {
             let search_area = &data[4..];
-            if search_area
-                .windows(sig.len())
-                .any(|w| w == sig)
-            {
+            if search_area.windows(sig.len()).any(|w| w == sig) {
                 types.push(ft);
             }
         }
@@ -222,6 +218,7 @@ pub struct BinaryAnalysis {
 }
 
 /// Perform a full binary analysis on raw data.
+#[instrument(skip(data), fields(data_len = data.len()))]
 pub fn analyze(data: &[u8]) -> BinaryAnalysis {
     BinaryAnalysis {
         file_type: detect_file_type(data),
@@ -232,11 +229,16 @@ pub fn analyze(data: &[u8]) -> BinaryAnalysis {
 }
 
 /// Produce threat findings from binary analysis.
+#[instrument(skip(data), fields(data_len = data.len()))]
 pub fn analyze_findings(data: &[u8], target: ScanTarget) -> Vec<ThreatFinding> {
     let analysis = analyze(data);
     let mut findings = Vec::new();
 
     if is_suspicious_entropy(analysis.entropy) {
+        warn!(
+            entropy = analysis.entropy,
+            "high entropy detected — possible encrypted or compressed content"
+        );
         let mut f = ThreatFinding::new(
             target.clone(),
             FindingCategory::Suspicious,
@@ -249,14 +251,14 @@ pub fn analyze_findings(data: &[u8], target: ScanTarget) -> Vec<ThreatFinding> {
         );
         f.metadata
             .insert("entropy".into(), format!("{:.4}", analysis.entropy));
-        f.metadata
-            .insert("sha256".into(), analysis.sha256.clone());
+        f.metadata.insert("sha256".into(), analysis.sha256.clone());
         findings.push(f);
     }
 
     // Check for polyglot files
     let poly = detect_polyglot(data);
     if poly.len() > 1 {
+        debug!(types = ?poly, "polyglot file detected");
         let types_str: Vec<String> = poly.iter().map(|t| t.to_string()).collect();
         let mut f = ThreatFinding::new(
             target,
@@ -265,8 +267,7 @@ pub fn analyze_findings(data: &[u8], target: ScanTarget) -> Vec<ThreatFinding> {
             "polyglot_file",
             format!("Polyglot file detected: {}", types_str.join(", ")),
         );
-        f.metadata
-            .insert("file_types".into(), types_str.join(","));
+        f.metadata.insert("file_types".into(), types_str.join(","));
         findings.push(f);
     }
 
@@ -285,7 +286,10 @@ mod tests {
     fn entropy_of_zeros() {
         let data = vec![0u8; 1024];
         let e = shannon_entropy(&data);
-        assert!((e - 0.0).abs() < 0.001, "entropy of zeros should be 0, got {e}");
+        assert!(
+            (e - 0.0).abs() < 0.001,
+            "entropy of zeros should be 0, got {e}"
+        );
     }
 
     #[test]
@@ -294,7 +298,10 @@ mod tests {
         let mut data = vec![0u8; 512];
         data.extend(vec![1u8; 512]);
         let e = shannon_entropy(&data);
-        assert!((e - 1.0).abs() < 0.01, "entropy of two equal values should be ~1.0, got {e}");
+        assert!(
+            (e - 1.0).abs() < 0.01,
+            "entropy of two equal values should be ~1.0, got {e}"
+        );
     }
 
     #[test]
@@ -307,7 +314,10 @@ mod tests {
             }
         }
         let e = shannon_entropy(&data);
-        assert!(e > 7.9 && e <= 8.0, "uniform distribution entropy should be ~8.0, got {e}");
+        assert!(
+            e > 7.9 && e <= 8.0,
+            "uniform distribution entropy should be ~8.0, got {e}"
+        );
     }
 
     #[test]

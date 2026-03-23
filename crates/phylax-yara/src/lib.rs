@@ -6,7 +6,7 @@
 use phylax_core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use tracing::{debug, instrument, trace, warn};
 
 // ---------------------------------------------------------------------------
 // YaraPattern
@@ -142,7 +142,7 @@ fn default_pattern_type() -> String {
 /// Parse a hex string like "4d5a90" into bytes.
 fn parse_hex(s: &str) -> Result<Vec<u8>> {
     let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    if clean.len() % 2 != 0 {
+    if !clean.len().is_multiple_of(2) {
         return Err(YaraError::InvalidHex(s.to_string()));
     }
     (0..clean.len())
@@ -190,9 +190,12 @@ impl YaraEngine {
     /// type = "hex"
     /// value = "7f454c46"
     /// ```
+    #[instrument(skip(self, toml_str), fields(toml_len = toml_str.len()))]
     pub fn load_rules_toml(&mut self, toml_str: &str) -> Result<usize> {
-        let file: RulesFile =
-            toml::from_str(toml_str).map_err(|e| YaraError::Toml(e.to_string()))?;
+        let file: RulesFile = toml::from_str(toml_str).map_err(|e| {
+            warn!(error = %e, "failed to parse TOML rules");
+            YaraError::Toml(e.to_string())
+        })?;
 
         let mut count = 0;
         for tr in file.rule {
@@ -212,7 +215,12 @@ impl YaraEngine {
                         .map_err(|_| YaraError::Parse(format!("invalid condition: {s}")))?;
                     RuleCondition::AtLeast(n)
                 }
-                _ => return Err(YaraError::Parse(format!("unknown condition: {}", tr.condition))),
+                _ => {
+                    return Err(YaraError::Parse(format!(
+                        "unknown condition: {}",
+                        tr.condition
+                    )));
+                }
             };
 
             let mut patterns = Vec::new();
@@ -222,20 +230,20 @@ impl YaraEngine {
                     "hex" => YaraPattern::Hex(parse_hex(&p.value)?),
                     "regex" => {
                         // Validate the regex
-                        Regex::new(&p.value)
-                            .map_err(|e| YaraError::InvalidRegex(e.to_string()))?;
+                        Regex::new(&p.value).map_err(|e| YaraError::InvalidRegex(e.to_string()))?;
                         YaraPattern::Regex(p.value)
                     }
                     _ => {
                         return Err(YaraError::Parse(format!(
                             "unknown pattern type: {}",
                             p.r#type
-                        )))
+                        )));
                     }
                 };
                 patterns.push((p.id, pat));
             }
 
+            let rule_name = tr.name.clone();
             self.rules.push(YaraRule {
                 name: tr.name,
                 description: tr.description.unwrap_or_default(),
@@ -244,18 +252,25 @@ impl YaraEngine {
                 patterns,
                 condition,
             });
+            debug!(rule = %rule_name, "loaded YARA rule");
             count += 1;
         }
 
+        debug!(count, "finished loading TOML rules");
         Ok(count)
     }
 
     /// Scan data against all loaded rules.
+    #[instrument(skip(self, data), fields(data_len = data.len(), rule_count = self.rules.len()))]
     pub fn scan(&self, data: &[u8]) -> Vec<ThreatFinding> {
         let mut findings = Vec::new();
 
         for rule in &self.rules {
-            let match_count = rule.patterns.iter().filter(|(_, p)| p.matches(data)).count();
+            let match_count = rule
+                .patterns
+                .iter()
+                .filter(|(_, p)| p.matches(data))
+                .count();
             let total = rule.patterns.len();
 
             let matched = match &rule.condition {
@@ -265,6 +280,7 @@ impl YaraEngine {
             };
 
             if matched {
+                trace!(rule = %rule.name, match_count, total, "rule matched");
                 let mut finding = ThreatFinding::new(
                     ScanTarget::Memory,
                     FindingCategory::CustomRule,
@@ -512,7 +528,10 @@ condition = "any"
     #[test]
     fn parse_hex_valid() {
         assert_eq!(parse_hex("4d5a").unwrap(), vec![0x4d, 0x5a]);
-        assert_eq!(parse_hex("7f 45 4c 46").unwrap(), vec![0x7f, 0x45, 0x4c, 0x46]);
+        assert_eq!(
+            parse_hex("7f 45 4c 46").unwrap(),
+            vec![0x7f, 0x45, 0x4c, 0x46]
+        );
     }
 
     #[test]
