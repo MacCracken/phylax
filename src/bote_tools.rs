@@ -31,9 +31,14 @@ pub fn scan_handler() -> ToolHandler {
             .get("target")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        let path = std::path::Path::new(target);
 
-        let data = match std::fs::read(path) {
+        // Canonicalize to prevent path traversal
+        let path = match std::fs::canonicalize(target) {
+            Ok(p) => p,
+            Err(e) => return json!({"error": format!("invalid path: {e}")}),
+        };
+
+        let data = match std::fs::read(&path) {
             Ok(d) => d,
             Err(e) => return json!({"error": e.to_string()}),
         };

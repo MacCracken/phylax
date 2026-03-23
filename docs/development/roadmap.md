@@ -1,6 +1,17 @@
 # Roadmap
 
-All planned features for v1.0.0 have been implemented. The project is in stabilization.
+## v1.0.0 — Stability & Polish
+
+### API
+- [ ] Unified error strategy documentation
+- [ ] `# Errors` doc sections on public Result-returning functions
+- [ ] Document safety limit constants (256/1024/4096 iteration caps)
+
+### Performance
+- [ ] Reuse HTTP clients across daemon connections (currently one per connection)
+
+### Testing
+- [ ] Property-based tests for PE/ELF parsers (proptest)
 
 ## Non-goals
 

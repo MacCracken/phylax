@@ -145,12 +145,9 @@ impl ThreatReport {
                 writeln!(md, "| Severity | Rule | Description |").unwrap();
                 writeln!(md, "|----------|------|-------------|").unwrap();
                 for f in &result.findings {
-                    writeln!(
-                        md,
-                        "| {} | {} | {} |",
-                        f.severity, f.rule_name, f.description
-                    )
-                    .unwrap();
+                    let rule = f.rule_name.replace('|', "\\|");
+                    let desc = f.description.replace('|', "\\|");
+                    writeln!(md, "| {} | {} | {} |", f.severity, rule, desc).unwrap();
                 }
                 writeln!(md).unwrap();
             }
@@ -329,8 +326,9 @@ mod tests {
         }];
         let report = ThreatReport::from_results(results);
         let md = report.render(ReportFormat::Markdown);
-        // Should contain the pipe characters (we don't escape them — just verify it renders)
-        assert!(md.contains("rule_with|pipe"));
+        // Pipes should be escaped to avoid breaking markdown tables
+        assert!(md.contains(r"rule_with\|pipe"));
+        assert!(md.contains(r"desc with \| pipe"));
     }
 
     #[test]

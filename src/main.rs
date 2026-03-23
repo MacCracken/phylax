@@ -570,6 +570,13 @@ async fn handle_client(
     let mut buf_reader = BufReader::new(reader);
     let mut line_buf = String::new();
 
+    // Reuse one client for all requests on this connection
+    let hoosh_client = if do_triage {
+        Some(HooshClient::new(hoosh_url))
+    } else {
+        None
+    };
+
     loop {
         line_buf.clear();
         let n = buf_reader.read_line(&mut line_buf).await?;
@@ -611,8 +618,7 @@ async fn handle_client(
         };
 
         // Run hoosh triage on findings if enabled
-        if do_triage && !result.findings.is_empty() {
-            let client = HooshClient::new(hoosh_url);
+        if let Some(ref client) = hoosh_client {
             for finding in &mut result.findings {
                 match client.triage_finding(finding).await {
                     Ok(triage) => {
@@ -636,8 +642,8 @@ async fn handle_client(
             }
         }
 
-        let response =
-            serde_json::to_string(&result).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+        let response = serde_json::to_string(&result)
+            .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
         writer.write_all(response.as_bytes()).await?;
         writer.write_all(b"\n").await?;
     }

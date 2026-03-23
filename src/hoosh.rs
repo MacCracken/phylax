@@ -67,13 +67,14 @@ struct ChatChoice {
 impl HooshClient {
     /// Create a new client with default settings (30s request timeout).
     pub fn new(base_url: impl Into<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("failed to build HTTP client");
         Self {
             base_url: base_url.into(),
             model: HOOSH_DEFAULT_MODEL.to_string(),
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_default(),
+            client,
         }
     }
 
@@ -150,14 +151,26 @@ impl HooshClient {
         Ok(result)
     }
 
-    /// Triage multiple findings, returning results in order.
+    /// Triage multiple findings concurrently via `tokio::spawn`.
     pub async fn triage_findings(
         &self,
         findings: &[ThreatFinding],
     ) -> Vec<anyhow::Result<TriageResult>> {
-        let mut results = Vec::with_capacity(findings.len());
-        for finding in findings {
-            results.push(self.triage_finding(finding).await);
+        let handles: Vec<_> = findings
+            .iter()
+            .map(|f| {
+                let client = self.clone();
+                let finding = f.clone();
+                tokio::spawn(async move { client.triage_finding(&finding).await })
+            })
+            .collect();
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            match handle.await {
+                Ok(r) => results.push(r),
+                Err(e) => results.push(Err(anyhow::anyhow!("triage task failed: {e}"))),
+            }
         }
         results
     }

@@ -35,20 +35,20 @@ cargo test watch::tests
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| core | 22 | Types, serialization, Display, FromStr, ordering |
-| error | 9 | Every PhylaxError variant, #[from] conversion |
-| yara | 28 | Patterns, conditions, constraints, TOML loading, edge cases |
-| analyze | 32 | Entropy, magic bytes, SHA-256, polyglot, escalation |
-| pe | 12 | Header parsing, sections, flags, serialization |
-| elf | 14 | 32/64-bit, big/little endian, sections, serialization |
-| strings | 12 | ASCII, UTF-16, filtering, sorting |
-| hoosh | 13 | Client config, prompt building, response parsing |
-| daimon | 7 | URL validation, path traversal rejection |
-| ai | 2 | Registration defaults, serialization |
-| queue | 9 | Priority ordering, FIFO, capacity, target preservation |
+| analyze | 37 | Entropy, magic bytes, SHA-256, polyglot, escalation, findings |
+| yara | 35 | Patterns, conditions, constraints, TOML loading, edge cases |
+| core | 23 | Types, serialization, Display, FromStr, ordering |
+| hoosh | 16 | Client config, prompt building, response parsing, batch |
+| pe | 15 | Header parsing, sections, flags, truncation, serialization |
+| elf | 15 | 32/64-bit, big/little endian, sections, strtab, serialization |
+| strings | 12 | ASCII, UTF-16, filtering, sorting, edge cases |
+| queue | 10 | Priority ordering, FIFO, capacity, target preservation, IDs |
+| watch | 9 | File detection, extension filter, size filter, config |
+| report | 9 | JSON/Markdown rendering, summary, serialization, escaping |
 | quarantine | 9 | Quarantine/release, persistence, SHA-256, errors |
-| report | 8 | JSON/Markdown rendering, summary, serialization |
-| watch | 8 | File detection, extension filter, size filter, config |
+| error | 9 | Every PhylaxError variant, #[from] conversion |
+| daimon | 7 | URL validation, path traversal, deregister rejection |
+| ai | 2 | Registration defaults, serialization |
 
 ## Coverage
 

@@ -58,12 +58,13 @@ impl DaimonHandle {
 impl DaimonClient {
     /// Create a new client pointing at the given daimon URL (10s timeout).
     pub fn new(base_url: impl Into<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("failed to build HTTP client");
         Self {
             base_url: base_url.into(),
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .unwrap_or_default(),
+            client,
         }
     }
 

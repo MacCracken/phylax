@@ -31,7 +31,8 @@ pub struct ExtractedString {
 ///
 /// Returns strings of at least `min_length` printable ASCII characters.
 pub fn extract_ascii(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
-    let mut results = Vec::new();
+    // Estimate: ~1 string per 128 bytes of data
+    let mut results = Vec::with_capacity(data.len() / 128 + 1);
     let mut run_start = 0;
     let mut in_run = false;
 

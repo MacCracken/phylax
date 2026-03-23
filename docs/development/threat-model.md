@@ -69,6 +69,24 @@
 | Index corruption | Lost quarantine metadata | JSON serialize errors logged, not silent |
 | Cross-filesystem move | `fs::rename` failure | Same-filesystem assumption documented |
 
+### queue
+| Vector | Risk | Mitigation |
+|--------|------|-----------|
+| Unbounded enqueue | Memory exhaustion | Bounded capacity; `enqueue` returns `None` when full |
+| ID overflow | Duplicate request IDs | `AtomicU64` wraps at 2^64 (practically infinite) |
+
+### report
+| Vector | Risk | Mitigation |
+|--------|------|-----------|
+| Pipe characters in markdown | Broken table formatting | Escaped with `\|` in render output |
+| Large reports | Memory from many findings | Bounded by scan file count |
+
+### bote_tools (feature-gated)
+| Vector | Risk | Mitigation |
+|--------|------|-----------|
+| Path traversal via scan tool | Arbitrary file read | `canonicalize()` on all paths before scanning |
+| Unvalidated tool arguments | Injection | Schema validation via bote `ToolRegistry` |
+
 ### daemon (Unix socket)
 | Vector | Risk | Mitigation |
 |--------|------|-----------|
