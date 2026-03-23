@@ -2,6 +2,23 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.4.0] - 2026-03-22
+
+### Added
+- `queue` module: priority scan queue with `ScanPriority` (Critical/High/Normal/Low), bounded capacity, FIFO within same priority
+- `quarantine` module: file quarantine/release with persistent JSON index, SHA-256 tracking, metadata
+- `report` module: structured `ThreatReport` generation in JSON and Markdown formats with severity summary
+- Full daemon mode: Unix socket listener with tokio, line-based JSON protocol, per-connection handler
+- `phylax report` CLI command for generating scan reports (JSON/Markdown)
+- Daemon path canonicalization to prevent path traversal from socket clients
+- Daemon line length limit (4 KB) to prevent memory exhaustion
+- 16 benchmark groups (added: queue, report)
+- 180 tests (176 unit + 4 integration)
+
+### Changed
+- `phylax daemon` now accepts `--socket` flag for custom socket path
+- Daemon scans use `escalate_severity` for auto-escalation
+
 ## [0.3.0] - 2026-03-22
 
 ### Added

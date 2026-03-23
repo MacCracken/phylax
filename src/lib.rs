@@ -11,5 +11,8 @@ pub mod daimon;
 pub mod elf;
 pub mod error;
 pub mod pe;
+pub mod quarantine;
+pub mod queue;
+pub mod report;
 pub mod strings;
 pub mod yara;

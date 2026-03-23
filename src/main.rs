@@ -9,7 +9,8 @@ use tracing_subscriber::EnvFilter;
 use phylax::analyze::{
     analyze, entropy_profile, escalate_severity, findings_from_analysis, is_suspicious_entropy,
 };
-use phylax::core::{ScanConfig, ScanTarget, VERSION};
+use phylax::core::{ScanConfig, ScanResult, ScanTarget, VERSION};
+use phylax::report::{ReportFormat, ThreatReport};
 use phylax::yara::YaraEngine;
 
 #[derive(Parser)]
@@ -40,7 +41,25 @@ enum Commands {
     },
 
     /// Run as a background daemon
-    Daemon,
+    Daemon {
+        /// Unix socket path
+        #[arg(long, default_value = "/run/agnos/phylax.sock")]
+        socket: PathBuf,
+    },
+
+    /// Generate a threat report from a scan
+    Report {
+        /// File to scan and report on
+        path: PathBuf,
+
+        /// Output format: json or markdown
+        #[arg(short, long, default_value = "json")]
+        format: String,
+
+        /// TOML file containing YARA rules
+        #[arg(short, long)]
+        rules: Option<PathBuf>,
+    },
 
     /// Manage YARA rules
     Rules {
@@ -78,7 +97,12 @@ fn main() -> Result<()> {
             rules,
             block_size,
         } => cmd_scan(&path, rules.as_deref(), block_size),
-        Commands::Daemon => cmd_daemon(),
+        Commands::Daemon { socket } => cmd_daemon(&socket),
+        Commands::Report {
+            path,
+            format,
+            rules,
+        } => cmd_report(&path, &format, rules.as_deref()),
         Commands::Rules { action } => match action {
             RulesAction::List { file } => cmd_rules_list(file.as_deref()),
         },
@@ -183,11 +207,168 @@ fn cmd_scan(path: &PathBuf, rules_path: Option<&std::path::Path>, block_size: us
     Ok(())
 }
 
-fn cmd_daemon() -> Result<()> {
+fn cmd_daemon(socket: &Path) -> Result<()> {
     println!("Phylax daemon v{VERSION}");
-    println!("Starting threat detection daemon...");
-    println!("Listening for scan requests on /run/agnos/phylax.sock");
-    println!("Daemon mode not yet fully implemented. Use 'phylax scan' for direct scanning.");
+    println!("Listening on: {}", socket.display());
+    println!();
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        // Remove stale socket
+        let _ = std::fs::remove_file(socket);
+        if let Some(parent) = socket.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let listener = tokio::net::UnixListener::bind(socket)?;
+        info!(path = %socket.display(), "daemon listening");
+
+        loop {
+            match listener.accept().await {
+                Ok((stream, _addr)) => {
+                    info!("client connected");
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_client(stream).await {
+                            warn!(error = %e, "client handler error");
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!(error = %e, "accept error");
+                }
+            }
+        }
+    })
+}
+
+async fn handle_client(stream: tokio::net::UnixStream) -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    const MAX_LINE_LEN: usize = 4096;
+
+    let (reader, mut writer) = stream.into_split();
+    let mut buf_reader = BufReader::new(reader);
+    let mut line_buf = String::new();
+
+    loop {
+        line_buf.clear();
+        let n = buf_reader.read_line(&mut line_buf).await?;
+        if n == 0 {
+            break; // EOF
+        }
+        if n > MAX_LINE_LEN {
+            let err = serde_json::json!({"error": "request line too long"}).to_string();
+            writer.write_all(err.as_bytes()).await?;
+            writer.write_all(b"\n").await?;
+            continue;
+        }
+
+        let line = line_buf.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+
+        debug!(request = %line, "received scan request");
+
+        // Canonicalize to prevent path traversal
+        let path = match std::fs::canonicalize(&line) {
+            Ok(p) => p,
+            Err(e) => {
+                let err = serde_json::json!({"error": format!("invalid path: {e}")}).to_string();
+                writer.write_all(err.as_bytes()).await?;
+                writer.write_all(b"\n").await?;
+                continue;
+            }
+        };
+        let response = match scan_file_for_daemon(&path) {
+            Ok(json) => json,
+            Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
+        };
+
+        writer.write_all(response.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+    }
+
+    Ok(())
+}
+
+fn scan_file_for_daemon(path: &Path) -> Result<String> {
+    let config = ScanConfig::default();
+    let metadata = std::fs::metadata(path)?;
+    if metadata.len() > config.max_file_size {
+        anyhow::bail!("file too large: {} bytes", metadata.len());
+    }
+
+    let data = std::fs::read(path)?;
+    let start = std::time::Instant::now();
+    let analysis = analyze(&data);
+    let engine = YaraEngine::new();
+    let yara_findings = engine.scan(&data);
+    let mut analyze_findings =
+        findings_from_analysis(&data, &analysis, ScanTarget::File(path.to_path_buf()));
+    escalate_severity(&mut analyze_findings, &analysis);
+
+    let mut all_findings = yara_findings;
+    all_findings.extend(analyze_findings);
+    let duration = start.elapsed();
+
+    let result = ScanResult {
+        target: ScanTarget::File(path.to_path_buf()),
+        findings: all_findings,
+        scan_duration: duration,
+        scanner_version: VERSION.to_string(),
+    };
+
+    Ok(serde_json::to_string(&result)?)
+}
+
+use std::path::Path;
+use tracing::{debug, warn};
+
+fn cmd_report(path: &PathBuf, format: &str, rules_path: Option<&std::path::Path>) -> Result<()> {
+    let config = ScanConfig::default();
+    let metadata = std::fs::metadata(path)?;
+    if metadata.len() > config.max_file_size {
+        anyhow::bail!(
+            "File too large: {} bytes (max {})",
+            metadata.len(),
+            config.max_file_size
+        );
+    }
+
+    let data = std::fs::read(path)?;
+    let start = std::time::Instant::now();
+    let analysis = analyze(&data);
+
+    let mut engine = YaraEngine::new();
+    if let Some(rp) = rules_path {
+        let rules_str = std::fs::read_to_string(rp)?;
+        engine.load_rules_toml(&rules_str)?;
+    }
+
+    let yara_findings = engine.scan(&data);
+    let mut analyze_findings =
+        findings_from_analysis(&data, &analysis, ScanTarget::File(path.clone()));
+    escalate_severity(&mut analyze_findings, &analysis);
+
+    let mut all_findings = yara_findings;
+    all_findings.extend(analyze_findings);
+    let duration = start.elapsed();
+
+    let result = ScanResult {
+        target: ScanTarget::File(path.clone()),
+        findings: all_findings,
+        scan_duration: duration,
+        scanner_version: VERSION.to_string(),
+    };
+
+    let report = ThreatReport::from_results(vec![result]);
+    let fmt = match format {
+        "markdown" | "md" => ReportFormat::Markdown,
+        _ => ReportFormat::Json,
+    };
+    println!("{}", report.render(fmt));
+
     Ok(())
 }
 

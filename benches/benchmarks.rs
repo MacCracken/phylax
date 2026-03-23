@@ -511,6 +511,89 @@ fn bench_elf_parse(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Queue throughput
+// ---------------------------------------------------------------------------
+
+fn bench_queue(c: &mut Criterion) {
+    let mut group = c.benchmark_group("queue");
+
+    group.bench_function("enqueue_dequeue_1000", |b| {
+        b.iter(|| {
+            let q = phylax::queue::ScanQueue::new(1000);
+            for _ in 0..1000 {
+                q.enqueue(ScanTarget::Memory, phylax::queue::ScanPriority::Normal);
+            }
+            for _ in 0..1000 {
+                black_box(q.dequeue());
+            }
+        });
+    });
+
+    group.bench_function("mixed_priorities_1000", |b| {
+        b.iter(|| {
+            let q = phylax::queue::ScanQueue::new(1000);
+            let priorities = [
+                phylax::queue::ScanPriority::Low,
+                phylax::queue::ScanPriority::Normal,
+                phylax::queue::ScanPriority::High,
+                phylax::queue::ScanPriority::Critical,
+            ];
+            for i in 0..1000u64 {
+                q.enqueue(ScanTarget::Memory, priorities[(i % 4) as usize]);
+            }
+            for _ in 0..1000 {
+                black_box(q.dequeue());
+            }
+        });
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Report rendering
+// ---------------------------------------------------------------------------
+
+fn bench_report(c: &mut Criterion) {
+    use phylax::core::{FindingCategory, FindingSeverity, ScanResult, ThreatFinding};
+    use phylax::report::{ReportFormat, ThreatReport};
+
+    let mut group = c.benchmark_group("report");
+
+    // Build sample results
+    let results: Vec<ScanResult> = (0..10)
+        .map(|i| ScanResult {
+            target: ScanTarget::File(format!("/tmp/file_{i}.bin").into()),
+            findings: (0..5)
+                .map(|j| {
+                    ThreatFinding::new(
+                        ScanTarget::File(format!("/tmp/file_{i}.bin").into()),
+                        FindingCategory::Suspicious,
+                        FindingSeverity::Medium,
+                        format!("rule_{j}"),
+                        format!("finding {j} for file {i}"),
+                    )
+                })
+                .collect(),
+            scan_duration: std::time::Duration::from_millis(50),
+            scanner_version: "0.1.0".into(),
+        })
+        .collect();
+
+    let report = ThreatReport::from_results(results);
+
+    group.bench_function("render_json", |b| {
+        b.iter(|| black_box(report.render(ReportFormat::Json)));
+    });
+
+    group.bench_function("render_markdown", |b| {
+        b.iter(|| black_box(report.render(ReportFormat::Markdown)));
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_entropy,
@@ -527,5 +610,7 @@ criterion_group!(
     bench_strings,
     bench_pe_parse,
     bench_elf_parse,
+    bench_queue,
+    bench_report,
 );
 criterion_main!(benches);
