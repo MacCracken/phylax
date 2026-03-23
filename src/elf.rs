@@ -528,6 +528,99 @@ mod tests {
     }
 
     #[test]
+    fn parse_elf_big_endian() {
+        let mut data = vec![0u8; 128];
+        data[0] = 0x7f;
+        data[1] = 0x45;
+        data[2] = 0x4c;
+        data[3] = 0x46;
+        data[4] = 2; // 64-bit
+        data[5] = 2; // big-endian
+        data[6] = 1;
+        // Type: executable (2) in big-endian
+        data[16] = 0;
+        data[17] = 2;
+        // Machine: MIPS (8) in big-endian
+        data[18] = 0;
+        data[19] = 8;
+
+        let info = parse_elf(&data).unwrap();
+        assert_eq!(info.endian, ElfEndian::Big);
+        assert_eq!(info.file_type, ElfType::Executable);
+        assert_eq!(info.machine, ElfMachine::Mips);
+    }
+
+    #[test]
+    fn parse_elf_invalid_class() {
+        let mut data = vec![0u8; 64];
+        data[0] = 0x7f;
+        data[1] = 0x45;
+        data[2] = 0x4c;
+        data[3] = 0x46;
+        data[4] = 99; // invalid class
+        data[5] = 1;
+        assert!(parse_elf(&data).is_none());
+    }
+
+    #[test]
+    fn parse_elf_invalid_endian() {
+        let mut data = vec![0u8; 64];
+        data[0] = 0x7f;
+        data[1] = 0x45;
+        data[2] = 0x4c;
+        data[3] = 0x46;
+        data[4] = 1;
+        data[5] = 99; // invalid endian
+        assert!(parse_elf(&data).is_none());
+    }
+
+    #[test]
+    fn parse_elf_relocatable_type() {
+        let mut data = vec![0u8; 64];
+        data[0] = 0x7f;
+        data[1] = 0x45;
+        data[2] = 0x4c;
+        data[3] = 0x46;
+        data[4] = 1;
+        data[5] = 1;
+        data[6] = 1;
+        data[16] = 1; // REL
+        data[18] = 3; // x86
+
+        let info = parse_elf(&data).unwrap();
+        assert_eq!(info.file_type, ElfType::Relocatable);
+        assert_eq!(info.machine, ElfMachine::X86);
+    }
+
+    #[test]
+    fn read_strtab_entry_past_end() {
+        let data = b"hello\0world";
+        assert_eq!(read_strtab_entry(data, 100, 0), "");
+    }
+
+    #[test]
+    fn read_strtab_entry_basic() {
+        let data = b"\0libc.so.6\0libm.so.6\0";
+        assert_eq!(read_strtab_entry(data, 0, 1), "libc.so.6");
+        assert_eq!(read_strtab_entry(data, 0, 11), "libm.so.6");
+    }
+
+    #[test]
+    fn elf_section_writable() {
+        let sec = ElfSection {
+            name: ".data".into(),
+            section_type: 1,
+            flags: 0x3, // WRITE | ALLOC
+            addr: 0,
+            offset: 0,
+            size: 0,
+        };
+        assert!(sec.is_writable());
+        assert!(sec.is_alloc());
+        assert!(!sec.is_executable());
+    }
+
+    #[test]
     fn read_helpers() {
         let data = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
         assert_eq!(read_u16(&data, 0, true), Some(0x0201));

@@ -329,7 +329,11 @@ fn rva_to_offset(data: &[u8], opt_offset: usize, rva: u32) -> Option<usize> {
         let raw_size = read_u32_le(data, sec_offset + 16)?;
         let raw_offset = read_u32_le(data, sec_offset + 20)?;
 
-        if rva >= vaddr && rva < vaddr + raw_size {
+        let vaddr_end = match vaddr.checked_add(raw_size) {
+            Some(end) => end,
+            None => continue,
+        };
+        if rva >= vaddr && rva < vaddr_end {
             return Some((rva - vaddr + raw_offset) as usize);
         }
     }
@@ -504,6 +508,72 @@ mod tests {
         let data = b"hello\0world";
         assert_eq!(read_ascii(data, 0, 11), "hello");
         assert_eq!(read_ascii(data, 6, 5), "world");
+    }
+
+    #[test]
+    fn parse_pe_truncated_lfanew() {
+        // MZ header with e_lfanew pointing past end
+        let mut data = vec![0u8; 64];
+        data[0] = 0x4d;
+        data[1] = 0x5a;
+        data[0x3C] = 0xFF; // e_lfanew = 0xFF, past end of 64-byte data
+        assert!(parse_pe(&data).is_none());
+    }
+
+    #[test]
+    fn parse_pe_arm_machine() {
+        let mut data = vec![0u8; 256];
+        data[0] = 0x4d;
+        data[1] = 0x5a;
+        data[0x3C] = 0x80;
+        data[0x80] = 0x50;
+        data[0x81] = 0x45;
+        data[0x84] = 0xc0; // ARM (0x01c0)
+        data[0x85] = 0x01;
+        data[0x98] = 0x0b;
+        data[0x99] = 0x01;
+
+        let info = parse_pe(&data).unwrap();
+        assert_eq!(info.machine, PeMachine::Arm);
+    }
+
+    #[test]
+    fn parse_pe_bad_pe_signature() {
+        let mut data = vec![0u8; 256];
+        data[0] = 0x4d;
+        data[1] = 0x5a;
+        data[0x3C] = 0x80;
+        // Not "PE\0\0"
+        data[0x80] = 0x50;
+        data[0x81] = 0x50; // PP instead of PE
+        assert!(parse_pe(&data).is_none());
+    }
+
+    #[test]
+    fn read_ascii_past_end() {
+        let data = b"hello";
+        assert_eq!(read_ascii(data, 100, 5), "");
+    }
+
+    #[test]
+    fn read_ascii_no_null() {
+        let data = b"abcdefgh";
+        assert_eq!(read_ascii(data, 0, 8), "abcdefgh");
+    }
+
+    #[test]
+    fn pe_section_writable_and_executable() {
+        let sec = PeSection {
+            name: ".mixed".into(),
+            virtual_size: 0x1000,
+            virtual_address: 0x1000,
+            raw_data_size: 0x200,
+            raw_data_offset: 0x200,
+            characteristics: 0xE000_0020, // CODE | EXECUTE | READ | WRITE
+        };
+        assert!(sec.is_executable());
+        assert!(sec.is_writable());
+        assert!(sec.contains_code());
     }
 
     #[test]

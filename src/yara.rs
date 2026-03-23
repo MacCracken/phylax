@@ -873,6 +873,37 @@ value = "ABCD"
     }
 
     #[test]
+    fn constraint_combined_size_and_offset() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "combo"
+severity = "high"
+condition = "any"
+min_file_size = 20
+max_file_size = 200
+at_offset = 0
+[[rule.patterns]]
+id = "$magic"
+type = "hex"
+value = "4d5a"
+"#;
+        engine.load_rules_toml(toml).unwrap();
+        // Too small
+        assert!(engine.scan(b"MZ").is_empty());
+        // Right size, right magic at offset 0
+        let mut data = vec![0u8; 50];
+        data[0] = 0x4d;
+        data[1] = 0x5a;
+        assert_eq!(engine.scan(&data).len(), 1);
+        // Too large
+        let mut big = vec![0u8; 300];
+        big[0] = 0x4d;
+        big[1] = 0x5a;
+        assert!(engine.scan(&big).is_empty());
+    }
+
+    #[test]
     fn constraints_satisfied_checks() {
         let c = RuleConstraints {
             min_file_size: Some(10),

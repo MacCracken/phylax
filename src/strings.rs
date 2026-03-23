@@ -32,35 +32,40 @@ pub struct ExtractedString {
 /// Returns strings of at least `min_length` printable ASCII characters.
 pub fn extract_ascii(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     let mut results = Vec::new();
-    let mut start = None;
-    let mut current = Vec::new();
+    let mut run_start = 0;
+    let mut in_run = false;
 
     for (i, &b) in data.iter().enumerate() {
         if is_printable_ascii(b) {
-            if start.is_none() {
-                start = Some(i);
+            if !in_run {
+                run_start = i;
+                in_run = true;
             }
-            current.push(b);
-        } else {
-            if current.len() >= min_length {
+        } else if in_run {
+            let run_len = i - run_start;
+            if run_len >= min_length {
+                let value = String::from_utf8(data[run_start..i].to_vec()).unwrap();
                 results.push(ExtractedString {
-                    value: String::from_utf8_lossy(&current).into_owned(),
-                    offset: start.unwrap(),
+                    value,
+                    offset: run_start,
                     encoding: StringEncoding::Ascii,
                 });
             }
-            start = None;
-            current.clear();
+            in_run = false;
         }
     }
 
     // Handle string at end of data
-    if current.len() >= min_length {
-        results.push(ExtractedString {
-            value: String::from_utf8_lossy(&current).into_owned(),
-            offset: start.unwrap(),
-            encoding: StringEncoding::Ascii,
-        });
+    if in_run {
+        let run_len = data.len() - run_start;
+        if run_len >= min_length {
+            let value = String::from_utf8(data[run_start..].to_vec()).unwrap();
+            results.push(ExtractedString {
+                value,
+                offset: run_start,
+                encoding: StringEncoding::Ascii,
+            });
+        }
     }
 
     results
@@ -72,8 +77,9 @@ pub fn extract_ascii(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
 /// (the UTF-16 LE encoding of ASCII text).
 pub fn extract_utf16le(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     let mut results = Vec::new();
-    let mut start = None;
-    let mut current = Vec::new();
+    let mut run_start = 0;
+    let mut char_count = 0;
+    let mut in_run = false;
 
     let mut i = 0;
     while i + 1 < data.len() {
@@ -81,29 +87,39 @@ pub fn extract_utf16le(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
         let hi = data[i + 1];
 
         if is_printable_ascii(lo) && hi == 0 {
-            if start.is_none() {
-                start = Some(i);
+            if !in_run {
+                run_start = i;
+                char_count = 0;
+                in_run = true;
             }
-            current.push(lo);
+            char_count += 1;
         } else {
-            if current.len() >= min_length {
+            if in_run && char_count >= min_length {
+                // Extract the ASCII bytes from every other position
+                let value: String = data[run_start..run_start + char_count * 2]
+                    .chunks(2)
+                    .map(|c| c[0] as char)
+                    .collect();
                 results.push(ExtractedString {
-                    value: String::from_utf8_lossy(&current).into_owned(),
-                    offset: start.unwrap(),
+                    value,
+                    offset: run_start,
                     encoding: StringEncoding::Utf16Le,
                 });
             }
-            start = None;
-            current.clear();
+            in_run = false;
         }
 
         i += 2;
     }
 
-    if current.len() >= min_length {
+    if in_run && char_count >= min_length {
+        let value: String = data[run_start..run_start + char_count * 2]
+            .chunks(2)
+            .map(|c| c[0] as char)
+            .collect();
         results.push(ExtractedString {
-            value: String::from_utf8_lossy(&current).into_owned(),
-            offset: start.unwrap(),
+            value,
+            offset: run_start,
             encoding: StringEncoding::Utf16Le,
         });
     }

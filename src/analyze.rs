@@ -649,6 +649,43 @@ mod tests {
     }
 
     #[test]
+    fn escalate_cascading_executable_plus_multiple() {
+        // Executable escalates Medium→High, then multiple High signals should
+        // escalate one to Critical
+        let analysis = BinaryAnalysis {
+            file_type: FileType::Pe,
+            entropy: 7.9,
+            size: 1024,
+            sha256: "abc".into(),
+        };
+        let mut findings = vec![
+            ThreatFinding::new(
+                ScanTarget::Memory,
+                FindingCategory::Suspicious,
+                FindingSeverity::Medium,
+                "high_entropy",
+                "high entropy",
+            ),
+            ThreatFinding::new(
+                ScanTarget::Memory,
+                FindingCategory::CustomRule,
+                FindingSeverity::Medium,
+                "packed_binary",
+                "UPX packed",
+            ),
+        ];
+        escalate_severity(&mut findings, &analysis);
+        // Both should be escalated from Medium to High (executable type)
+        assert!(findings.iter().all(|f| f.severity >= FindingSeverity::High));
+        // With 2+ High findings, one should be escalated to Critical
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.severity == FindingSeverity::Critical)
+        );
+    }
+
+    #[test]
     fn escalate_no_change_on_clean() {
         let analysis = BinaryAnalysis {
             file_type: FileType::Unknown,
