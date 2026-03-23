@@ -1,0 +1,14 @@
+[package]
+name = "phylax-yara"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "YARA-compatible rule engine"
+
+[dependencies]
+phylax-core = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

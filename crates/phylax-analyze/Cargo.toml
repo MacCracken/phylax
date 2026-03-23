@@ -1,0 +1,13 @@
+[package]
+name = "phylax-analyze"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Entropy analysis, magic bytes detection, binary classification"
+
+[dependencies]
+phylax-core = { workspace = true }
+sha2 = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

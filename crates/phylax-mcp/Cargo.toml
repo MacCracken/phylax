@@ -1,0 +1,14 @@
+[package]
+name = "phylax-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP tools: scan, rules, status, quarantine, report"
+
+[dependencies]
+phylax-core = { workspace = true }
+phylax-yara = { workspace = true }
+phylax-analyze = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
