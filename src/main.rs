@@ -53,7 +53,8 @@ enum Commands {
         hoosh_model: String,
     },
 
-    /// Run as a background daemon
+    /// Run as a background daemon (Unix only)
+    #[cfg(unix)]
     Daemon {
         /// Unix socket path
         #[arg(long, default_value = "/run/agnos/phylax.sock")]
@@ -169,6 +170,7 @@ fn main() -> Result<()> {
             &hoosh_url,
             &hoosh_model,
         ),
+        #[cfg(unix)]
         Commands::Daemon {
             socket,
             triage,
@@ -478,6 +480,7 @@ fn cmd_scan(
     Ok(())
 }
 
+#[cfg(unix)]
 fn cmd_daemon(
     socket: &Path,
     do_triage: bool,
@@ -557,6 +560,7 @@ fn cmd_daemon(
     })
 }
 
+#[cfg(unix)]
 async fn handle_client(
     stream: tokio::net::UnixStream,
     do_triage: bool,
