@@ -112,6 +112,7 @@ fn read_ascii(data: &[u8], offset: usize, max_len: usize) -> String {
 /// Try to parse PE headers from raw file data.
 ///
 /// Returns `None` if the data is not a valid PE file.
+#[must_use]
 pub fn parse_pe(data: &[u8]) -> Option<PeInfo> {
     // DOS MZ header check
     if data.len() < 64 || data[0] != 0x4d || data[1] != 0x5a {

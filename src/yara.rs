@@ -78,6 +78,7 @@ pub struct RuleConstraints {
 
 impl RuleConstraints {
     /// Check whether the constraints are satisfied for the given data.
+    #[must_use]
     pub fn satisfied(&self, data: &[u8]) -> bool {
         let len = data.len() as u64;
         if let Some(min) = self.min_file_size {
@@ -351,11 +352,13 @@ impl YaraEngine {
     }
 
     /// Number of loaded rules.
+    #[must_use]
     pub fn rule_count(&self) -> usize {
         self.rules.len()
     }
 
     /// Get all loaded rules (read-only).
+    #[must_use]
     pub fn rules(&self) -> &[YaraRule] {
         &self.rules
     }

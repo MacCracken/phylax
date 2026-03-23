@@ -128,16 +128,19 @@ impl ScanQueue {
     }
 
     /// Number of pending requests.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.heap.lock().unwrap().len()
     }
 
     /// Whether the queue is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.heap.lock().unwrap().is_empty()
     }
 
     /// Queue capacity.
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.capacity
     }

@@ -177,6 +177,7 @@ fn read_strtab_entry(data: &[u8], strtab_offset: usize, name_index: usize) -> St
 /// Try to parse ELF headers from raw file data.
 ///
 /// Returns `None` if the data is not a valid ELF file.
+#[must_use]
 pub fn parse_elf(data: &[u8]) -> Option<ElfInfo> {
     // ELF magic: 0x7f 'E' 'L' 'F'
     if data.len() < 16 || data[0..4] != [0x7f, 0x45, 0x4c, 0x46] {

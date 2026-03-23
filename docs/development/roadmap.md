@@ -1,8 +1,6 @@
 # Roadmap
 
-## v1.0.0 — Production
-
-- [ ] API stability guarantee (`#[must_use]`, review public surface, doc coverage)
+All planned features for v1.0.0 have been implemented. The project is in stabilization.
 
 ## Non-goals
 

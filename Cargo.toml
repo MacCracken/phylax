@@ -1,6 +1,6 @@
 [package]
 name = "phylax"
-version = "0.22.4"
+version = "0.22.3"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-3.0"
@@ -9,7 +9,7 @@ repository = "https://github.com/MacCracken/phylax"
 readme = "README.md"
 keywords = ["security", "threat-detection", "yara", "entropy", "binary-analysis"]
 categories = ["command-line-utilities"]
-exclude = [".claude/", ".github/", "target/"]
+exclude = [".claude/", ".github/", "target/", "docs/", "scripts/", "benchmark-results/"]
 
 [features]
 default = []

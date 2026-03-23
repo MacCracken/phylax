@@ -133,6 +133,7 @@ impl QuarantineManager {
     }
 
     /// Number of quarantined files.
+    #[must_use]
     pub fn count(&self) -> usize {
         self.entries.len()
     }

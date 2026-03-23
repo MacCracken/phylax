@@ -13,6 +13,7 @@ use tracing::{debug, instrument, warn};
 /// Compute Shannon entropy of a byte slice (bits per byte, 0.0..=8.0).
 ///
 /// Returns 0.0 for empty data.
+#[must_use]
 pub fn shannon_entropy(data: &[u8]) -> f64 {
     if data.is_empty() {
         return 0.0;
@@ -48,6 +49,7 @@ pub fn entropy_profile(data: &[u8], block_size: usize) -> Vec<f64> {
 }
 
 /// Heuristic: entropy above 7.5 bits/byte is suspicious (likely encrypted or compressed).
+#[must_use]
 pub fn is_suspicious_entropy(entropy: f64) -> bool {
     entropy > 7.5
 }
@@ -90,6 +92,7 @@ impl fmt::Display for FileType {
 }
 
 /// Detect file type from magic bytes at the start of data.
+#[must_use]
 pub fn detect_file_type(data: &[u8]) -> FileType {
     if data.len() < 2 {
         return FileType::Unknown;
@@ -190,6 +193,7 @@ pub fn detect_polyglot(data: &[u8]) -> Vec<FileType> {
 // ---------------------------------------------------------------------------
 
 /// Compute the SHA-256 hash of data, returned as a lowercase hex string.
+#[must_use]
 pub fn file_sha256(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -220,6 +224,7 @@ pub struct BinaryAnalysis {
 }
 
 /// Perform a full binary analysis on raw data.
+#[must_use]
 #[instrument(skip(data), fields(data_len = data.len()))]
 pub fn analyze(data: &[u8]) -> BinaryAnalysis {
     BinaryAnalysis {
