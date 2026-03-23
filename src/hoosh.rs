@@ -102,6 +102,10 @@ impl HooshClient {
     /// Triage a single threat finding via hoosh.
     ///
     /// Sends the finding details to the LLM and parses the classification response.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, hoosh returns a non-2xx status,
+    /// or the response body cannot be deserialized.
     #[instrument(skip(self, finding), fields(finding_id = %finding.id, rule = %finding.rule_name))]
     pub async fn triage_finding(&self, finding: &ThreatFinding) -> anyhow::Result<TriageResult> {
         let prompt = build_triage_prompt(finding);

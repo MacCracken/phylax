@@ -51,6 +51,10 @@ pub enum WatchEvent {
 ///
 /// Returns a receiver that yields `WatchEvent`s. The watcher runs until
 /// the returned `WatchHandle` is dropped.
+///
+/// # Errors
+/// Returns an error if the underlying filesystem watcher cannot be created
+/// or a watch path cannot be registered.
 pub fn start_watch(
     config: &WatchConfig,
 ) -> anyhow::Result<(WatchHandle, mpsc::Receiver<WatchEvent>)> {
@@ -136,6 +140,9 @@ impl std::fmt::Debug for WatchHandle {
 }
 
 /// Convenience: watch a single directory.
+///
+/// # Errors
+/// Returns an error if the watcher cannot be created or the path cannot be watched.
 pub fn watch_directory(path: &Path) -> anyhow::Result<(WatchHandle, mpsc::Receiver<WatchEvent>)> {
     let config = WatchConfig {
         paths: vec![path.to_path_buf()],

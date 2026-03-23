@@ -133,6 +133,11 @@ impl ElfSection {
 const SHT_STRTAB: u32 = 3;
 const SHT_DYNSYM: u32 = 11;
 
+/// Maximum number of dynamic symbols to extract.
+const MAX_SYMBOLS: usize = 4096;
+/// Maximum number of DT_NEEDED entries to extract.
+const MAX_NEEDED: usize = 1024;
+
 fn read_u16(data: &[u8], offset: usize, little_endian: bool) -> Option<u16> {
     let b = data.get(offset..offset + 2)?;
     Some(if little_endian {
@@ -328,7 +333,7 @@ pub fn parse_elf(data: &[u8]) -> Option<ElfInfo> {
         for &(sym_offset, sym_size) in &dynsym_sections {
             let entry_size = if is_64 { 24 } else { 16 };
             let count = sym_size / entry_size;
-            for j in 0..count.min(4096) {
+            for j in 0..count.min(MAX_SYMBOLS) {
                 let ent = sym_offset + j * entry_size;
                 let name_idx = read_u32(data, ent, le).unwrap_or(0) as usize;
                 if name_idx > 0 {
@@ -381,7 +386,7 @@ fn extract_needed_libs(
     let count = (dynamic.size as usize) / entry_size;
     let base = dynamic.offset as usize;
 
-    for i in 0..count.min(1024) {
+    for i in 0..count.min(MAX_NEEDED) {
         let ent = base + i * entry_size;
         let tag = if is_64 {
             read_u64(data, ent, le).unwrap_or(0)

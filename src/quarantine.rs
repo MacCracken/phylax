@@ -42,6 +42,9 @@ impl QuarantineManager {
     /// Create a new manager for the given quarantine directory.
     ///
     /// Creates the directory if it doesn't exist.
+    ///
+    /// # Errors
+    /// Returns `io::Error` if the directory cannot be created.
     pub fn new(dir: impl Into<PathBuf>) -> std::io::Result<Self> {
         let dir = dir.into();
         fs::create_dir_all(&dir)?;
@@ -57,6 +60,9 @@ impl QuarantineManager {
     /// Quarantine a file: move it into the quarantine directory.
     ///
     /// Returns the quarantine ID on success.
+    ///
+    /// # Errors
+    /// Returns `io::Error` if the file cannot be read, hashed, or moved.
     pub fn quarantine(
         &mut self,
         source: &Path,
@@ -93,6 +99,9 @@ impl QuarantineManager {
     }
 
     /// Release a quarantined file: move it back to its original location.
+    ///
+    /// # Errors
+    /// Returns `io::Error` if the quarantine ID is unknown or the file cannot be moved.
     pub fn release(&mut self, id: &str) -> std::io::Result<PathBuf> {
         let entry = self
             .entries

@@ -27,6 +27,9 @@ pub enum YaraPattern {
 
 impl YaraPattern {
     /// Create a regex pattern, compiling it upfront.
+    ///
+    /// # Errors
+    /// Returns `regex::Error` if the pattern is invalid.
     pub fn regex(pattern: &str) -> std::result::Result<Self, regex::Error> {
         Regex::new(pattern).map(Self::Regex)
     }
@@ -217,6 +220,10 @@ impl YaraEngine {
     }
 
     /// Load rules from a TOML string.
+    ///
+    /// # Errors
+    /// Returns `YaraError` if TOML is malformed, severity/condition is invalid,
+    /// hex encoding is wrong, or a regex pattern fails to compile.
     #[instrument(skip(self, toml_str), fields(toml_len = toml_str.len()))]
     pub fn load_rules_toml(&mut self, toml_str: &str) -> Result<usize> {
         let file: RulesFile = toml::from_str(toml_str).map_err(|e| {

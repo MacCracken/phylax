@@ -74,6 +74,9 @@ impl DaimonClient {
     }
 
     /// Register the phylax agent with daimon.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails or daimon returns a non-2xx status.
     pub async fn register(&self) -> anyhow::Result<RegisterResponse> {
         let reg = AgentRegistration::default();
         let url = format!("{}/v1/agents/register", self.base_url);
@@ -92,6 +95,10 @@ impl DaimonClient {
     }
 
     /// Send a heartbeat to daimon.
+    ///
+    /// # Errors
+    /// Returns an error if `agent_id` contains path separators, the HTTP request
+    /// fails, or daimon returns a non-2xx status.
     pub async fn heartbeat(&self, agent_id: &str) -> anyhow::Result<()> {
         anyhow::ensure!(
             !agent_id.is_empty() && !agent_id.contains('/') && !agent_id.contains('\\'),
@@ -104,6 +111,10 @@ impl DaimonClient {
     }
 
     /// Deregister the agent from daimon.
+    ///
+    /// # Errors
+    /// Returns an error if `agent_id` is invalid, the HTTP request fails,
+    /// or daimon returns a non-2xx status.
     pub async fn deregister(&self, agent_id: &str) -> anyhow::Result<()> {
         anyhow::ensure!(
             !agent_id.is_empty() && !agent_id.contains('/') && !agent_id.contains('\\'),
@@ -124,6 +135,9 @@ impl DaimonClient {
     ///
     /// Returns a `DaimonHandle` — drop or call `shutdown()` to stop
     /// heartbeats and deregister.
+    ///
+    /// # Errors
+    /// Returns an error if the initial registration request fails.
     pub async fn start_lifecycle(self, interval: Duration) -> anyhow::Result<DaimonHandle> {
         let resp = self.register().await?;
         let agent_id = resp.agent_id.clone();

@@ -1,4 +1,18 @@
 //! Error types for the Phylax engine.
+//!
+//! # Error Strategy
+//!
+//! Phylax uses three error approaches depending on context:
+//!
+//! | Module | Error Type | Rationale |
+//! |--------|-----------|-----------|
+//! | `yara` | `YaraError` (custom enum) | Domain-specific parse/validation errors |
+//! | `quarantine` | `std::io::Result` | Pure filesystem operations |
+//! | `hoosh`, `daimon` | `anyhow::Result` | HTTP clients with diverse error sources |
+//! | `watch` | `anyhow::Result` | Wraps `notify` crate errors |
+//! | `pe`, `elf` | `Option` (returns `None`) | Parsing untrusted data — absence, not error |
+//!
+//! `PhylaxError` below is the top-level error enum for core engine operations.
 
 /// Errors produced by the phylax engine.
 #[derive(Debug, thiserror::Error)]

@@ -6,6 +6,11 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// Maximum number of import directory entries to parse.
+const MAX_IMPORTS: usize = 256;
+/// Maximum number of exported function names to parse.
+const MAX_EXPORTS: usize = 1024;
+
 /// Parsed PE file information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeInfo {
@@ -233,7 +238,7 @@ fn parse_pe_imports(data: &[u8], opt_offset: usize, is_64bit: bool) -> Vec<Strin
 
     // Each import directory entry is 20 bytes, terminated by an all-zero entry
     let mut idx = file_offset;
-    for _ in 0..256 {
+    for _ in 0..MAX_IMPORTS {
         // safety limit
         if data.len() < idx + 20 {
             break;
@@ -294,7 +299,7 @@ fn parse_pe_exports(data: &[u8], opt_offset: usize, is_64bit: bool) -> Vec<Strin
         None => return exports,
     };
 
-    for i in 0..num_names.min(1024) {
+    for i in 0..num_names.min(MAX_EXPORTS) {
         // safety limit
         let name_rva = match read_u32_le(data, name_table_offset + i * 4) {
             Some(rva) => rva,

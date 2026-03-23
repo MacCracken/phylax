@@ -1,11 +1,6 @@
 # Roadmap
 
-## v1.0.0 — Stability & Polish
-
-### API
-- [ ] Unified error strategy documentation
-- [ ] `# Errors` doc sections on public Result-returning functions
-- [ ] Document safety limit constants (256/1024/4096 iteration caps)
+All planned features and polish items for v1.0.0 have been implemented.
 
 ## Non-goals
 
