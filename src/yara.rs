@@ -5,7 +5,7 @@
 
 use crate::core::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
 use regex::bytes::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::{debug, instrument, trace, warn};
 
 // ---------------------------------------------------------------------------
@@ -13,17 +13,24 @@ use tracing::{debug, instrument, trace, warn};
 // ---------------------------------------------------------------------------
 
 /// A pattern to match within binary data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Regex patterns are compiled once at construction time and cached.
+#[derive(Debug, Clone)]
 pub enum YaraPattern {
     /// Exact byte sequence.
     Literal(Vec<u8>),
     /// Hex-encoded byte sequence (stored as raw bytes).
     Hex(Vec<u8>),
-    /// Regular expression (applied to raw bytes).
-    Regex(String),
+    /// Compiled regular expression (applied to raw bytes).
+    Regex(Regex),
 }
 
 impl YaraPattern {
+    /// Create a regex pattern, compiling it upfront.
+    pub fn regex(pattern: &str) -> std::result::Result<Self, regex::Error> {
+        Regex::new(pattern).map(Self::Regex)
+    }
+
     /// Check whether this pattern matches anywhere in `data`.
     pub fn matches(&self, data: &[u8]) -> bool {
         match self {
@@ -33,13 +40,7 @@ impl YaraPattern {
                 }
                 data.windows(needle.len()).any(|w| w == needle.as_slice())
             }
-            Self::Regex(pat) => {
-                if let Ok(re) = Regex::new(pat) {
-                    re.is_match(data)
-                } else {
-                    false
-                }
-            }
+            Self::Regex(re) => re.is_match(data),
         }
     }
 }
@@ -49,7 +50,8 @@ impl YaraPattern {
 // ---------------------------------------------------------------------------
 
 /// How many patterns must match for the rule to fire.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum RuleCondition {
     /// All patterns must match.
     All,
@@ -64,7 +66,7 @@ pub enum RuleCondition {
 // ---------------------------------------------------------------------------
 
 /// A single YARA-style rule.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct YaraRule {
     pub name: String,
     pub description: String,
@@ -80,6 +82,7 @@ pub struct YaraRule {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum YaraError {
     #[error("rule parse error: {0}")]
     Parse(String),
@@ -214,10 +217,8 @@ impl YaraEngine {
                 let pat = match p.r#type.as_str() {
                     "literal" => YaraPattern::Literal(p.value.as_bytes().to_vec()),
                     "hex" => YaraPattern::Hex(parse_hex(&p.value)?),
-                    "regex" => {
-                        Regex::new(&p.value).map_err(|e| YaraError::InvalidRegex(e.to_string()))?;
-                        YaraPattern::Regex(p.value)
-                    }
+                    "regex" => YaraPattern::regex(&p.value)
+                        .map_err(|e| YaraError::InvalidRegex(e.to_string()))?,
                     _ => {
                         return Err(YaraError::Parse(format!(
                             "unknown pattern type: {}",
@@ -324,7 +325,7 @@ mod tests {
 
     #[test]
     fn regex_pattern_match() {
-        let p = YaraPattern::Regex(r"(?-u)\x7fELF".to_string());
+        let p = YaraPattern::regex(r"(?-u)\x7fELF").unwrap();
         assert!(p.matches(b"\x7fELF\x02"));
         assert!(!p.matches(b"not elf"));
     }
@@ -336,9 +337,8 @@ mod tests {
     }
 
     #[test]
-    fn invalid_regex_no_match() {
-        let p = YaraPattern::Regex("[invalid".to_string());
-        assert!(!p.matches(b"data"));
+    fn invalid_regex_rejected() {
+        assert!(YaraPattern::regex("[invalid").is_err());
     }
 
     #[test]
@@ -538,6 +538,110 @@ condition = "any"
         });
         assert_eq!(engine.rules().len(), 1);
         assert_eq!(engine.rules()[0].name, "r1");
+    }
+
+    #[test]
+    fn regex_pattern_compiled_once() {
+        // Regex should work without recompilation on each call
+        let p = YaraPattern::regex(r"(?-u)\x7fELF").unwrap();
+        // Multiple calls should all work (cached regex)
+        assert!(p.matches(b"\x7fELF"));
+        assert!(p.matches(b"\x7fELF"));
+        assert!(!p.matches(b"nope"));
+    }
+
+    #[test]
+    fn load_rules_toml_invalid_regex() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "bad_regex"
+severity = "low"
+condition = "any"
+[[rule.patterns]]
+id = "$bad"
+type = "regex"
+value = "[invalid"
+"#;
+        let err = engine.load_rules_toml(toml);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn load_rules_toml_unknown_pattern_type() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "bad_type"
+severity = "low"
+condition = "any"
+[[rule.patterns]]
+id = "$x"
+type = "binary"
+value = "data"
+"#;
+        let err = engine.load_rules_toml(toml);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn load_rules_toml_unknown_condition() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "bad_cond"
+severity = "low"
+condition = "maybe"
+"#;
+        let err = engine.load_rules_toml(toml);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn load_rules_toml_at_least_condition() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "at_least"
+severity = "low"
+condition = "at_least_2"
+[[rule.patterns]]
+id = "$a"
+type = "literal"
+value = "AA"
+[[rule.patterns]]
+id = "$b"
+type = "literal"
+value = "BB"
+[[rule.patterns]]
+id = "$c"
+type = "literal"
+value = "CC"
+"#;
+        engine.load_rules_toml(toml).unwrap();
+        assert!(engine.scan(b"only AA").is_empty());
+        assert_eq!(engine.scan(b"AA and BB").len(), 1);
+    }
+
+    #[test]
+    fn empty_rules_file() {
+        let mut engine = YaraEngine::new();
+        let count = engine.load_rules_toml("").unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn scan_empty_data() {
+        let mut engine = YaraEngine::new();
+        engine.add_rule(YaraRule {
+            name: "test".into(),
+            description: String::new(),
+            severity: FindingSeverity::Low,
+            tags: vec![],
+            patterns: vec![("$a".into(), YaraPattern::Literal(b"X".to_vec()))],
+            condition: RuleCondition::Any,
+        });
+        assert!(engine.scan(b"").is_empty());
     }
 
     #[test]

@@ -58,6 +58,7 @@ pub fn is_suspicious_entropy(entropy: f64) -> bool {
 
 /// Known file types identified by magic bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FileType {
     Elf,
     Pe,
@@ -197,9 +198,10 @@ pub fn file_sha256(data: &[u8]) -> String {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
     let mut s = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
-        s.push_str(&format!("{b:02x}"));
+        let _ = write!(s, "{b:02x}");
     }
     s
 }
@@ -452,6 +454,42 @@ mod tests {
         let data = vec![0u8; 100];
         let findings = analyze_findings(&data, ScanTarget::Memory);
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn entropy_single_byte() {
+        assert_eq!(shannon_entropy(&[42]), 0.0);
+    }
+
+    #[test]
+    fn sha256_deterministic() {
+        let data = b"reproducible";
+        assert_eq!(file_sha256(data), file_sha256(data));
+    }
+
+    #[test]
+    fn detect_polyglot_empty() {
+        assert!(detect_polyglot(&[]).is_empty());
+    }
+
+    #[test]
+    fn detect_polyglot_single_type() {
+        let types = detect_polyglot(b"\x7fELF\x00\x00\x00\x00\x00\x00");
+        assert_eq!(types.len(), 1);
+        assert_eq!(types[0], FileType::Elf);
+    }
+
+    #[test]
+    fn analyze_findings_high_entropy() {
+        // All 256 byte values = max entropy > 7.5
+        let mut data = Vec::with_capacity(256 * 4);
+        for _ in 0..4 {
+            for b in 0..=255u8 {
+                data.push(b);
+            }
+        }
+        let findings = analyze_findings(&data, ScanTarget::Memory);
+        assert!(findings.iter().any(|f| f.rule_name == "high_entropy"));
     }
 
     #[test]

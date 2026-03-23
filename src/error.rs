@@ -2,6 +2,7 @@
 
 /// Errors produced by the phylax engine.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PhylaxError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

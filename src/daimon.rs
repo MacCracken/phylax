@@ -52,6 +52,10 @@ impl DaimonClient {
 
     /// Send a heartbeat to daimon.
     pub async fn heartbeat(&self, agent_id: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !agent_id.is_empty() && !agent_id.contains('/') && !agent_id.contains('\\'),
+            "invalid agent_id: must be non-empty and contain no path separators"
+        );
         let url = format!("{}/v1/agents/{}/heartbeat", self.base_url, agent_id);
         self.client.post(&url).send().await?.error_for_status()?;
         Ok(())
@@ -77,5 +81,20 @@ mod tests {
     fn daimon_client_custom_url() {
         let client = DaimonClient::new("http://10.0.0.1:9090");
         assert_eq!(client.base_url(), "http://10.0.0.1:9090");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_rejects_empty_agent_id() {
+        let client = DaimonClient::default_local();
+        let err = client.heartbeat("").await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_rejects_path_traversal() {
+        let client = DaimonClient::default_local();
+        assert!(client.heartbeat("../etc/passwd").await.is_err());
+        assert!(client.heartbeat("foo/bar").await.is_err());
+        assert!(client.heartbeat("foo\\bar").await.is_err());
     }
 }

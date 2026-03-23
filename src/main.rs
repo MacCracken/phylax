@@ -6,10 +6,7 @@ use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use phylax::analyze::{
-    analyze, analyze_findings, detect_file_type, entropy_profile, is_suspicious_entropy,
-    shannon_entropy,
-};
+use phylax::analyze::{analyze, analyze_findings, entropy_profile, is_suspicious_entropy};
 use phylax::core::{ScanConfig, ScanTarget, VERSION};
 use phylax::yara::YaraEngine;
 
@@ -115,16 +112,12 @@ fn cmd_scan(path: &PathBuf, rules_path: Option<&std::path::Path>, block_size: us
     println!("Size: {} bytes", data.len());
     println!();
 
-    // File type detection
-    let file_type = detect_file_type(&data);
-    println!("[Magic Bytes] File type: {file_type}");
-
-    // Binary analysis
+    // Binary analysis (computes file type, entropy, SHA-256 in one pass)
     let analysis = analyze(&data);
+    println!("[Magic Bytes] File type: {}", analysis.file_type);
     println!("[SHA-256]     {}", analysis.sha256);
 
-    // Entropy analysis
-    let entropy = shannon_entropy(&data);
+    let entropy = analysis.entropy;
     let suspicious = is_suspicious_entropy(entropy);
     println!(
         "[Entropy]     {entropy:.4} bits/byte {}",
@@ -141,7 +134,7 @@ fn cmd_scan(path: &PathBuf, rules_path: Option<&std::path::Path>, block_size: us
         let max_block = profile
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .max_by(|a, b| a.1.total_cmp(b.1))
             .unwrap();
         println!(
             "[Profile]     {} blocks, max entropy {:.4} at block {}",
