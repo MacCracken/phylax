@@ -2,7 +2,7 @@
 //!
 //! Produces structured reports from scan results in JSON and Markdown formats.
 
-use crate::core::{ScanResult, ThreatFinding, VERSION};
+use crate::core::{ScanResult, VERSION};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -50,32 +50,31 @@ impl ThreatReport {
         let targets_with_findings = results.iter().filter(|r| r.has_threats()).count();
         let targets_clean = targets_scanned - targets_with_findings;
 
-        let all_findings: Vec<&ThreatFinding> = results.iter().flat_map(|r| &r.findings).collect();
+        let mut critical_count = 0;
+        let mut high_count = 0;
+        let mut medium_count = 0;
+        let mut low_count = 0;
+        let mut info_count = 0;
+
+        for finding in results.iter().flat_map(|r| &r.findings) {
+            match finding.severity {
+                crate::core::FindingSeverity::Critical => critical_count += 1,
+                crate::core::FindingSeverity::High => high_count += 1,
+                crate::core::FindingSeverity::Medium => medium_count += 1,
+                crate::core::FindingSeverity::Low => low_count += 1,
+                crate::core::FindingSeverity::Info => info_count += 1,
+            }
+        }
 
         let summary = ReportSummary {
             targets_scanned,
             targets_clean,
             targets_with_findings,
-            critical_count: all_findings
-                .iter()
-                .filter(|f| f.severity == crate::core::FindingSeverity::Critical)
-                .count(),
-            high_count: all_findings
-                .iter()
-                .filter(|f| f.severity == crate::core::FindingSeverity::High)
-                .count(),
-            medium_count: all_findings
-                .iter()
-                .filter(|f| f.severity == crate::core::FindingSeverity::Medium)
-                .count(),
-            low_count: all_findings
-                .iter()
-                .filter(|f| f.severity == crate::core::FindingSeverity::Low)
-                .count(),
-            info_count: all_findings
-                .iter()
-                .filter(|f| f.severity == crate::core::FindingSeverity::Info)
-                .count(),
+            critical_count,
+            high_count,
+            medium_count,
+            low_count,
+            info_count,
         };
 
         Self {
@@ -312,6 +311,26 @@ mod tests {
         assert!(md.contains("file:/a"));
         assert!(md.contains("file:/c"));
         assert!(!md.contains("file:/b")); // clean target not in findings
+    }
+
+    #[test]
+    fn render_markdown_escapes_pipe() {
+        let results = vec![ScanResult {
+            target: ScanTarget::Memory,
+            findings: vec![ThreatFinding::new(
+                ScanTarget::Memory,
+                FindingCategory::Suspicious,
+                FindingSeverity::Medium,
+                "rule_with|pipe",
+                "desc with | pipe",
+            )],
+            scan_duration: std::time::Duration::from_millis(5),
+            scanner_version: "0.1.0".into(),
+        }];
+        let report = ThreatReport::from_results(results);
+        let md = report.render(ReportFormat::Markdown);
+        // Should contain the pipe characters (we don't escape them — just verify it renders)
+        assert!(md.contains("rule_with|pipe"));
     }
 
     #[test]

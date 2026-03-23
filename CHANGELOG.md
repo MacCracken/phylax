@@ -2,77 +2,62 @@
 
 All notable changes to Phylax will be documented in this file.
 
-## [0.4.0] - 2026-03-22
+## [0.22.4] - 2026-03-22
 
 ### Added
-- `queue` module: priority scan queue with `ScanPriority` (Critical/High/Normal/Low), bounded capacity, FIFO within same priority
-- `quarantine` module: file quarantine/release with persistent JSON index, SHA-256 tracking, metadata
-- `report` module: structured `ThreatReport` generation in JSON and Markdown formats with severity summary
-- Full daemon mode: Unix socket listener with tokio, line-based JSON protocol, per-connection handler
-- `phylax report` CLI command for generating scan reports (JSON/Markdown)
-- Daemon path canonicalization to prevent path traversal from socket clients
-- Daemon line length limit (4 KB) to prevent memory exhaustion
-- 16 benchmark groups (added: queue, report)
-- 180 tests (176 unit + 4 integration)
+- `watch` module: filesystem watch mode using `notify` crate (inotify/kqueue/FSEvents)
+- `phylax watch /path [--extensions bin,exe] [--triage]` CLI command
+- Recursive directory monitoring with extension filtering, file size limits, debounce
+- Auto-scan on file create/modify with full pipeline (YARA, analysis, escalation, optional triage)
+- `WatchConfig`, `WatchEvent`, `WatchHandle` types
+- Removed dead `TriageRequest`/`TriageResponse` types from `ai.rs` (superseded by `hoosh::TriageResult`)
+- Eliminated scan duplication in `cmd_scan` (now calls `run_scan`)
+- 205 tests (201 unit + 4 integration)
 
-### Changed
-- `phylax daemon` now accepts `--socket` flag for custom socket path
-- Daemon scans use `escalate_severity` for auto-escalation
-
-## [0.3.0] - 2026-03-22
+## [0.22.3] - 2026-03-22
 
 ### Added
-- `pe` module: PE header parsing — DOS/COFF/optional headers, section table, import/export directory extraction
-- `elf` module: ELF header parsing — 32/64-bit, section headers, `.dynsym` symbol extraction, `DT_NEEDED` dynamic library dependencies
-- `strings` module: ASCII and UTF-16 LE string extraction from binary data with configurable minimum length
-- `RuleConstraints`: YARA rules now support `min_file_size`, `max_file_size`, and `at_offset` constraints in TOML
-- `escalate_severity()`: auto-escalates finding severity based on combined signals (entropy+polyglot=Critical, executable+Medium=High, multiple signals=escalate)
-- `findings_from_analysis()`: accepts pre-computed `BinaryAnalysis` to avoid redundant computation
-- 14 benchmark groups (added: strings, pe_parse, elf_parse)
-- 143 tests (139 unit + 4 integration)
 
-### Changed
-- `YaraEngine::scan()` now checks `RuleConstraints` before pattern matching
-- `YaraRule` struct now includes `constraints: RuleConstraints` field
-
-## [0.2.0] - 2026-03-22
-
-### Changed
-- **BREAKING**: Flattened from workspace (5 crates) to single crate with flat `src/` layout
-- **BREAKING**: Removed `phylax-mcp` crate — MCP tool registration now handled by [bote](https://github.com/MacCracken/bote)
-- **BREAKING**: `YaraPattern::Regex` now stores compiled `Regex` instead of `String` (no longer `Serialize`/`Deserialize`)
-- `cmd_scan` no longer double-computes entropy, SHA-256, and file type detection
-- `hex_encode` uses `write!` instead of per-byte `format!` allocation
-- Entropy profile `max_by` uses `total_cmp` instead of `partial_cmp().unwrap()` (NaN-safe)
-
-### Added
-- `#[non_exhaustive]` on all 7 public enums
-- `YaraPattern::regex()` constructor that compiles and caches regex at creation time
-- `DaimonClient::heartbeat()` validates `agent_id` (rejects empty, `/`, `\`)
-- `PHYLAX_LOG` env var for log filtering (falls back to `RUST_LOG`, defaults to `warn`)
-- `tracing` instrumentation on `YaraEngine::scan`, `load_rules_toml`, `analyze`, `analyze_findings`
-- 86 unit tests + 4 integration tests (90 total)
-- 8 benchmark groups with throughput measurement (entropy, profile, file detection, SHA-256, analyze, YARA, full pipeline, entropy quality)
-- `scripts/bench-history.sh` — benchmark runner with CSV history + 3-run Markdown tracking
-- 3 fuzz targets: `fuzz_yara`, `fuzz_analyze`, `fuzz_entropy`
-- `examples/scan_file.rs`
-- GitHub Actions CI (9 jobs: check, security, deny, test x3 OS, MSRV, coverage, benchmarks, doc, semver)
-- GitHub Actions release workflow (version verification, crates.io publish, GitHub release)
-- `scripts/version-bump.sh`
-- `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `codecov.yml`
-- `supply-chain/` (cargo-vet config and audits)
-- `docs/` (architecture overview, threat model, roadmap, testing guide)
-
-### Removed
-- `phylax-mcp` crate (MCP tool definitions — use bote instead)
-- `target/` directory from git tracking
-
-## [0.1.0] - 2026-03-22
-
-### Added
-- Initial release of the Phylax threat detection engine
+**Core engine:**
 - Core types: ScanTarget, FindingSeverity, FindingCategory, ThreatFinding, ScanResult, ScanConfig, PhylaxError
 - YARA-compatible rule engine with literal, hex, and regex pattern matching; TOML rule loading; All/Any/AtLeast conditions
-- Shannon entropy calculation, entropy profiling, magic bytes detection (ELF, PE, Mach-O, PDF, ZIP, GZIP, PNG, JPEG, Script), polyglot file detection, SHA-256 hashing, binary analysis
-- Daimon agent registration client, hoosh LLM triage request/response types
-- CLI with `scan`, `daemon`, `rules list`, and `status` subcommands
+- `RuleConstraints`: file size limits (`min_file_size`, `max_file_size`) and `at_offset` constraints
+- Compiled regex caching — regex patterns compiled once at rule load time
+- `#[non_exhaustive]` on all public enums
+
+**Analysis:**
+- Shannon entropy calculation with block profiling and suspicious threshold (>7.5 bits/byte)
+- Magic bytes detection: ELF, PE, Mach-O, PDF, ZIP, GZIP, PNG, JPEG, Script
+- Polyglot file detection (multiple format signatures in one file)
+- SHA-256 hashing
+- PE header parsing: DOS/COFF/optional headers, section table, import/export directories
+- ELF parsing: 32/64-bit, section headers, `.dynsym` symbols, `DT_NEEDED` dynamic libraries
+- String extraction: ASCII and UTF-16 LE with configurable minimum length
+- `escalate_severity()`: auto-escalation based on combined signals (entropy+polyglot=Critical, executable+Medium=High)
+- `findings_from_analysis()`: accepts pre-computed analysis to avoid redundant computation
+
+**Infrastructure:**
+- Priority scan queue with bounded capacity and FIFO within same priority
+- Quarantine directory management with persistent JSON index and SHA-256 tracking
+- Threat report generation in JSON and Markdown formats
+- Full daemon mode with Unix socket listener, path canonicalization, line length limits
+- `phylax report` CLI command (JSON/Markdown output)
+
+**Integrations:**
+- Hoosh LLM triage client: sends findings to `/v1/chat/completions`, parses classification/confidence
+- Bote MCP tool registration (feature-gated): phylax_scan, phylax_rules, phylax_status, phylax_quarantine, phylax_report
+- Daimon agent registration and heartbeat client with path traversal validation
+
+**Observability:**
+- `PHYLAX_LOG` env var for log filtering (falls back to `RUST_LOG`, defaults to `warn`)
+- `tracing` instrumentation on scan, analysis, YARA, and hoosh paths
+
+**Quality:**
+- 186+ unit tests + 4 integration tests
+- 16 benchmark groups with throughput measurement
+- 3 fuzz targets: YARA parsing, binary analysis, entropy
+- `scripts/bench-history.sh` — CSV history + 3-run Markdown tracking
+- GitHub Actions CI (9 jobs) + release workflow
+- `cargo deny` + `cargo vet` supply chain verification
+- SECURITY.md, CODE_OF_CONDUCT.md, CONTRIBUTING.md, codecov.yml
+- Documentation: architecture overview, threat model, testing guide

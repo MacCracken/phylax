@@ -33,22 +33,7 @@ impl Default for AgentRegistration {
     }
 }
 
-/// LLM triage request sent to hoosh for classification assistance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TriageRequest {
-    pub finding_id: String,
-    pub description: String,
-    pub context: String,
-}
-
-/// LLM triage response from hoosh.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TriageResponse {
-    pub finding_id: String,
-    pub classification: String,
-    pub confidence: f64,
-    pub explanation: String,
-}
+// LLM triage is handled by the `hoosh` module (see `hoosh::HooshClient`).
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -77,32 +62,5 @@ mod tests {
         let parsed: AgentRegistration = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, reg.name);
         assert_eq!(parsed.capabilities, reg.capabilities);
-    }
-
-    #[test]
-    fn triage_response_serialization_roundtrip() {
-        let resp = TriageResponse {
-            finding_id: "f-1".into(),
-            classification: "false_positive".into(),
-            confidence: 0.95,
-            explanation: "benign packed binary".into(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: TriageResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.finding_id, "f-1");
-        assert_eq!(parsed.classification, "false_positive");
-        assert!((parsed.confidence - 0.95).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn triage_request_serialization() {
-        let req = TriageRequest {
-            finding_id: "abc-123".into(),
-            description: "suspicious entropy".into(),
-            context: "file: /tmp/test.bin".into(),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let parsed: TriageRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.finding_id, "abc-123");
     }
 }

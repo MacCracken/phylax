@@ -1,6 +1,6 @@
 [package]
 name = "phylax"
-version = "0.1.0"
+version = "0.22.4"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-3.0"
@@ -10,6 +10,10 @@ readme = "README.md"
 keywords = ["security", "threat-detection", "yara", "entropy", "binary-analysis"]
 categories = ["command-line-utilities"]
 exclude = [".claude/", ".github/", "target/"]
+
+[features]
+default = []
+bote = ["dep:bote"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -26,6 +30,8 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
 sha2 = "0.10"
+notify = { version = "8", features = ["serde"] }
+bote = { version = "0.22", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

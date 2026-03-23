@@ -164,8 +164,15 @@ impl QuarantineManager {
     fn save_index(&self) {
         let index_path = self.dir.join("index.json");
         let entries: Vec<_> = self.entries.values().collect();
-        if let Ok(json) = serde_json::to_string_pretty(&entries) {
-            let _ = fs::write(&index_path, json);
+        match serde_json::to_string_pretty(&entries) {
+            Ok(json) => {
+                if let Err(e) = fs::write(&index_path, json) {
+                    warn!(error = %e, path = %index_path.display(), "failed to write quarantine index");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to serialize quarantine index");
+            }
         }
     }
 }
@@ -269,6 +276,45 @@ mod tests {
         assert_eq!(mgr2.count(), 1);
         let entry = mgr2.get(&id).unwrap();
         assert_eq!(entry.reason, "test persistence");
+    }
+
+    #[test]
+    fn quarantine_sha256_correct() {
+        let (tmpdir, mut mgr) = temp_quarantine();
+        let content = b"known content for hashing";
+        let file = create_test_file(tmpdir.path(), "hash.bin", content);
+
+        let expected_hash = crate::analyze::file_sha256(content);
+        let id = mgr.quarantine(&file, "hash check").unwrap();
+        let entry = mgr.get(&id).unwrap();
+        assert_eq!(entry.sha256, expected_hash);
+    }
+
+    #[test]
+    fn quarantine_nonexistent_file() {
+        let (_tmpdir, mut mgr) = temp_quarantine();
+        let result = mgr.quarantine(Path::new("/nonexistent/file.bin"), "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn quarantine_multiple_files() {
+        let (tmpdir, mut mgr) = temp_quarantine();
+        let f1 = create_test_file(tmpdir.path(), "a.bin", b"aaa");
+        let f2 = create_test_file(tmpdir.path(), "b.bin", b"bbb");
+        let f3 = create_test_file(tmpdir.path(), "c.bin", b"ccc");
+
+        let id1 = mgr.quarantine(&f1, "r1").unwrap();
+        let id2 = mgr.quarantine(&f2, "r2").unwrap();
+        let id3 = mgr.quarantine(&f3, "r3").unwrap();
+        assert_eq!(mgr.count(), 3);
+
+        // Release middle one
+        mgr.release(&id2).unwrap();
+        assert_eq!(mgr.count(), 2);
+        assert!(mgr.get(&id1).is_some());
+        assert!(mgr.get(&id2).is_none());
+        assert!(mgr.get(&id3).is_some());
     }
 
     #[test]

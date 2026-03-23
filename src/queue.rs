@@ -6,6 +6,7 @@
 use crate::core::{FindingSeverity, ScanTarget};
 use std::collections::BinaryHeap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Priority level for a scan request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,7 +94,7 @@ impl Ord for ScanRequest {
 pub struct ScanQueue {
     heap: Mutex<BinaryHeap<ScanRequest>>,
     capacity: usize,
-    next_id: Mutex<u64>,
+    next_id: AtomicU64,
 }
 
 impl ScanQueue {
@@ -102,7 +103,7 @@ impl ScanQueue {
         Self {
             heap: Mutex::new(BinaryHeap::with_capacity(capacity)),
             capacity,
-            next_id: Mutex::new(0),
+            next_id: AtomicU64::new(0),
         }
     }
 
@@ -112,9 +113,7 @@ impl ScanQueue {
         if heap.len() >= self.capacity {
             return None;
         }
-        let mut next_id = self.next_id.lock().unwrap();
-        let id = *next_id;
-        *next_id += 1;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         heap.push(ScanRequest {
             target,
             priority,
@@ -252,6 +251,27 @@ mod tests {
         assert_eq!(q.dequeue().unwrap().priority, ScanPriority::Critical);
         assert_eq!(q.dequeue().unwrap().priority, ScanPriority::Low);
         assert!(q.is_empty());
+    }
+
+    #[test]
+    fn queue_preserves_target() {
+        let q = ScanQueue::new(10);
+        q.enqueue(
+            ScanTarget::File("/tmp/test.bin".into()),
+            ScanPriority::Normal,
+        );
+        let req = q.dequeue().unwrap();
+        assert_eq!(req.target, ScanTarget::File("/tmp/test.bin".into()));
+    }
+
+    #[test]
+    fn queue_ids_monotonic() {
+        let q = ScanQueue::new(10);
+        let id1 = q.enqueue(ScanTarget::Memory, ScanPriority::Normal).unwrap();
+        let id2 = q.enqueue(ScanTarget::Memory, ScanPriority::Normal).unwrap();
+        let id3 = q.enqueue(ScanTarget::Memory, ScanPriority::Normal).unwrap();
+        assert!(id1 < id2);
+        assert!(id2 < id3);
     }
 
     #[test]
