@@ -1,13 +1,5 @@
 # Roadmap
 
-## v0.3.0 — Analysis Depth
-
-- [ ] PE header parsing (sections, imports, exports)
-- [ ] ELF section analysis (symbols, dynamic linking)
-- [ ] String extraction with encoding detection
-- [ ] YARA condition enhancements (file size, offset constraints)
-- [ ] Rule severity auto-escalation based on combined signals
-
 ## v0.4.0 — Daemon & Bote
 
 - [ ] Full daemon mode with Unix socket listener

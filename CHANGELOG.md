@@ -2,6 +2,22 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.3.0] - 2026-03-22
+
+### Added
+- `pe` module: PE header parsing — DOS/COFF/optional headers, section table, import/export directory extraction
+- `elf` module: ELF header parsing — 32/64-bit, section headers, `.dynsym` symbol extraction, `DT_NEEDED` dynamic library dependencies
+- `strings` module: ASCII and UTF-16 LE string extraction from binary data with configurable minimum length
+- `RuleConstraints`: YARA rules now support `min_file_size`, `max_file_size`, and `at_offset` constraints in TOML
+- `escalate_severity()`: auto-escalates finding severity based on combined signals (entropy+polyglot=Critical, executable+Medium=High, multiple signals=escalate)
+- `findings_from_analysis()`: accepts pre-computed `BinaryAnalysis` to avoid redundant computation
+- 14 benchmark groups (added: strings, pe_parse, elf_parse)
+- 143 tests (139 unit + 4 integration)
+
+### Changed
+- `YaraEngine::scan()` now checks `RuleConstraints` before pattern matching
+- `YaraRule` struct now includes `constraints: RuleConstraints` field
+
 ## [0.2.0] - 2026-03-22
 
 ### Changed

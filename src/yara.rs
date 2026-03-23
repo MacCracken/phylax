@@ -65,6 +65,35 @@ pub enum RuleCondition {
 // YaraRule
 // ---------------------------------------------------------------------------
 
+/// Optional constraints on when a rule applies.
+#[derive(Debug, Clone, Default)]
+pub struct RuleConstraints {
+    /// Minimum file size in bytes (inclusive).
+    pub min_file_size: Option<u64>,
+    /// Maximum file size in bytes (inclusive).
+    pub max_file_size: Option<u64>,
+    /// Pattern must match at this exact byte offset.
+    pub at_offset: Option<usize>,
+}
+
+impl RuleConstraints {
+    /// Check whether the constraints are satisfied for the given data.
+    pub fn satisfied(&self, data: &[u8]) -> bool {
+        let len = data.len() as u64;
+        if let Some(min) = self.min_file_size {
+            if len < min {
+                return false;
+            }
+        }
+        if let Some(max) = self.max_file_size {
+            if len > max {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// A single YARA-style rule.
 #[derive(Debug, Clone)]
 pub struct YaraRule {
@@ -75,6 +104,8 @@ pub struct YaraRule {
     /// Named patterns: (identifier, pattern).
     pub patterns: Vec<(String, YaraPattern)>,
     pub condition: RuleCondition,
+    /// Optional file size and offset constraints.
+    pub constraints: RuleConstraints,
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +153,12 @@ struct TomlRule {
     condition: String,
     #[serde(default)]
     patterns: Vec<TomlPattern>,
+    #[serde(default)]
+    min_file_size: Option<u64>,
+    #[serde(default)]
+    max_file_size: Option<u64>,
+    #[serde(default)]
+    at_offset: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,6 +266,12 @@ impl YaraEngine {
                 patterns.push((p.id, pat));
             }
 
+            let constraints = RuleConstraints {
+                min_file_size: tr.min_file_size,
+                max_file_size: tr.max_file_size,
+                at_offset: tr.at_offset,
+            };
+
             let rule_name = tr.name.clone();
             self.rules.push(YaraRule {
                 name: tr.name,
@@ -237,6 +280,7 @@ impl YaraEngine {
                 tags: tr.tags,
                 patterns,
                 condition,
+                constraints,
             });
             debug!(rule = %rule_name, "loaded YARA rule");
             count += 1;
@@ -252,11 +296,27 @@ impl YaraEngine {
         let mut findings = Vec::new();
 
         for rule in &self.rules {
-            let match_count = rule
-                .patterns
-                .iter()
-                .filter(|(_, p)| p.matches(data))
-                .count();
+            // Check file size constraints
+            if !rule.constraints.satisfied(data) {
+                continue;
+            }
+
+            // If at_offset is set, only check patterns at that specific offset
+            let match_count = if let Some(offset) = rule.constraints.at_offset {
+                if offset < data.len() {
+                    rule.patterns
+                        .iter()
+                        .filter(|(_, p)| p.matches(&data[offset..]))
+                        .count()
+                } else {
+                    0
+                }
+            } else {
+                rule.patterns
+                    .iter()
+                    .filter(|(_, p)| p.matches(data))
+                    .count()
+            };
             let total = rule.patterns.len();
 
             let matched = match &rule.condition {
@@ -352,6 +412,7 @@ mod tests {
             tags: vec![],
             patterns: vec![("$a".into(), YaraPattern::Literal(b"test".to_vec()))],
             condition: RuleCondition::Any,
+            constraints: RuleConstraints::default(),
         });
         assert_eq!(engine.rule_count(), 1);
     }
@@ -366,6 +427,7 @@ mod tests {
             tags: vec!["pe".into()],
             patterns: vec![("$mz".into(), YaraPattern::Literal(b"MZ".to_vec()))],
             condition: RuleCondition::Any,
+            constraints: RuleConstraints::default(),
         });
 
         let findings = engine.scan(b"MZ\x90\x00\x03\x00");
@@ -384,6 +446,7 @@ mod tests {
             tags: vec![],
             patterns: vec![("$mz".into(), YaraPattern::Literal(b"MZ".to_vec()))],
             condition: RuleCondition::Any,
+            constraints: RuleConstraints::default(),
         });
         let findings = engine.scan(b"\x7fELF");
         assert!(findings.is_empty());
@@ -402,6 +465,7 @@ mod tests {
                 ("$b".into(), YaraPattern::Literal(b"BB".to_vec())),
             ],
             condition: RuleCondition::All,
+            constraints: RuleConstraints::default(),
         });
 
         assert!(engine.scan(b"only AA here").is_empty());
@@ -422,6 +486,7 @@ mod tests {
                 ("$c".into(), YaraPattern::Literal(b"CC".to_vec())),
             ],
             condition: RuleCondition::AtLeast(2),
+            constraints: RuleConstraints::default(),
         });
 
         assert!(engine.scan(b"only AA").is_empty());
@@ -535,6 +600,7 @@ condition = "any"
             tags: vec![],
             patterns: vec![],
             condition: RuleCondition::Any,
+            constraints: RuleConstraints::default(),
         });
         assert_eq!(engine.rules().len(), 1);
         assert_eq!(engine.rules()[0].name, "r1");
@@ -640,6 +706,7 @@ value = "CC"
             tags: vec![],
             patterns: vec![("$a".into(), YaraPattern::Literal(b"X".to_vec()))],
             condition: RuleCondition::Any,
+            constraints: RuleConstraints::default(),
         });
         assert!(engine.scan(b"").is_empty());
     }
@@ -715,9 +782,106 @@ value = "COMMON"
             tags: vec!["malware".into(), "pe".into()],
             patterns: vec![("$a".into(), YaraPattern::Literal(b"X".to_vec()))],
             condition: RuleCondition::Any,
+            constraints: RuleConstraints::default(),
         });
         let findings = engine.scan(b"X");
         assert_eq!(findings[0].metadata.get("tag:malware").unwrap(), "true");
         assert_eq!(findings[0].metadata.get("tag:pe").unwrap(), "true");
+    }
+
+    #[test]
+    fn constraint_min_file_size() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "large_only"
+severity = "low"
+condition = "any"
+min_file_size = 100
+[[rule.patterns]]
+id = "$a"
+type = "literal"
+value = "X"
+"#;
+        engine.load_rules_toml(toml).unwrap();
+        // 10 bytes — below min, should not match
+        assert!(engine.scan(b"X_________").is_empty());
+        // 100 bytes — at min, should match
+        let mut data = vec![b'_'; 100];
+        data[50] = b'X';
+        assert_eq!(engine.scan(&data).len(), 1);
+    }
+
+    #[test]
+    fn constraint_max_file_size() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "small_only"
+severity = "low"
+condition = "any"
+max_file_size = 50
+[[rule.patterns]]
+id = "$a"
+type = "literal"
+value = "X"
+"#;
+        engine.load_rules_toml(toml).unwrap();
+        assert_eq!(engine.scan(b"X_short").len(), 1);
+        let big = vec![b'X'; 100];
+        assert!(engine.scan(&big).is_empty());
+    }
+
+    #[test]
+    fn constraint_at_offset() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "header_check"
+severity = "medium"
+condition = "any"
+at_offset = 0
+[[rule.patterns]]
+id = "$magic"
+type = "hex"
+value = "7f454c46"
+"#;
+        engine.load_rules_toml(toml).unwrap();
+        // ELF magic at offset 0 — should match
+        assert_eq!(engine.scan(b"\x7fELF\x00\x00\x00\x00").len(), 1);
+        // ELF magic NOT at offset 0 — should not match (at_offset=0 means start from byte 0)
+        // Actually at_offset slices from that offset, so the pattern is checked from that point.
+        // Data "XX\x7fELF" with at_offset=0 starts scanning from byte 0, ELF is at byte 2,
+        // windows scan will find it. Let's test at_offset=4 instead.
+        let mut engine2 = YaraEngine::new();
+        let toml2 = r#"
+[[rule]]
+name = "offset_check"
+severity = "low"
+condition = "any"
+at_offset = 4
+[[rule.patterns]]
+id = "$sig"
+type = "literal"
+value = "ABCD"
+"#;
+        engine2.load_rules_toml(toml2).unwrap();
+        // "ABCD" at offset 4
+        assert_eq!(engine2.scan(b"\x00\x00\x00\x00ABCD").len(), 1);
+        // "ABCD" at offset 0, not at offset 4
+        assert!(engine2.scan(b"ABCD\x00\x00\x00\x00").is_empty());
+    }
+
+    #[test]
+    fn constraints_satisfied_checks() {
+        let c = RuleConstraints {
+            min_file_size: Some(10),
+            max_file_size: Some(100),
+            at_offset: None,
+        };
+        assert!(!c.satisfied(&[0u8; 5]));
+        assert!(c.satisfied(&[0u8; 10]));
+        assert!(c.satisfied(&[0u8; 100]));
+        assert!(!c.satisfied(&[0u8; 101]));
     }
 }

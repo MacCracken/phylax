@@ -289,6 +289,63 @@ pub fn analyze_findings(data: &[u8], target: ScanTarget) -> Vec<ThreatFinding> {
     findings_from_analysis(data, &analysis, target)
 }
 
+/// Auto-escalate finding severity based on combined signals.
+///
+/// Rules:
+/// - High entropy + polyglot = escalate to Critical
+/// - Multiple findings with Medium+ severity = escalate highest to High
+/// - Any finding with executable file type = escalate by one level
+pub fn escalate_severity(findings: &mut [ThreatFinding], analysis: &BinaryAnalysis) {
+    if findings.is_empty() {
+        return;
+    }
+
+    let has_high_entropy = findings.iter().any(|f| f.rule_name == "high_entropy");
+    let has_polyglot = findings.iter().any(|f| f.rule_name == "polyglot_file");
+    let is_executable = matches!(
+        analysis.file_type,
+        FileType::Elf | FileType::Pe | FileType::MachO
+    );
+
+    // High entropy + polyglot = critical
+    if has_high_entropy && has_polyglot {
+        for f in findings.iter_mut() {
+            if f.rule_name == "polyglot_file" {
+                f.severity = FindingSeverity::Critical;
+                f.metadata
+                    .insert("escalated".into(), "high_entropy+polyglot".into());
+            }
+        }
+    }
+
+    // Executable file type escalates Medium -> High
+    if is_executable {
+        for f in findings.iter_mut() {
+            if f.severity == FindingSeverity::Medium {
+                f.severity = FindingSeverity::High;
+                f.metadata
+                    .insert("escalated".into(), "executable_file_type".into());
+            }
+        }
+    }
+
+    // Multiple Medium+ findings = escalate highest
+    let medium_plus_count = findings
+        .iter()
+        .filter(|f| f.severity >= FindingSeverity::Medium)
+        .count();
+    if medium_plus_count >= 2 {
+        if let Some(highest) = findings.iter_mut().max_by_key(|f| f.severity) {
+            if highest.severity == FindingSeverity::High {
+                highest.severity = FindingSeverity::Critical;
+                highest
+                    .metadata
+                    .insert("escalated".into(), "multiple_signals".into());
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -534,5 +591,73 @@ mod tests {
         assert_eq!(FileType::Elf.to_string(), "ELF");
         assert_eq!(FileType::Pe.to_string(), "PE");
         assert_eq!(FileType::Unknown.to_string(), "Unknown");
+    }
+
+    #[test]
+    fn escalate_entropy_plus_polyglot_to_critical() {
+        let analysis = BinaryAnalysis {
+            file_type: FileType::Unknown,
+            entropy: 7.9,
+            size: 1024,
+            sha256: "abc".into(),
+        };
+        let mut findings = vec![
+            ThreatFinding::new(
+                ScanTarget::Memory,
+                FindingCategory::Suspicious,
+                FindingSeverity::Medium,
+                "high_entropy",
+                "high entropy",
+            ),
+            ThreatFinding::new(
+                ScanTarget::Memory,
+                FindingCategory::EmbeddedPayload,
+                FindingSeverity::High,
+                "polyglot_file",
+                "polyglot",
+            ),
+        ];
+        escalate_severity(&mut findings, &analysis);
+        let polyglot = findings
+            .iter()
+            .find(|f| f.rule_name == "polyglot_file")
+            .unwrap();
+        assert_eq!(polyglot.severity, FindingSeverity::Critical);
+    }
+
+    #[test]
+    fn escalate_executable_medium_to_high() {
+        let analysis = BinaryAnalysis {
+            file_type: FileType::Elf,
+            entropy: 5.0,
+            size: 1024,
+            sha256: "abc".into(),
+        };
+        let mut findings = vec![ThreatFinding::new(
+            ScanTarget::Memory,
+            FindingCategory::CustomRule,
+            FindingSeverity::Medium,
+            "some_rule",
+            "desc",
+        )];
+        escalate_severity(&mut findings, &analysis);
+        assert_eq!(findings[0].severity, FindingSeverity::High);
+        assert_eq!(
+            findings[0].metadata.get("escalated").unwrap(),
+            "executable_file_type"
+        );
+    }
+
+    #[test]
+    fn escalate_no_change_on_clean() {
+        let analysis = BinaryAnalysis {
+            file_type: FileType::Unknown,
+            entropy: 3.0,
+            size: 100,
+            sha256: "abc".into(),
+        };
+        let mut findings: Vec<ThreatFinding> = vec![];
+        escalate_severity(&mut findings, &analysis);
+        assert!(findings.is_empty());
     }
 }

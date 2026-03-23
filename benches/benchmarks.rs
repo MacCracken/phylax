@@ -416,6 +416,101 @@ fn bench_findings(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// String extraction throughput
+// ---------------------------------------------------------------------------
+
+fn bench_strings(c: &mut Criterion) {
+    let mut group = c.benchmark_group("strings");
+
+    for size in [1024, 65536, 1_048_576] {
+        // Mix of ASCII strings and binary noise
+        let mut data = random_bytes(size);
+        // Embed some ASCII strings
+        for chunk in data.chunks_mut(128) {
+            if chunk.len() >= 20 {
+                chunk[..20].copy_from_slice(b"embedded_string_here");
+            }
+        }
+        group.throughput(Throughput::Bytes(size as u64));
+
+        group.bench_with_input(BenchmarkId::new("ascii", size), &data, |b, data| {
+            b.iter(|| phylax::strings::extract_ascii(black_box(data), 4));
+        });
+
+        group.bench_with_input(BenchmarkId::new("utf16le", size), &data, |b, data| {
+            b.iter(|| phylax::strings::extract_utf16le(black_box(data), 4));
+        });
+
+        group.bench_with_input(BenchmarkId::new("all", size), &data, |b, data| {
+            b.iter(|| phylax::strings::extract_strings(black_box(data), 4));
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// PE/ELF parsing throughput
+// ---------------------------------------------------------------------------
+
+fn bench_pe_parse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pe_parse");
+
+    // Build a minimal PE
+    let mut pe_data = vec![0u8; 512];
+    pe_data[0] = 0x4d;
+    pe_data[1] = 0x5a;
+    pe_data[0x3C] = 0x80;
+    pe_data[0x80] = 0x50;
+    pe_data[0x81] = 0x45;
+    pe_data[0x84] = 0x4c;
+    pe_data[0x85] = 0x01;
+    pe_data[0x86] = 0x02; // 2 sections
+    pe_data[0x94] = 0x70;
+    pe_data[0x98] = 0x0b;
+    pe_data[0x99] = 0x01;
+
+    group.bench_function("minimal_pe", |b| {
+        b.iter(|| phylax::pe::parse_pe(black_box(&pe_data)));
+    });
+
+    // Non-PE data (fast reject)
+    let not_pe = random_bytes(512);
+    group.bench_function("reject_non_pe", |b| {
+        b.iter(|| phylax::pe::parse_pe(black_box(&not_pe)));
+    });
+
+    group.finish();
+}
+
+fn bench_elf_parse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("elf_parse");
+
+    // Build a minimal ELF
+    let mut elf_data = vec![0u8; 128];
+    elf_data[0] = 0x7f;
+    elf_data[1] = 0x45;
+    elf_data[2] = 0x4c;
+    elf_data[3] = 0x46;
+    elf_data[4] = 2; // 64-bit
+    elf_data[5] = 1; // little-endian
+    elf_data[6] = 1;
+    elf_data[16] = 2; // executable
+    elf_data[18] = 62; // x86_64
+
+    group.bench_function("minimal_elf", |b| {
+        b.iter(|| phylax::elf::parse_elf(black_box(&elf_data)));
+    });
+
+    let not_elf = random_bytes(128);
+    group.bench_function("reject_non_elf", |b| {
+        b.iter(|| phylax::elf::parse_elf(black_box(&not_elf)));
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_entropy,
@@ -429,5 +524,8 @@ criterion_group!(
     bench_polyglot,
     bench_pattern_match,
     bench_findings,
+    bench_strings,
+    bench_pe_parse,
+    bench_elf_parse,
 );
 criterion_main!(benches);
