@@ -595,4 +595,67 @@ mod tests {
         assert_eq!(parsed.machine, PeMachine::Amd64);
         assert_eq!(parsed.imports, vec!["kernel32.dll"]);
     }
+
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn parse_pe_never_panics(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+                // parse_pe must never panic on any input
+                let _ = parse_pe(&data);
+            }
+
+            #[test]
+            fn parse_pe_with_mz_header(
+                rest in proptest::collection::vec(any::<u8>(), 62..2048)
+            ) {
+                // Valid MZ header prefix + random data — should not panic
+                let mut data = vec![0x4d, 0x5a];
+                data.extend_from_slice(&rest);
+                let _ = parse_pe(&data);
+            }
+
+            #[test]
+            fn parse_pe_with_pe_sig(
+                pe_offset in 0x40u32..0x200,
+                rest in proptest::collection::vec(any::<u8>(), 512..2048),
+            ) {
+                // MZ + plausible e_lfanew + PE sig at that offset
+                let mut data = rest;
+                if data.len() < (pe_offset as usize) + 100 {
+                    data.resize((pe_offset as usize) + 100, 0);
+                }
+                data[0] = 0x4d;
+                data[1] = 0x5a;
+                data[0x3C] = pe_offset as u8;
+                data[0x3D] = (pe_offset >> 8) as u8;
+                let off = pe_offset as usize;
+                if off + 4 <= data.len() {
+                    data[off] = 0x50;
+                    data[off + 1] = 0x45;
+                    data[off + 2] = 0x00;
+                    data[off + 3] = 0x00;
+                }
+                let _ = parse_pe(&data);
+            }
+
+            #[test]
+            fn read_u16_le_never_panics(
+                data in proptest::collection::vec(any::<u8>(), 0..32),
+                offset in 0usize..64
+            ) {
+                let _ = read_u16_le(&data, offset);
+            }
+
+            #[test]
+            fn read_u32_le_never_panics(
+                data in proptest::collection::vec(any::<u8>(), 0..32),
+                offset in 0usize..64
+            ) {
+                let _ = read_u32_le(&data, offset);
+            }
+        }
+    }
 }

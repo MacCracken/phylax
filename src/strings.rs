@@ -260,4 +260,45 @@ mod tests {
         assert_eq!(parsed.value, "kernel32.dll");
         assert_eq!(parsed.offset, 0x1000);
     }
+
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn extract_ascii_never_panics(
+                data in proptest::collection::vec(any::<u8>(), 0..4096),
+                min_len in 1usize..32,
+            ) {
+                let results = extract_ascii(&data, min_len);
+                for s in &results {
+                    assert!(s.value.len() >= min_len);
+                    assert!(s.offset < data.len());
+                }
+            }
+
+            #[test]
+            fn extract_utf16le_never_panics(
+                data in proptest::collection::vec(any::<u8>(), 0..4096),
+                min_len in 1usize..32,
+            ) {
+                let results = extract_utf16le(&data, min_len);
+                for s in &results {
+                    assert!(s.value.len() >= min_len);
+                    assert!(s.offset < data.len());
+                }
+            }
+
+            #[test]
+            fn extract_strings_sorted(
+                data in proptest::collection::vec(any::<u8>(), 0..2048),
+            ) {
+                let results = extract_strings(&data, 4);
+                for w in results.windows(2) {
+                    assert!(w[0].offset <= w[1].offset);
+                }
+            }
+        }
+    }
 }

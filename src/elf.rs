@@ -629,4 +629,79 @@ mod tests {
         assert_eq!(read_u32(&data, 0, true), Some(0x04030201));
         assert_eq!(read_u64(&data, 0, true), Some(0x0807060504030201));
     }
+
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn parse_elf_never_panics(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
+                let _ = parse_elf(&data);
+            }
+
+            #[test]
+            fn parse_elf_with_magic(
+                rest in proptest::collection::vec(any::<u8>(), 12..2048)
+            ) {
+                let mut data = vec![0x7f, 0x45, 0x4c, 0x46];
+                data.extend_from_slice(&rest);
+                let _ = parse_elf(&data);
+            }
+
+            #[test]
+            fn parse_elf_32bit_variants(
+                endian in 1u8..=2,
+                elf_type in 0u16..=5,
+                machine in prop::sample::select(vec![3u16, 8, 40, 62, 183, 243, 0xFFFF]),
+                rest in proptest::collection::vec(any::<u8>(), 48..1024),
+            ) {
+                let mut data = rest;
+                data.resize(data.len().max(64), 0);
+                data[0] = 0x7f;
+                data[1] = 0x45;
+                data[2] = 0x4c;
+                data[3] = 0x46;
+                data[4] = 1; // 32-bit
+                data[5] = endian;
+                data[6] = 1;
+                data[16] = elf_type as u8;
+                data[17] = (elf_type >> 8) as u8;
+                data[18] = machine as u8;
+                data[19] = (machine >> 8) as u8;
+                let _ = parse_elf(&data);
+            }
+
+            #[test]
+            fn parse_elf_64bit_variants(
+                endian in 1u8..=2,
+                elf_type in 0u16..=5,
+                rest in proptest::collection::vec(any::<u8>(), 60..1024),
+            ) {
+                let mut data = rest;
+                data.resize(data.len().max(128), 0);
+                data[0] = 0x7f;
+                data[1] = 0x45;
+                data[2] = 0x4c;
+                data[3] = 0x46;
+                data[4] = 2; // 64-bit
+                data[5] = endian;
+                data[6] = 1;
+                data[16] = elf_type as u8;
+                data[17] = (elf_type >> 8) as u8;
+                let _ = parse_elf(&data);
+            }
+
+            #[test]
+            fn read_helpers_never_panic(
+                data in proptest::collection::vec(any::<u8>(), 0..32),
+                offset in 0usize..64,
+                le in any::<bool>(),
+            ) {
+                let _ = read_u16(&data, offset, le);
+                let _ = read_u32(&data, offset, le);
+                let _ = read_u64(&data, offset, le);
+            }
+        }
+    }
 }
