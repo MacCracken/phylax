@@ -114,16 +114,19 @@ pub struct ElfSection {
 
 impl ElfSection {
     /// Whether this section is executable (SHF_EXECINSTR).
+    #[must_use]
     pub fn is_executable(&self) -> bool {
         self.flags & 0x4 != 0
     }
 
     /// Whether this section is writable (SHF_WRITE).
+    #[must_use]
     pub fn is_writable(&self) -> bool {
         self.flags & 0x1 != 0
     }
 
     /// Whether this section is allocatable (SHF_ALLOC).
+    #[must_use]
     pub fn is_alloc(&self) -> bool {
         self.flags & 0x2 != 0
     }
@@ -138,6 +141,7 @@ const MAX_SYMBOLS: usize = 4096;
 /// Maximum number of DT_NEEDED entries to extract.
 const MAX_NEEDED: usize = 1024;
 
+#[inline]
 fn read_u16(data: &[u8], offset: usize, little_endian: bool) -> Option<u16> {
     let b = data.get(offset..offset + 2)?;
     Some(if little_endian {
@@ -147,6 +151,7 @@ fn read_u16(data: &[u8], offset: usize, little_endian: bool) -> Option<u16> {
     })
 }
 
+#[inline]
 fn read_u32(data: &[u8], offset: usize, little_endian: bool) -> Option<u32> {
     let b = data.get(offset..offset + 4)?;
     Some(if little_endian {
@@ -156,6 +161,7 @@ fn read_u32(data: &[u8], offset: usize, little_endian: bool) -> Option<u32> {
     })
 }
 
+#[inline]
 fn read_u64(data: &[u8], offset: usize, little_endian: bool) -> Option<u64> {
     let b = data.get(offset..offset + 8)?;
     Some(if little_endian {

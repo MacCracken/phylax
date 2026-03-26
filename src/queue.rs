@@ -23,6 +23,7 @@ pub enum ScanPriority {
 }
 
 impl ScanPriority {
+    #[inline]
     fn rank(self) -> u8 {
         match self {
             Self::Critical => 3,

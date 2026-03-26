@@ -30,6 +30,7 @@ pub struct ExtractedString {
 /// Extract printable ASCII strings from binary data.
 ///
 /// Returns strings of at least `min_length` printable ASCII characters.
+#[must_use]
 pub fn extract_ascii(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     // Estimate: ~1 string per 128 bytes of data
     let mut results = Vec::with_capacity(data.len() / 128 + 1);
@@ -76,6 +77,7 @@ pub fn extract_ascii(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
 ///
 /// Looks for sequences of printable ASCII characters interleaved with null bytes
 /// (the UTF-16 LE encoding of ASCII text).
+#[must_use]
 pub fn extract_utf16le(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     let mut results = Vec::new();
     let mut run_start = 0;
@@ -131,6 +133,7 @@ pub fn extract_utf16le(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
 /// Extract all strings (ASCII + UTF-16 LE) from binary data.
 ///
 /// Results are sorted by offset.
+#[must_use]
 pub fn extract_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
     let mut strings = extract_ascii(data, min_length);
     strings.extend(extract_utf16le(data, min_length));
@@ -139,6 +142,7 @@ pub fn extract_strings(data: &[u8], min_length: usize) -> Vec<ExtractedString> {
 }
 
 /// Whether a byte is printable ASCII (0x20..=0x7E) or common whitespace (tab, newline, CR).
+#[inline]
 fn is_printable_ascii(b: u8) -> bool {
     matches!(b, 0x20..=0x7E | 0x09 | 0x0A | 0x0D)
 }

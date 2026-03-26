@@ -60,6 +60,7 @@ pub enum FindingSeverity {
 }
 
 impl FindingSeverity {
+    #[inline]
     fn rank(self) -> u8 {
         match self {
             Self::Critical => 4,

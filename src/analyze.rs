@@ -13,6 +13,7 @@ use tracing::{debug, instrument, warn};
 /// Compute Shannon entropy of a byte slice (bits per byte, 0.0..=8.0).
 ///
 /// Returns 0.0 for empty data.
+#[inline]
 #[must_use]
 pub fn shannon_entropy(data: &[u8]) -> f64 {
     if data.is_empty() {
@@ -40,6 +41,7 @@ pub fn shannon_entropy(data: &[u8]) -> f64 {
 /// Compute entropy for successive blocks of `block_size` bytes.
 ///
 /// The last block may be smaller than `block_size`.
+#[must_use]
 pub fn entropy_profile(data: &[u8], block_size: usize) -> Vec<f64> {
     if data.is_empty() || block_size == 0 {
         return vec![];
@@ -49,6 +51,7 @@ pub fn entropy_profile(data: &[u8], block_size: usize) -> Vec<f64> {
 }
 
 /// Heuristic: entropy above 7.5 bits/byte is suspicious (likely encrypted or compressed).
+#[inline]
 #[must_use]
 pub fn is_suspicious_entropy(entropy: f64) -> bool {
     entropy > 7.5
@@ -92,6 +95,7 @@ impl fmt::Display for FileType {
 }
 
 /// Detect file type from magic bytes at the start of data.
+#[inline]
 #[must_use]
 pub fn detect_file_type(data: &[u8]) -> FileType {
     if data.len() < 2 {
@@ -156,6 +160,7 @@ pub fn detect_file_type(data: &[u8]) -> FileType {
 /// Detect if data could be a polyglot (multiple valid file types).
 ///
 /// Checks header and also scans for embedded signatures.
+#[must_use]
 pub fn detect_polyglot(data: &[u8]) -> Vec<FileType> {
     let mut types = Vec::new();
 
@@ -179,7 +184,7 @@ pub fn detect_polyglot(data: &[u8]) -> Vec<FileType> {
         // Search after the first few bytes (skip header)
         if data.len() > sig.len() + 4 {
             let search_area = &data[4..];
-            if search_area.windows(sig.len()).any(|w| w == sig) {
+            if memchr::memmem::find(search_area, sig).is_some() {
                 types.push(ft);
             }
         }
@@ -201,6 +206,7 @@ pub fn file_sha256(data: &[u8]) -> String {
     hex_encode(&result)
 }
 
+#[inline]
 fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -238,6 +244,7 @@ pub fn analyze(data: &[u8]) -> BinaryAnalysis {
 /// Produce threat findings from a pre-computed analysis.
 ///
 /// Use this when you already have a `BinaryAnalysis` to avoid recomputation.
+#[must_use]
 pub fn findings_from_analysis(
     data: &[u8],
     analysis: &BinaryAnalysis,
@@ -318,7 +325,7 @@ pub fn escalate_severity(findings: &mut [ThreatFinding], analysis: &BinaryAnalys
             if f.rule_name == "polyglot_file" {
                 f.severity = FindingSeverity::Critical;
                 f.metadata
-                    .insert("escalated".into(), "high_entropy+polyglot".into());
+                    .insert("escalated_polyglot".into(), "high_entropy+polyglot".into());
             }
         }
     }
@@ -329,7 +336,7 @@ pub fn escalate_severity(findings: &mut [ThreatFinding], analysis: &BinaryAnalys
             if f.severity == FindingSeverity::Medium {
                 f.severity = FindingSeverity::High;
                 f.metadata
-                    .insert("escalated".into(), "executable_file_type".into());
+                    .insert("escalated_executable".into(), "executable_file_type".into());
             }
         }
     }
@@ -345,7 +352,7 @@ pub fn escalate_severity(findings: &mut [ThreatFinding], analysis: &BinaryAnalys
                 highest.severity = FindingSeverity::Critical;
                 highest
                     .metadata
-                    .insert("escalated".into(), "multiple_signals".into());
+                    .insert("escalated_signals".into(), "multiple_signals".into());
             }
         }
     }
@@ -648,7 +655,7 @@ mod tests {
         escalate_severity(&mut findings, &analysis);
         assert_eq!(findings[0].severity, FindingSeverity::High);
         assert_eq!(
-            findings[0].metadata.get("escalated").unwrap(),
+            findings[0].metadata.get("escalated_executable").unwrap(),
             "executable_file_type"
         );
     }
@@ -687,6 +694,51 @@ mod tests {
             findings
                 .iter()
                 .any(|f| f.severity == FindingSeverity::Critical)
+        );
+    }
+
+    #[test]
+    fn escalate_metadata_keys_distinct() {
+        // Verify that cascading escalations don't overwrite each other's metadata
+        let analysis = BinaryAnalysis {
+            file_type: FileType::Pe,
+            entropy: 7.9,
+            size: 1024,
+            sha256: "abc".into(),
+        };
+        let mut findings = vec![
+            ThreatFinding::new(
+                ScanTarget::Memory,
+                FindingCategory::Suspicious,
+                FindingSeverity::Medium,
+                "high_entropy",
+                "high entropy",
+            ),
+            ThreatFinding::new(
+                ScanTarget::Memory,
+                FindingCategory::CustomRule,
+                FindingSeverity::Medium,
+                "packed_binary",
+                "UPX packed",
+            ),
+        ];
+        escalate_severity(&mut findings, &analysis);
+        // Both should have executable escalation metadata
+        for f in &findings {
+            assert!(
+                f.metadata.contains_key("escalated_executable"),
+                "finding {} should have escalated_executable metadata",
+                f.rule_name
+            );
+        }
+        // The one escalated to Critical should also have signals metadata
+        let critical = findings
+            .iter()
+            .find(|f| f.severity == FindingSeverity::Critical)
+            .expect("one finding should be Critical");
+        assert!(
+            critical.metadata.contains_key("escalated_signals"),
+            "critical finding should have escalated_signals metadata"
         );
     }
 

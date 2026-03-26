@@ -63,7 +63,9 @@ LINES_ADDED=0
 PREV_LINE=""
 
 while IFS= read -r line; do
-    if [[ "$line" == *"time:"*"["* ]]; then
+    # Match criterion timing lines (contain "time:" with unit values in brackets)
+    # Skip "change:" lines which contain percentage values, not timings
+    if [[ "$line" == *"time:"*"["* ]] && [[ "$line" != *"change:"* ]]; then
         # Extract benchmark name
         BENCH_NAME=$(echo "$line" | sed -E 's/[[:space:]]*time:.*//' | xargs)
         if [ -z "$BENCH_NAME" ]; then

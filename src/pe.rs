@@ -76,28 +76,33 @@ pub struct PeSection {
 
 impl PeSection {
     /// Whether this section is executable.
+    #[must_use]
     pub fn is_executable(&self) -> bool {
         self.characteristics & 0x2000_0000 != 0
     }
 
     /// Whether this section is writable.
+    #[must_use]
     pub fn is_writable(&self) -> bool {
         self.characteristics & 0x8000_0000 != 0
     }
 
     /// Whether this section contains code.
+    #[must_use]
     pub fn contains_code(&self) -> bool {
         self.characteristics & 0x0000_0020 != 0
     }
 }
 
 /// Read a little-endian u16 from a byte slice at the given offset.
+#[inline]
 fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
     data.get(offset..offset + 2)
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
 }
 
 /// Read a little-endian u32 from a byte slice at the given offset.
+#[inline]
 fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
     data.get(offset..offset + 4)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))

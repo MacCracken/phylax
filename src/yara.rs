@@ -35,13 +35,14 @@ impl YaraPattern {
     }
 
     /// Check whether this pattern matches anywhere in `data`.
+    #[inline]
     pub fn matches(&self, data: &[u8]) -> bool {
         match self {
             Self::Literal(needle) | Self::Hex(needle) => {
                 if needle.is_empty() {
                     return false;
                 }
-                data.windows(needle.len()).any(|w| w == needle.as_slice())
+                memchr::memmem::find(data, needle).is_some()
             }
             Self::Regex(re) => re.is_match(data),
         }
@@ -81,6 +82,7 @@ pub struct RuleConstraints {
 
 impl RuleConstraints {
     /// Check whether the constraints are satisfied for the given data.
+    #[inline]
     #[must_use]
     pub fn satisfied(&self, data: &[u8]) -> bool {
         let len = data.len() as u64;

@@ -66,20 +66,25 @@ struct ChatChoice {
 
 impl HooshClient {
     /// Create a new client with default settings (30s request timeout).
-    pub fn new(base_url: impl Into<String>) -> Self {
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client cannot be constructed (e.g. TLS backend failure).
+    pub fn new(base_url: impl Into<String>) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("failed to build HTTP client");
-        Self {
+            .build()?;
+        Ok(Self {
             base_url: base_url.into(),
             model: HOOSH_DEFAULT_MODEL.to_string(),
             client,
-        }
+        })
     }
 
     /// Create a client using the default localhost URL.
-    pub fn default_local() -> Self {
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client cannot be constructed.
+    pub fn default_local() -> anyhow::Result<Self> {
         Self::new(HOOSH_DEFAULT_URL)
     }
 
@@ -264,14 +269,16 @@ mod tests {
 
     #[test]
     fn client_defaults() {
-        let client = HooshClient::default_local();
+        let client = HooshClient::default_local().unwrap();
         assert_eq!(client.base_url(), HOOSH_DEFAULT_URL);
         assert_eq!(client.model(), HOOSH_DEFAULT_MODEL);
     }
 
     #[test]
     fn client_custom() {
-        let client = HooshClient::new("http://10.0.0.1:9090").with_model("mistral");
+        let client = HooshClient::new("http://10.0.0.1:9090")
+            .unwrap()
+            .with_model("mistral");
         assert_eq!(client.base_url(), "http://10.0.0.1:9090");
         assert_eq!(client.model(), "mistral");
     }
@@ -378,16 +385,22 @@ mod tests {
 
     #[tokio::test]
     async fn triage_findings_empty_batch() {
-        let client = HooshClient::default_local();
+        let client = HooshClient::default_local().unwrap();
         let results = client.triage_findings(&[]).await;
         assert!(results.is_empty());
     }
 
     #[test]
     fn client_timeout_configured() {
-        // Just verify construction doesn't panic
-        let client = HooshClient::new("http://localhost:9999");
+        let client = HooshClient::new("http://localhost:9999").unwrap();
         assert_eq!(client.base_url(), "http://localhost:9999");
+    }
+
+    #[test]
+    fn client_new_returns_result() {
+        // Verify new() returns Ok for valid inputs
+        assert!(HooshClient::new("http://localhost:8088").is_ok());
+        assert!(HooshClient::default_local().is_ok());
     }
 
     #[test]

@@ -405,7 +405,7 @@ fn bench_findings(c: &mut Criterion) {
     group.bench_function("precomputed_findings", |b| {
         let analysis = analyze(&data);
         b.iter(|| {
-            phylax::analyze::findings_from_analysis(
+            let _ = phylax::analyze::findings_from_analysis(
                 black_box(&data),
                 black_box(&analysis),
                 ScanTarget::Memory,

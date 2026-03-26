@@ -44,6 +44,7 @@ pub struct ReportSummary {
 
 impl ThreatReport {
     /// Build a report from a list of scan results.
+    #[must_use]
     pub fn from_results(results: Vec<ScanResult>) -> Self {
         let total_findings: usize = results.iter().map(|r| r.findings.len()).sum();
         let targets_scanned = results.len();
@@ -90,6 +91,7 @@ impl ThreatReport {
     }
 
     /// Render the report in the given format.
+    #[must_use]
     pub fn render(&self, format: ReportFormat) -> String {
         match format {
             ReportFormat::Json => self.render_json(),

@@ -57,19 +57,24 @@ impl DaimonHandle {
 
 impl DaimonClient {
     /// Create a new client pointing at the given daimon URL (10s timeout).
-    pub fn new(base_url: impl Into<String>) -> Self {
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client cannot be constructed.
+    pub fn new(base_url: impl Into<String>) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
-            .build()
-            .expect("failed to build HTTP client");
-        Self {
+            .build()?;
+        Ok(Self {
             base_url: base_url.into(),
             client,
-        }
+        })
     }
 
     /// Create a client using the default localhost URL.
-    pub fn default_local() -> Self {
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client cannot be constructed.
+    pub fn default_local() -> anyhow::Result<Self> {
         Self::new(DAIMON_DEFAULT_URL)
     }
 
@@ -185,25 +190,25 @@ mod tests {
 
     #[test]
     fn daimon_client_default_url() {
-        let client = DaimonClient::default_local();
+        let client = DaimonClient::default_local().unwrap();
         assert_eq!(client.base_url(), DAIMON_DEFAULT_URL);
     }
 
     #[test]
     fn daimon_client_custom_url() {
-        let client = DaimonClient::new("http://10.0.0.1:9090");
+        let client = DaimonClient::new("http://10.0.0.1:9090").unwrap();
         assert_eq!(client.base_url(), "http://10.0.0.1:9090");
     }
 
     #[tokio::test]
     async fn heartbeat_rejects_empty_agent_id() {
-        let client = DaimonClient::default_local();
+        let client = DaimonClient::default_local().unwrap();
         assert!(client.heartbeat("").await.is_err());
     }
 
     #[tokio::test]
     async fn heartbeat_rejects_path_traversal() {
-        let client = DaimonClient::default_local();
+        let client = DaimonClient::default_local().unwrap();
         assert!(client.heartbeat("../etc/passwd").await.is_err());
         assert!(client.heartbeat("foo/bar").await.is_err());
         assert!(client.heartbeat("foo\\bar").await.is_err());
@@ -211,15 +216,21 @@ mod tests {
 
     #[tokio::test]
     async fn deregister_rejects_empty_id() {
-        let client = DaimonClient::default_local();
+        let client = DaimonClient::default_local().unwrap();
         assert!(client.deregister("").await.is_err());
     }
 
     #[tokio::test]
     async fn deregister_rejects_path_traversal() {
-        let client = DaimonClient::default_local();
+        let client = DaimonClient::default_local().unwrap();
         assert!(client.deregister("../etc").await.is_err());
         assert!(client.deregister("a/b").await.is_err());
+    }
+
+    #[test]
+    fn client_new_returns_result() {
+        assert!(DaimonClient::new("http://localhost:8090").is_ok());
+        assert!(DaimonClient::default_local().is_ok());
     }
 
     #[test]

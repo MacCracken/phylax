@@ -38,6 +38,7 @@ impl Default for WatchConfig {
 
 /// Events emitted by the watcher.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum WatchEvent {
     /// A file was created or modified and should be scanned.
     FileChanged(PathBuf),

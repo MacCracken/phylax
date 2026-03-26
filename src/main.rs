@@ -212,9 +212,20 @@ fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Collect all scannable files from a list of paths (files or directories).
+///
+/// Skips symlinks to prevent directory traversal attacks and infinite loops.
 fn collect_files(paths: &[PathBuf], max_file_size: u64) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for path in paths {
+        // Skip symlinks to prevent directory traversal and loops
+        if path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            debug!(path = %path.display(), "skipping symlink");
+            continue;
+        }
+
         if path.is_file() {
             if let Ok(meta) = std::fs::metadata(path) {
                 if meta.len() <= max_file_size {
@@ -289,7 +300,13 @@ async fn triage_findings(findings: &[ThreatFinding], hoosh_url: &str, model: &st
         return;
     }
 
-    let client = HooshClient::new(hoosh_url).with_model(model);
+    let client = match HooshClient::new(hoosh_url) {
+        Ok(c) => c.with_model(model),
+        Err(e) => {
+            eprintln!("[Triage]      Failed to create hoosh client: {e}");
+            return;
+        }
+    };
     println!();
     println!(
         "[Triage]      Sending {} finding(s) to hoosh ({hoosh_url})...",
@@ -507,7 +524,7 @@ fn cmd_daemon(
     rt.block_on(async {
         // Register with daimon if requested
         let daimon_handle = if do_register {
-            let client = DaimonClient::new(&daimon_url);
+            let client = DaimonClient::new(&daimon_url)?;
             match client.start_lifecycle(HEARTBEAT_INTERVAL).await {
                 Ok(handle) => {
                     println!("Daimon:       registered (agent_id: {})", handle.agent_id());
@@ -576,7 +593,13 @@ async fn handle_client(
 
     // Reuse one client for all requests on this connection
     let hoosh_client = if do_triage {
-        Some(HooshClient::new(hoosh_url))
+        match HooshClient::new(hoosh_url) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                warn!(error = %e, "failed to create hoosh client");
+                None
+            }
+        }
     } else {
         None
     };
@@ -667,7 +690,7 @@ fn cmd_report(
     // Triage findings via hoosh if requested
     if do_triage && !result.findings.is_empty() {
         let rt = tokio::runtime::Runtime::new()?;
-        let client = HooshClient::new(hoosh_url);
+        let client = HooshClient::new(hoosh_url)?;
         rt.block_on(async {
             for finding in &mut result.findings {
                 match client.triage_finding(finding).await {
@@ -804,6 +827,7 @@ fn cmd_watch(
             Ok(WatchEvent::Error(e)) => {
                 error!(error = %e, "watch error");
             }
+            Ok(_) => {}
             Err(_) => {
                 // Channel closed — watcher dropped
                 break;
