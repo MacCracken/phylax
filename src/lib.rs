@@ -20,3 +20,4 @@ pub mod strings;
 pub mod types;
 pub mod watch;
 pub mod yara;
+pub mod yara_parser;

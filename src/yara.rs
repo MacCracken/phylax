@@ -70,6 +70,100 @@ pub enum RuleCondition {
     Any,
     /// At least N patterns must match.
     AtLeast(usize),
+    /// Full boolean expression from a `.yar` condition block.
+    Expression(ConditionExpr),
+}
+
+// ---------------------------------------------------------------------------
+// ConditionExpr — boolean expression tree for .yar conditions
+// ---------------------------------------------------------------------------
+
+/// A fully-parsed YARA condition expression tree.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ConditionExpr {
+    /// A boolean literal: `true` / `false`.
+    Bool(bool),
+    /// Reference to a named pattern: `$a`.
+    PatternMatch(String),
+    /// `all of them` — all patterns must match.
+    AllOfThem,
+    /// `any of them` — at least one pattern must match.
+    AnyOfThem,
+    /// `N of them` — at least N patterns must match.
+    NOfThem(usize),
+    /// `all of ($a, $b, ...)`.
+    AllOf(Vec<String>),
+    /// `any of ($a, $b, ...)`.
+    AnyOf(Vec<String>),
+    /// `N of ($a, $b, ...)`.
+    NOf(usize, Vec<String>),
+    /// `filesize < N`, `filesize > N`, etc.
+    FileSize { op: CmpOp, value: u64 },
+    /// `not <expr>`.
+    Not(Box<ConditionExpr>),
+    /// `<expr> and <expr>`.
+    And(Box<ConditionExpr>, Box<ConditionExpr>),
+    /// `<expr> or <expr>`.
+    Or(Box<ConditionExpr>, Box<ConditionExpr>),
+}
+
+/// Comparison operator for filesize expressions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CmpOp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+}
+
+/// Evaluate a condition expression against pattern match results.
+#[must_use]
+pub fn eval_condition(
+    expr: &ConditionExpr,
+    pattern_hits: &[(String, bool)],
+    data_len: u64,
+) -> bool {
+    match expr {
+        ConditionExpr::Bool(b) => *b,
+        ConditionExpr::PatternMatch(name) => pattern_hits.iter().any(|(n, hit)| n == name && *hit),
+        ConditionExpr::AllOfThem => pattern_hits.iter().all(|(_, hit)| *hit),
+        ConditionExpr::AnyOfThem => pattern_hits.iter().any(|(_, hit)| *hit),
+        ConditionExpr::NOfThem(n) => pattern_hits.iter().filter(|(_, hit)| *hit).count() >= *n,
+        ConditionExpr::AllOf(names) => names
+            .iter()
+            .all(|name| pattern_hits.iter().any(|(n, hit)| n == name && *hit)),
+        ConditionExpr::AnyOf(names) => names
+            .iter()
+            .any(|name| pattern_hits.iter().any(|(n, hit)| n == name && *hit)),
+        ConditionExpr::NOf(count, names) => {
+            names
+                .iter()
+                .filter(|name| pattern_hits.iter().any(|(n, hit)| n == *name && *hit))
+                .count()
+                >= *count
+        }
+        ConditionExpr::FileSize { op, value } => match op {
+            CmpOp::Lt => data_len < *value,
+            CmpOp::Le => data_len <= *value,
+            CmpOp::Gt => data_len > *value,
+            CmpOp::Ge => data_len >= *value,
+            CmpOp::Eq => data_len == *value,
+            CmpOp::Ne => data_len != *value,
+        },
+        ConditionExpr::Not(inner) => !eval_condition(inner, pattern_hits, data_len),
+        ConditionExpr::And(lhs, rhs) => {
+            eval_condition(lhs, pattern_hits, data_len)
+                && eval_condition(rhs, pattern_hits, data_len)
+        }
+        ConditionExpr::Or(lhs, rhs) => {
+            eval_condition(lhs, pattern_hits, data_len)
+                || eval_condition(rhs, pattern_hits, data_len)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +289,7 @@ fn default_pattern_type() -> String {
 /// Parse a hex string like "4d5a90" into bytes.
 ///
 /// Returns raw bytes for simple hex, or `None` for hex-only strings.
-fn parse_hex(s: &str) -> Result<Vec<u8>> {
+pub(crate) fn parse_hex(s: &str) -> Result<Vec<u8>> {
     let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     if clean.len() % 2 != 0 {
         return Err(YaraError::InvalidHex(s.to_string()));
@@ -211,7 +305,7 @@ fn parse_hex(s: &str) -> Result<Vec<u8>> {
 
 /// Check whether a hex string contains wildcards (`??`) or jumps (`[n-m]`).
 #[must_use]
-fn hex_has_wildcards(s: &str) -> bool {
+pub(crate) fn hex_has_wildcards(s: &str) -> bool {
     s.contains('?') || s.contains('[')
 }
 
@@ -223,7 +317,7 @@ fn hex_has_wildcards(s: &str) -> bool {
 /// - `4D [2-4] 5A` — `[n-m]` matches n to m arbitrary bytes
 /// - `4D [4] 5A` — `[n]` matches exactly n arbitrary bytes
 /// - `(AA BB | CC DD)` — alternation
-fn parse_hex_wildcard(s: &str) -> Result<YaraPattern> {
+pub(crate) fn parse_hex_wildcard(s: &str) -> Result<YaraPattern> {
     use std::fmt::Write;
 
     let tokens: Vec<&str> = s.split_whitespace().collect();
@@ -525,31 +619,37 @@ impl YaraEngine {
                 data
             };
 
-            // Count matches: AC results (for no at_offset) + regex patterns + fallback
-            let mut match_count = 0;
+            // Resolve per-pattern hits: AC results where available, fallback otherwise
+            let mut pattern_hits: Vec<bool> = Vec::with_capacity(rule.patterns.len());
             for (pat_idx, (_, pat)) in rule.patterns.iter().enumerate() {
                 let hit = match pat {
                     YaraPattern::Literal(_) | YaraPattern::Hex(_) => {
                         if self.ac.is_some() && rule.constraints.at_offset.is_none() {
-                            // Use AC result
                             matched_patterns[rule_idx][pat_idx]
                         } else {
-                            // Fallback: per-pattern scan (at_offset or no AC)
                             pat.matches(scan_data)
                         }
                     }
                     YaraPattern::Regex(_) => pat.matches(scan_data),
                 };
-                if hit {
-                    match_count += 1;
-                }
+                pattern_hits.push(hit);
             }
 
+            let match_count = pattern_hits.iter().filter(|&&h| h).count();
             let total = rule.patterns.len();
             let matched = match &rule.condition {
                 RuleCondition::All => match_count == total && total > 0,
                 RuleCondition::Any => match_count > 0,
                 RuleCondition::AtLeast(n) => match_count >= *n,
+                RuleCondition::Expression(expr) => {
+                    let hits: Vec<(String, bool)> = rule
+                        .patterns
+                        .iter()
+                        .enumerate()
+                        .map(|(pi, (name, _))| (name.clone(), pattern_hits[pi]))
+                        .collect();
+                    eval_condition(expr, &hits, data.len() as u64)
+                }
             };
 
             if matched {
@@ -575,6 +675,45 @@ impl YaraEngine {
         }
 
         findings
+    }
+
+    /// Load rules from a native YARA `.yar` string.
+    ///
+    /// Parses the standard YARA syntax (`rule Name { ... }`) and converts
+    /// to internal `YaraRule` representations. Calls `compile()` after loading.
+    ///
+    /// # Errors
+    /// Returns `YaraError` if the syntax is invalid.
+    #[instrument(skip(self, yar_str), fields(yar_len = yar_str.len()))]
+    pub fn load_rules_yar(&mut self, yar_str: &str) -> Result<usize> {
+        let parsed = crate::yara_parser::parse_yar(yar_str)?;
+        let count = parsed.len();
+
+        for rule in parsed {
+            let severity = rule
+                .meta
+                .get("severity")
+                .and_then(|s| s.parse::<FindingSeverity>().ok())
+                .unwrap_or(FindingSeverity::Medium);
+
+            let description = rule.meta.get("description").cloned().unwrap_or_default();
+
+            let rule_name = rule.name.clone();
+            self.rules.push(YaraRule {
+                name: rule.name,
+                description,
+                severity,
+                tags: rule.tags,
+                patterns: rule.patterns,
+                condition: RuleCondition::Expression(rule.condition),
+                constraints: RuleConstraints::default(),
+            });
+            debug!(rule = %rule_name, "loaded YARA rule from .yar");
+        }
+
+        debug!(count, "finished loading .yar rules");
+        self.compile();
+        Ok(count)
     }
 
     /// Number of loaded rules.
