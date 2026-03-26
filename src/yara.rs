@@ -4,7 +4,8 @@
 //! that performs real byte-level pattern matching.
 
 use crate::types::{FindingCategory, FindingSeverity, ScanTarget, ThreatFinding};
-use regex::bytes::Regex;
+use aho_corasick::AhoCorasick;
+use regex::bytes::{Regex, RegexBuilder};
 use serde::Deserialize;
 use tracing::{debug, instrument, trace, warn};
 
@@ -28,10 +29,16 @@ pub enum YaraPattern {
 impl YaraPattern {
     /// Create a regex pattern, compiling it upfront.
     ///
+    /// Applies size limits to prevent excessive memory use from crafted patterns.
+    ///
     /// # Errors
-    /// Returns `regex::Error` if the pattern is invalid.
+    /// Returns `regex::Error` if the pattern is invalid or exceeds size limits.
     pub fn regex(pattern: &str) -> std::result::Result<Self, regex::Error> {
-        Regex::new(pattern).map(Self::Regex)
+        RegexBuilder::new(pattern)
+            .size_limit(10 * (1 << 20)) // 10 MB compiled automaton limit
+            .dfa_size_limit(10 * (1 << 20)) // 10 MB DFA cache limit
+            .build()
+            .map(Self::Regex)
     }
 
     /// Check whether this pattern matches anywhere in `data`.
@@ -186,6 +193,8 @@ fn default_pattern_type() -> String {
 }
 
 /// Parse a hex string like "4d5a90" into bytes.
+///
+/// Returns raw bytes for simple hex, or `None` for hex-only strings.
 fn parse_hex(s: &str) -> Result<Vec<u8>> {
     let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     if clean.len() % 2 != 0 {
@@ -200,14 +209,117 @@ fn parse_hex(s: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
+/// Check whether a hex string contains wildcards (`??`) or jumps (`[n-m]`).
+#[must_use]
+fn hex_has_wildcards(s: &str) -> bool {
+    s.contains('?') || s.contains('[')
+}
+
+/// Parse a hex string with wildcards (`??`) and jumps (`[n-m]`) into a regex pattern.
+///
+/// Supported syntax:
+/// - `4D 5A` — literal hex bytes
+/// - `4D ?? 5A` — `??` matches any single byte
+/// - `4D [2-4] 5A` — `[n-m]` matches n to m arbitrary bytes
+/// - `4D [4] 5A` — `[n]` matches exactly n arbitrary bytes
+/// - `(AA BB | CC DD)` — alternation
+fn parse_hex_wildcard(s: &str) -> Result<YaraPattern> {
+    use std::fmt::Write;
+
+    let clean: String = s
+        .chars()
+        .filter(|c| !c.is_whitespace() || *c == ' ')
+        .collect();
+    let tokens: Vec<&str> = clean.split_whitespace().collect();
+
+    let mut regex = String::from("(?-u)");
+
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = tokens[i];
+
+        if tok == "??" {
+            // Any single byte
+            regex.push('.');
+        } else if tok.starts_with('[') && tok.ends_with(']') {
+            // Jump: [n] or [n-m]
+            let inner = &tok[1..tok.len() - 1];
+            if let Some((lo, hi)) = inner.split_once('-') {
+                let lo: usize = lo
+                    .parse()
+                    .map_err(|_| YaraError::InvalidHex(format!("invalid jump range: {tok}")))?;
+                let hi: usize = hi
+                    .parse()
+                    .map_err(|_| YaraError::InvalidHex(format!("invalid jump range: {tok}")))?;
+                let _ = write!(regex, ".{{{lo},{hi}}}");
+            } else {
+                let n: usize = inner
+                    .parse()
+                    .map_err(|_| YaraError::InvalidHex(format!("invalid jump: {tok}")))?;
+                let _ = write!(regex, ".{{{n}}}");
+            }
+        } else if tok == "(" {
+            regex.push('(');
+        } else if tok == ")" {
+            regex.push(')');
+        } else if tok == "|" {
+            regex.push('|');
+        } else if tok.len() == 2 {
+            // Literal hex byte
+            let byte = u8::from_str_radix(tok, 16)
+                .map_err(|_| YaraError::InvalidHex(format!("invalid hex byte: {tok}")))?;
+            let _ = write!(regex, "\\x{byte:02x}");
+        } else {
+            // Try parsing as consecutive hex pairs (e.g. "4D5A")
+            if tok.len() % 2 != 0 {
+                return Err(YaraError::InvalidHex(format!("invalid hex token: {tok}")));
+            }
+            for j in (0..tok.len()).step_by(2) {
+                let pair = &tok[j..j + 2];
+                if pair == "??" {
+                    regex.push('.');
+                } else {
+                    let byte = u8::from_str_radix(pair, 16)
+                        .map_err(|_| YaraError::InvalidHex(format!("invalid hex byte: {pair}")))?;
+                    let _ = write!(regex, "\\x{byte:02x}");
+                }
+            }
+        }
+        i += 1;
+    }
+
+    YaraPattern::regex(&regex).map_err(|e| YaraError::InvalidRegex(e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // YaraEngine
 // ---------------------------------------------------------------------------
 
+/// Mapping from Aho-Corasick pattern index to list of (rule_index, pattern_index).
+/// Multiple rules may share identical needle bytes; all must be marked on a single match.
+type AcPatternMap = Vec<Vec<(usize, usize)>>;
+
 /// The YARA scanning engine. Holds a set of rules and matches them against data.
-#[derive(Debug, Default)]
+///
+/// Call [`compile`] after adding all rules to build the Aho-Corasick automaton
+/// for optimal multi-pattern scanning. If not compiled, falls back to per-pattern
+/// matching (still correct, just slower for many literal patterns).
+#[derive(Default)]
 pub struct YaraEngine {
     rules: Vec<YaraRule>,
+    /// Compiled Aho-Corasick automaton for all literal/hex patterns.
+    ac: Option<AhoCorasick>,
+    /// Maps AC pattern index → (rule_index, pattern_index_within_rule).
+    ac_map: AcPatternMap,
+}
+
+impl std::fmt::Debug for YaraEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("YaraEngine")
+            .field("rules", &self.rules.len())
+            .field("compiled", &self.ac.is_some())
+            .finish()
+    }
 }
 
 impl YaraEngine {
@@ -216,9 +328,69 @@ impl YaraEngine {
         Self::default()
     }
 
-    /// Add a single rule.
+    /// Add a single rule. Invalidates any compiled automaton.
     pub fn add_rule(&mut self, rule: YaraRule) {
         self.rules.push(rule);
+        self.ac = None; // invalidate
+    }
+
+    /// Build the Aho-Corasick automaton from all literal/hex patterns.
+    ///
+    /// Call this after loading all rules for optimal scan performance.
+    /// Called automatically by `load_rules_toml`.
+    pub fn compile(&mut self) {
+        use std::collections::HashMap;
+
+        // Deduplicate identical needles — multiple rules may share the same bytes
+        let mut needle_index: HashMap<Vec<u8>, usize> = HashMap::new();
+        let mut needles: Vec<Vec<u8>> = Vec::new();
+        let mut map: AcPatternMap = Vec::new();
+
+        for (rule_idx, rule) in self.rules.iter().enumerate() {
+            for (pat_idx, (_, pat)) in rule.patterns.iter().enumerate() {
+                match pat {
+                    YaraPattern::Literal(bytes) | YaraPattern::Hex(bytes) => {
+                        if bytes.is_empty() {
+                            continue;
+                        }
+                        if let Some(&existing_idx) = needle_index.get(bytes) {
+                            map[existing_idx].push((rule_idx, pat_idx));
+                        } else {
+                            let idx = needles.len();
+                            needle_index.insert(bytes.clone(), idx);
+                            needles.push(bytes.clone());
+                            map.push(vec![(rule_idx, pat_idx)]);
+                        }
+                    }
+                    YaraPattern::Regex(_) => {}
+                }
+            }
+        }
+
+        // AC is only worth the overhead when there are enough patterns.
+        // For small pattern sets, per-pattern memmem with SIMD is faster.
+        if needles.len() < 8 {
+            self.ac = None;
+            self.ac_map = Vec::new();
+            return;
+        }
+
+        match AhoCorasick::builder().build(&needles) {
+            Ok(ac) => {
+                debug!(
+                    unique_needles = needles.len(),
+                    total_mappings = map.iter().map(|m| m.len()).sum::<usize>(),
+                    "compiled Aho-Corasick automaton"
+                );
+                self.ac = Some(ac);
+                self.ac_map = map;
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to build Aho-Corasick automaton, falling back to per-pattern scan");
+                self.ac = None;
+                self.ac_map = Vec::new();
+            }
+        }
     }
 
     /// Load rules from a TOML string.
@@ -263,7 +435,13 @@ impl YaraEngine {
             for p in tr.patterns {
                 let pat = match p.r#type.as_str() {
                     "literal" => YaraPattern::Literal(p.value.as_bytes().to_vec()),
-                    "hex" => YaraPattern::Hex(parse_hex(&p.value)?),
+                    "hex" => {
+                        if hex_has_wildcards(&p.value) {
+                            parse_hex_wildcard(&p.value)?
+                        } else {
+                            YaraPattern::Hex(parse_hex(&p.value)?)
+                        }
+                    }
                     "regex" => YaraPattern::regex(&p.value)
                         .map_err(|e| YaraError::InvalidRegex(e.to_string()))?,
                     _ => {
@@ -297,38 +475,81 @@ impl YaraEngine {
         }
 
         debug!(count, "finished loading TOML rules");
+        self.compile();
         Ok(count)
     }
 
     /// Scan data against all loaded rules.
+    ///
+    /// Uses the Aho-Corasick automaton (if compiled) for a single-pass scan of
+    /// all literal/hex patterns, then evaluates regex patterns individually.
     #[instrument(skip(self, data), fields(data_len = data.len(), rule_count = self.rules.len()))]
     pub fn scan(&self, data: &[u8]) -> Vec<ThreatFinding> {
-        let mut findings = Vec::new();
+        // Build per-rule, per-pattern match sets
+        // matched_patterns[rule_idx] is a bitvec of which patterns matched
+        let mut matched_patterns: Vec<Vec<bool>> = self
+            .rules
+            .iter()
+            .map(|r| vec![false; r.patterns.len()])
+            .collect();
 
-        for rule in &self.rules {
-            // Check file size constraints
+        // Phase 1: Aho-Corasick single-pass for all literal/hex patterns
+        if let Some(ref ac) = self.ac {
+            let total_ac_mappings: usize = self.ac_map.iter().map(|m| m.len()).sum();
+            let mut found_count = 0usize;
+            for mat in ac.find_iter(data) {
+                let entries = &self.ac_map[mat.pattern().as_usize()];
+                for &(rule_idx, pat_idx) in entries {
+                    if !matched_patterns[rule_idx][pat_idx] {
+                        matched_patterns[rule_idx][pat_idx] = true;
+                        found_count += 1;
+                    }
+                }
+                // Early exit: all literal/hex pattern-rule pairs found
+                if found_count == total_ac_mappings {
+                    break;
+                }
+            }
+        }
+
+        // Phase 2: evaluate each rule
+        let mut findings = Vec::new();
+        for (rule_idx, rule) in self.rules.iter().enumerate() {
             if !rule.constraints.satisfied(data) {
                 continue;
             }
 
-            // If at_offset is set, only check patterns at that specific offset
-            let match_count = if let Some(offset) = rule.constraints.at_offset {
+            let scan_data = if let Some(offset) = rule.constraints.at_offset {
                 if offset < data.len() {
-                    rule.patterns
-                        .iter()
-                        .filter(|(_, p)| p.matches(&data[offset..]))
-                        .count()
+                    &data[offset..]
                 } else {
-                    0
+                    continue;
                 }
             } else {
-                rule.patterns
-                    .iter()
-                    .filter(|(_, p)| p.matches(data))
-                    .count()
+                data
             };
-            let total = rule.patterns.len();
 
+            // Count matches: AC results (for no at_offset) + regex patterns + fallback
+            let mut match_count = 0;
+            for (pat_idx, (_, pat)) in rule.patterns.iter().enumerate() {
+                let hit = match pat {
+                    YaraPattern::Literal(_) | YaraPattern::Hex(_) => {
+                        if self.ac.is_some() && rule.constraints.at_offset.is_none() {
+                            // Use AC result
+                            matched_patterns[rule_idx][pat_idx]
+                        } else {
+                            // Fallback: per-pattern scan (at_offset or no AC)
+                            pat.matches(scan_data)
+                        }
+                    }
+                    YaraPattern::Regex(_) => pat.matches(scan_data),
+                };
+                if hit {
+                    match_count += 1;
+                }
+            }
+
+            let total = rule.patterns.len();
             let matched = match &rule.condition {
                 RuleCondition::All => match_count == total && total > 0,
                 RuleCondition::Any => match_count > 0,
@@ -926,5 +1147,101 @@ value = "4d5a"
         assert!(c.satisfied(&[0u8; 10]));
         assert!(c.satisfied(&[0u8; 100]));
         assert!(!c.satisfied(&[0u8; 101]));
+    }
+
+    // ── Hex wildcard tests ─────────────────────────────────────────
+
+    #[test]
+    fn hex_wildcard_single_byte() {
+        let pat = parse_hex_wildcard("4D ?? 5A").unwrap();
+        assert!(pat.matches(b"\x4d\x00\x5a"));
+        assert!(pat.matches(b"\x4d\xff\x5a"));
+        assert!(!pat.matches(b"\x4d\x5a")); // no gap
+    }
+
+    #[test]
+    fn hex_wildcard_consecutive() {
+        let pat = parse_hex_wildcard("7F 45 ?? ?? 02").unwrap();
+        assert!(pat.matches(b"\x7fE\x00\x00\x02"));
+        assert!(pat.matches(b"\x7fE\xab\xcd\x02"));
+        assert!(!pat.matches(b"\x7fE\x02")); // too short
+    }
+
+    #[test]
+    fn hex_jump_fixed() {
+        let pat = parse_hex_wildcard("4D 5A [4] 50 45").unwrap();
+        assert!(pat.matches(b"MZ\x00\x00\x00\x00PE"));
+        assert!(!pat.matches(b"MZ\x00\x00\x00PE")); // only 3 bytes gap
+    }
+
+    #[test]
+    fn hex_jump_range() {
+        let pat = parse_hex_wildcard("4D 5A [2-4] 50 45").unwrap();
+        assert!(pat.matches(b"MZ\x00\x00PE"));
+        assert!(pat.matches(b"MZ\x00\x00\x00PE"));
+        assert!(pat.matches(b"MZ\x00\x00\x00\x00PE"));
+        assert!(!pat.matches(b"MZ\x00PE")); // only 1 byte gap
+    }
+
+    #[test]
+    fn hex_no_wildcards_detected() {
+        assert!(!hex_has_wildcards("4D5A9000"));
+        assert!(!hex_has_wildcards("7F 45 4C 46"));
+    }
+
+    #[test]
+    fn hex_wildcards_detected() {
+        assert!(hex_has_wildcards("4D ?? 5A"));
+        assert!(hex_has_wildcards("4D [2-4] 5A"));
+    }
+
+    #[test]
+    fn hex_wildcard_in_toml_rules() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "pe_with_gap"
+severity = "medium"
+condition = "any"
+[[rule.patterns]]
+id = "$mz_pe"
+type = "hex"
+value = "4D 5A ?? ?? ?? ?? [0-128] 50 45 00 00"
+"#;
+        engine.load_rules_toml(toml).unwrap();
+
+        // Build data: MZ + 4 bytes + some gap + PE\0\0
+        let mut data = vec![0u8; 256];
+        data[0] = 0x4d; // M
+        data[1] = 0x5a; // Z
+        data[128] = 0x50; // P
+        data[129] = 0x45; // E
+        assert_eq!(engine.scan(&data).len(), 1);
+    }
+
+    #[test]
+    fn hex_wildcard_no_match() {
+        let mut engine = YaraEngine::new();
+        let toml = r#"
+[[rule]]
+name = "specific_sig"
+severity = "low"
+condition = "any"
+[[rule.patterns]]
+id = "$sig"
+type = "hex"
+value = "DE AD ?? BE EF"
+"#;
+        engine.load_rules_toml(toml).unwrap();
+        assert!(engine.scan(b"\xde\xad\xbe\xef").is_empty()); // missing middle byte
+        assert_eq!(engine.scan(b"\xde\xad\x00\xbe\xef").len(), 1);
+    }
+
+    #[test]
+    fn hex_wildcard_packed_no_space() {
+        // "4D??5A" without spaces — wildcards in packed form
+        let pat = parse_hex_wildcard("4D??5A").unwrap();
+        assert!(pat.matches(b"\x4d\x00\x5a"));
+        assert!(pat.matches(b"\x4d\xff\x5a"));
     }
 }

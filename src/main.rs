@@ -269,12 +269,19 @@ fn run_scan_with_engine(path: &Path, engine: &YaraEngine) -> Result<ScanResult> 
     }
 
     let data = std::fs::read(path)?;
-    let start = std::time::Instant::now();
-    let analysis = analyze(&data);
+    scan_data(&data, path, engine)
+}
 
-    let yara_findings = engine.scan(&data);
+/// Run a complete scan on already-loaded data using a pre-loaded YARA engine.
+///
+/// Use this when you already have the file data in memory to avoid a redundant read.
+fn scan_data(data: &[u8], path: &Path, engine: &YaraEngine) -> Result<ScanResult> {
+    let start = std::time::Instant::now();
+    let analysis = analyze(data);
+
+    let yara_findings = engine.scan(data);
     let mut analyze_findings =
-        findings_from_analysis(&data, &analysis, ScanTarget::File(path.to_path_buf()));
+        findings_from_analysis(data, &analysis, ScanTarget::File(path.to_path_buf()));
     escalate_severity(&mut analyze_findings, &analysis);
 
     let mut all_findings = yara_findings;
@@ -361,129 +368,137 @@ fn cmd_scan(
     // Load YARA rules once for all files
     let engine = load_yara_engine(rules_path)?;
 
-    let mut total_findings = 0usize;
-    let mut total_clean = 0usize;
-    let mut all_results = Vec::new();
     let overall_start = std::time::Instant::now();
 
-    for file in &files {
-        info!(path = %file.display(), "starting scan");
+    // Single-file mode: verbose output with analysis details
+    if !multi {
+        let file = &files[0];
+        let data = std::fs::read(file)?;
 
-        let data = match std::fs::read(file) {
-            Ok(d) => d,
-            Err(e) => {
-                warn!(path = %file.display(), error = %e, "failed to read file");
-                if !multi {
-                    anyhow::bail!("failed to read {}: {e}", file.display());
-                }
-                println!("[ERROR] {} — {e}", file.display());
-                continue;
+        println!("Scanning: {}", file.display());
+        println!("Size: {} bytes", data.len());
+        println!();
+
+        let analysis = analyze(&data);
+        println!("[Magic Bytes] File type: {}", analysis.file_type);
+        println!("[SHA-256]     {}", analysis.sha256);
+
+        let entropy = analysis.entropy;
+        println!(
+            "[Entropy]     {entropy:.4} bits/byte {}",
+            if is_suspicious_entropy(entropy) {
+                "(SUSPICIOUS)"
+            } else {
+                "(normal)"
             }
-        };
+        );
 
-        if !multi {
-            println!("Scanning: {}", file.display());
-            println!("Size: {} bytes", data.len());
-            println!();
-
-            let analysis = analyze(&data);
-            println!("[Magic Bytes] File type: {}", analysis.file_type);
-            println!("[SHA-256]     {}", analysis.sha256);
-
-            let entropy = analysis.entropy;
+        let profile = entropy_profile(&data, block_size);
+        if !profile.is_empty() {
+            let max_block = profile
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .unwrap();
             println!(
-                "[Entropy]     {entropy:.4} bits/byte {}",
-                if is_suspicious_entropy(entropy) {
-                    "(SUSPICIOUS)"
-                } else {
-                    "(normal)"
-                }
+                "[Profile]     {} blocks, max entropy {:.4} at block {}",
+                profile.len(),
+                max_block.1,
+                max_block.0,
             );
+        }
 
-            let profile = entropy_profile(&data, block_size);
-            if !profile.is_empty() {
-                let max_block = profile
-                    .iter()
-                    .enumerate()
-                    .max_by(|a, b| a.1.total_cmp(b.1))
-                    .unwrap();
+        if let Some(rp) = rules_path {
+            println!("[YARA]        Rules from {}", rp.display());
+        }
+
+        let result = scan_data(&data, file, &engine)?;
+        let n = result.findings.len();
+        println!();
+        if n == 0 {
+            println!("Result: CLEAN ({:.2?})", result.scan_duration);
+        } else {
+            println!("Result: {n} FINDING(S) ({:.2?})", result.scan_duration);
+            println!();
+            for f in &result.findings {
                 println!(
-                    "[Profile]     {} blocks, max entropy {:.4} at block {}",
-                    profile.len(),
-                    max_block.1,
-                    max_block.0,
+                    "  [{severity}] {rule}: {desc}",
+                    severity = f.severity,
+                    rule = f.rule_name,
+                    desc = f.description,
                 );
-            }
-
-            if let Some(rp) = rules_path {
-                println!("[YARA]        Rules from {}", rp.display());
             }
         }
 
-        match run_scan_with_engine(file, &engine) {
+        if do_triage && n > 0 {
+            let rt = tokio::runtime::Runtime::new()?;
+            let owned: Vec<ThreatFinding> = result.findings.clone();
+            rt.block_on(triage_findings(&owned, hoosh_url, hoosh_model));
+        }
+
+        return Ok(());
+    }
+
+    // Multi-file mode: parallel scanning with rayon
+    use rayon::prelude::*;
+
+    let scan_results: Vec<(PathBuf, std::result::Result<ScanResult, String>)> = files
+        .par_iter()
+        .map(|file| {
+            let result = run_scan_with_engine(file, &engine).map_err(|e| e.to_string());
+            (file.clone(), result)
+        })
+        .collect();
+
+    // Print results (sequential for stable output order)
+    let mut total_findings = 0usize;
+    let mut total_clean = 0usize;
+    let mut all_results = Vec::new();
+
+    for (file, result) in &scan_results {
+        match result {
             Ok(result) => {
                 let n = result.findings.len();
-                if multi {
-                    if n == 0 {
-                        println!(
-                            "  {} — clean ({:.2?})",
-                            file.display(),
-                            result.scan_duration
-                        );
-                        total_clean += 1;
-                    } else {
-                        println!(
-                            "  {} — {} finding(s) ({:.2?})",
-                            file.display(),
-                            n,
-                            result.scan_duration
-                        );
-                        for f in &result.findings {
-                            println!(
-                                "    [{severity}] {rule}: {desc}",
-                                severity = f.severity,
-                                rule = f.rule_name,
-                                desc = f.description,
-                            );
-                        }
-                    }
+                if n == 0 {
+                    println!(
+                        "  {} — clean ({:.2?})",
+                        file.display(),
+                        result.scan_duration
+                    );
+                    total_clean += 1;
                 } else {
-                    println!();
-                    if n == 0 {
-                        println!("Result: CLEAN ({:.2?})", result.scan_duration);
-                    } else {
-                        println!("Result: {n} FINDING(S) ({:.2?})", result.scan_duration);
-                        println!();
-                        for f in &result.findings {
-                            println!(
-                                "  [{severity}] {rule}: {desc}",
-                                severity = f.severity,
-                                rule = f.rule_name,
-                                desc = f.description,
-                            );
-                        }
+                    println!(
+                        "  {} — {} finding(s) ({:.2?})",
+                        file.display(),
+                        n,
+                        result.scan_duration
+                    );
+                    for f in &result.findings {
+                        println!(
+                            "    [{severity}] {rule}: {desc}",
+                            severity = f.severity,
+                            rule = f.rule_name,
+                            desc = f.description,
+                        );
                     }
                 }
                 total_findings += n;
                 all_results.push(result);
             }
             Err(e) => {
-                warn!(path = %file.display(), error = %e, "scan failed");
                 println!("  {} — error: {e}", file.display());
             }
         }
     }
 
-    if multi {
-        let elapsed = overall_start.elapsed();
-        println!();
-        println!(
-            "Summary: {} file(s) scanned, {} clean, {} with findings ({elapsed:.2?})",
-            files.len(),
-            total_clean,
-            files.len() - total_clean,
-        );
-    }
+    let elapsed = overall_start.elapsed();
+    println!();
+    println!(
+        "Summary: {} file(s) scanned, {} clean, {} with findings ({elapsed:.2?})",
+        files.len(),
+        total_clean,
+        files.len() - total_clean,
+    );
 
     // Triage all findings
     if do_triage && total_findings > 0 {

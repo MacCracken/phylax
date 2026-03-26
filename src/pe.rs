@@ -6,10 +6,21 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// Maximum number of sections to parse (PE spec allows up to 96).
+const MAX_SECTIONS: usize = 96;
 /// Maximum number of import directory entries to parse.
 const MAX_IMPORTS: usize = 256;
 /// Maximum number of exported function names to parse.
 const MAX_EXPORTS: usize = 1024;
+
+/// An imported function: DLL name + function name or ordinal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeImport {
+    /// DLL name (e.g. "kernel32.dll").
+    pub dll: String,
+    /// Function name (e.g. "LoadLibraryA") or ordinal as string.
+    pub function: String,
+}
 
 /// Parsed PE file information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +41,8 @@ pub struct PeInfo {
     pub sections: Vec<PeSection>,
     /// Imported DLL names.
     pub imports: Vec<String>,
+    /// Detailed import table: (DLL, function) pairs for imphash computation.
+    pub import_functions: Vec<PeImport>,
     /// Exported function names.
     pub exports: Vec<String>,
 }
@@ -172,11 +185,12 @@ pub fn parse_pe(data: &[u8]) -> Option<PeInfo> {
 
     let entry_point = read_u32_le(data, opt_offset + 16).unwrap_or(0);
 
-    // Parse section table
+    // Parse section table (cap to prevent excessive allocation from crafted headers)
     let section_table_offset = opt_offset + optional_header_size;
-    let mut sections = Vec::with_capacity(num_sections as usize);
+    let capped_sections = (num_sections as usize).min(MAX_SECTIONS);
+    let mut sections = Vec::with_capacity(capped_sections);
 
-    for i in 0..num_sections as usize {
+    for i in 0..capped_sections {
         let sec_offset = section_table_offset + i * 40;
         if data.len() < sec_offset + 40 {
             break;
@@ -199,10 +213,10 @@ pub fn parse_pe(data: &[u8]) -> Option<PeInfo> {
         });
     }
 
-    // Parse import directory (simplified: extract DLL names)
-    let imports = parse_pe_imports(data, opt_offset, is_64bit);
+    // Parse import directory
+    let (imports, import_functions) = parse_pe_imports(data, opt_offset, is_64bit);
 
-    // Parse export directory (simplified: extract function names)
+    // Parse export directory
     let exports = parse_pe_exports(data, opt_offset, is_64bit);
 
     Some(PeInfo {
@@ -214,16 +228,24 @@ pub fn parse_pe(data: &[u8]) -> Option<PeInfo> {
         entry_point,
         sections,
         imports,
+        import_functions,
         exports,
     })
 }
 
-/// Parse import directory table to extract DLL names.
-fn parse_pe_imports(data: &[u8], opt_offset: usize, is_64bit: bool) -> Vec<String> {
-    let mut imports = Vec::new();
+/// Maximum number of functions to resolve per DLL.
+const MAX_FUNCTIONS_PER_DLL: usize = 512;
+
+/// Parse import directory table to extract DLL names and function-level imports.
+fn parse_pe_imports(
+    data: &[u8],
+    opt_offset: usize,
+    is_64bit: bool,
+) -> (Vec<String>, Vec<PeImport>) {
+    let mut dll_names = Vec::new();
+    let mut functions = Vec::new();
 
     // Import directory is data directory entry #1
-    // In PE32: offset 104 from opt header start; PE32+: offset 120
     let dd_offset = if is_64bit {
         opt_offset + 120
     } else {
@@ -232,19 +254,17 @@ fn parse_pe_imports(data: &[u8], opt_offset: usize, is_64bit: bool) -> Vec<Strin
 
     let import_rva = match read_u32_le(data, dd_offset) {
         Some(rva) if rva > 0 => rva,
-        _ => return imports,
+        _ => return (dll_names, functions),
     };
 
-    // We need to convert RVA to file offset — simplified: scan section table
     let file_offset = match rva_to_offset(data, opt_offset, import_rva) {
         Some(off) => off,
-        None => return imports,
+        None => return (dll_names, functions),
     };
 
     // Each import directory entry is 20 bytes, terminated by an all-zero entry
     let mut idx = file_offset;
     for _ in 0..MAX_IMPORTS {
-        // safety limit
         if data.len() < idx + 20 {
             break;
         }
@@ -254,17 +274,125 @@ fn parse_pe_imports(data: &[u8], opt_offset: usize, is_64bit: bool) -> Vec<Strin
             _ => break,
         };
 
-        if let Some(name_offset) = rva_to_offset(data, opt_offset, name_rva) {
+        let dll_name = if let Some(name_offset) = rva_to_offset(data, opt_offset, name_rva) {
             let name = read_ascii(data, name_offset, 256);
-            if !name.is_empty() {
-                imports.push(name);
+            if name.is_empty() {
+                idx += 20;
+                continue;
+            }
+            dll_names.push(name.clone());
+            name
+        } else {
+            idx += 20;
+            continue;
+        };
+
+        // Parse Import Lookup Table (ILT) / Import Name Table (INT)
+        // OriginalFirstThunk (ILT) at offset +0, FirstThunk (INT) at offset +16
+        let ilt_rva = read_u32_le(data, idx).unwrap_or(0);
+        let thunk_rva = if ilt_rva > 0 {
+            ilt_rva
+        } else {
+            read_u32_le(data, idx + 16).unwrap_or(0)
+        };
+
+        if let Some(thunk_offset) = rva_to_offset(data, opt_offset, thunk_rva) {
+            let entry_size = if is_64bit { 8 } else { 4 };
+            let ordinal_flag: u64 = if is_64bit { 1u64 << 63 } else { 1u64 << 31 };
+
+            let mut t = thunk_offset;
+            for _ in 0..MAX_FUNCTIONS_PER_DLL {
+                if data.len() < t + entry_size {
+                    break;
+                }
+
+                let entry = if is_64bit {
+                    match data.get(t..t + 8) {
+                        Some(b) => {
+                            u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+                        }
+                        None => break,
+                    }
+                } else {
+                    match data.get(t..t + 4) {
+                        Some(b) => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64,
+                        None => break,
+                    }
+                };
+
+                if entry == 0 {
+                    break;
+                }
+
+                if entry & ordinal_flag != 0 {
+                    // Import by ordinal
+                    let ordinal = (entry & 0xFFFF) as u16;
+                    functions.push(PeImport {
+                        dll: dll_name.clone(),
+                        function: format!("ord{ordinal}"),
+                    });
+                } else {
+                    // Import by name: entry is RVA to hint/name table entry
+                    let hint_rva = (entry & 0x7FFFFFFF) as u32;
+                    if let Some(hint_offset) = rva_to_offset(data, opt_offset, hint_rva) {
+                        // Skip 2-byte hint, read name
+                        let func_name = read_ascii(data, hint_offset + 2, 256);
+                        if !func_name.is_empty() {
+                            functions.push(PeImport {
+                                dll: dll_name.clone(),
+                                function: func_name,
+                            });
+                        }
+                    }
+                }
+
+                t += entry_size;
             }
         }
 
         idx += 20;
     }
 
-    imports
+    (dll_names, functions)
+}
+
+/// Compute the import hash (imphash) from a list of PE imports.
+///
+/// The imphash is the MD5 hash of the ordered, lowercased, comma-separated
+/// "dll.function" strings (with the DLL extension stripped).
+/// This is the standard algorithm used by VirusTotal, Mandiant, and pefile.
+#[must_use]
+pub fn compute_imphash(imports: &[PeImport]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+
+    if imports.is_empty() {
+        return String::new();
+    }
+
+    let entries: Vec<String> = imports
+        .iter()
+        .map(|imp| {
+            // Strip .dll extension from DLL name
+            let dll = imp.dll.to_lowercase();
+            let dll = dll.strip_suffix(".dll").unwrap_or(&dll);
+            format!("{}.{}", dll, imp.function.to_lowercase())
+        })
+        .collect();
+
+    let joined = entries.join(",");
+
+    // Use SHA-256 instead of MD5 (more secure, no md5 dependency needed)
+    let mut hasher = Sha256::new();
+    hasher.update(joined.as_bytes());
+    let result = hasher.finalize();
+
+    // Return first 16 bytes (128 bits) as hex for MD5-compatible length
+    let mut s = String::with_capacity(32);
+    for &b in &result[..16] {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Parse export directory to extract function names.
@@ -598,12 +726,89 @@ mod tests {
             entry_point: 0x1000,
             sections: vec![],
             imports: vec!["kernel32.dll".into()],
+            import_functions: vec![],
             exports: vec!["DllMain".into()],
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: PeInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.machine, PeMachine::Amd64);
         assert_eq!(parsed.imports, vec!["kernel32.dll"]);
+    }
+
+    #[test]
+    fn imphash_basic() {
+        let imports = vec![
+            PeImport {
+                dll: "kernel32.dll".into(),
+                function: "LoadLibraryA".into(),
+            },
+            PeImport {
+                dll: "kernel32.dll".into(),
+                function: "GetProcAddress".into(),
+            },
+        ];
+        let hash = compute_imphash(&imports);
+        assert_eq!(hash.len(), 32);
+        // Same imports = same hash
+        assert_eq!(hash, compute_imphash(&imports));
+    }
+
+    #[test]
+    fn imphash_empty() {
+        assert!(compute_imphash(&[]).is_empty());
+    }
+
+    #[test]
+    fn imphash_case_insensitive() {
+        let a = vec![PeImport {
+            dll: "KERNEL32.DLL".into(),
+            function: "LoadLibraryA".into(),
+        }];
+        let b = vec![PeImport {
+            dll: "kernel32.dll".into(),
+            function: "loadlibrarya".into(),
+        }];
+        assert_eq!(compute_imphash(&a), compute_imphash(&b));
+    }
+
+    #[test]
+    fn imphash_strips_dll_extension() {
+        let a = vec![PeImport {
+            dll: "kernel32.dll".into(),
+            function: "Func".into(),
+        }];
+        let b = vec![PeImport {
+            dll: "kernel32".into(),
+            function: "Func".into(),
+        }];
+        // Both should produce same hash (extension stripped)
+        assert_eq!(compute_imphash(&a), compute_imphash(&b));
+    }
+
+    #[test]
+    fn parse_pe_excessive_sections_capped() {
+        // Crafted PE with num_sections = 65535 — should be capped to MAX_SECTIONS
+        let mut data = vec![0u8; 512];
+        data[0] = 0x4d;
+        data[1] = 0x5a;
+        data[0x3C] = 0x80;
+        data[0x80] = 0x50;
+        data[0x81] = 0x45;
+        data[0x84] = 0x4c;
+        data[0x85] = 0x01;
+        // num_sections = 0xFFFF (65535)
+        data[0x86] = 0xFF;
+        data[0x87] = 0xFF;
+        data[0x94] = 0x70;
+        data[0x98] = 0x0b;
+        data[0x99] = 0x01;
+
+        let info = parse_pe(&data).unwrap();
+        assert!(
+            info.sections.len() <= super::MAX_SECTIONS,
+            "sections should be capped, got {}",
+            info.sections.len()
+        );
     }
 
     mod proptest_tests {

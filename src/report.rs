@@ -100,7 +100,10 @@ impl ThreatReport {
     }
 
     fn render_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+        serde_json::to_string_pretty(self).unwrap_or_else(|e| {
+            tracing::error!(error = %e, "failed to serialize report to JSON");
+            "{}".to_string()
+        })
     }
 
     fn render_markdown(&self) -> String {

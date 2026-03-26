@@ -398,7 +398,7 @@ fn bench_findings(c: &mut Criterion) {
 
     group.bench_function("analyze_findings", |b| {
         b.iter(|| {
-            phylax::analyze::analyze_findings(black_box(&data), ScanTarget::Memory);
+            let _ = phylax::analyze::analyze_findings(black_box(&data), ScanTarget::Memory);
         });
     });
 

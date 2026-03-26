@@ -136,6 +136,8 @@ impl ElfSection {
 const SHT_STRTAB: u32 = 3;
 const SHT_DYNSYM: u32 = 11;
 
+/// Maximum number of section headers to parse.
+const MAX_SECTIONS: usize = 1024;
 /// Maximum number of dynamic symbols to extract.
 const MAX_SYMBOLS: usize = 4096;
 /// Maximum number of DT_NEEDED entries to extract.
@@ -280,12 +282,13 @@ pub fn parse_elf(data: &[u8]) -> Option<ElfInfo> {
         0
     };
 
-    // Parse section headers
-    let mut sections = Vec::with_capacity(sh_num);
+    // Parse section headers (cap to prevent excessive allocation from crafted headers)
+    let capped_sh_num = sh_num.min(MAX_SECTIONS);
+    let mut sections = Vec::with_capacity(capped_sh_num);
     let mut dynstr_offset: usize = 0;
     let mut dynsym_sections = Vec::new();
 
-    for i in 0..sh_num {
+    for i in 0..capped_sh_num {
         let sh = sh_offset + i * sh_entsize;
         if data.len() < sh + sh_entsize {
             break;
@@ -639,6 +642,35 @@ mod tests {
         assert_eq!(read_u16(&data, 0, false), Some(0x0102));
         assert_eq!(read_u32(&data, 0, true), Some(0x04030201));
         assert_eq!(read_u64(&data, 0, true), Some(0x0807060504030201));
+    }
+
+    #[test]
+    fn parse_elf_excessive_sections_capped() {
+        // Crafted ELF with sh_num = 65535 — should be capped to MAX_SECTIONS
+        let mut data = vec![0u8; 128];
+        data[0] = 0x7f;
+        data[1] = 0x45;
+        data[2] = 0x4c;
+        data[3] = 0x46;
+        data[4] = 2; // 64-bit
+        data[5] = 1; // little-endian
+        data[6] = 1;
+        data[16] = 2; // executable
+        data[18] = 62; // x86_64
+        // sh_offset = 64 (points within data)
+        data[40] = 64;
+        // sh_entsize = 64
+        data[58] = 64;
+        // sh_num = 0xFFFF (65535)
+        data[60] = 0xFF;
+        data[61] = 0xFF;
+
+        let info = parse_elf(&data).unwrap();
+        assert!(
+            info.sections.len() <= super::MAX_SECTIONS,
+            "sections should be capped, got {}",
+            info.sections.len()
+        );
     }
 
     mod proptest_tests {

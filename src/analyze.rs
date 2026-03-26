@@ -295,6 +295,7 @@ pub fn findings_from_analysis(
 ///
 /// Convenience wrapper that computes analysis internally.
 /// Prefer [`findings_from_analysis`] if you already have a [`BinaryAnalysis`].
+#[must_use]
 #[instrument(skip(data), fields(data_len = data.len()))]
 pub fn analyze_findings(data: &[u8], target: ScanTarget) -> Vec<ThreatFinding> {
     let analysis = analyze(data);
@@ -356,6 +357,361 @@ pub fn escalate_severity(findings: &mut [ThreatFinding], analysis: &BinaryAnalys
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Section entropy analysis
+// ---------------------------------------------------------------------------
+
+/// Entropy computed for a named section of a binary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionEntropy {
+    /// Section name.
+    pub name: String,
+    /// Shannon entropy of the section's raw data (bits/byte).
+    pub entropy: f64,
+    /// Size of the section's raw data on disk.
+    pub raw_size: usize,
+    /// Whether the section is executable.
+    pub executable: bool,
+    /// Whether the section is writable.
+    pub writable: bool,
+}
+
+/// Compute entropy for each section of a PE binary.
+#[must_use]
+pub fn pe_section_entropy(data: &[u8], pe: &crate::pe::PeInfo) -> Vec<SectionEntropy> {
+    pe.sections
+        .iter()
+        .filter_map(|sec| {
+            let offset = sec.raw_data_offset as usize;
+            let size = sec.raw_data_size as usize;
+            if size == 0 || offset >= data.len() {
+                return None;
+            }
+            let end = (offset + size).min(data.len());
+            let entropy = shannon_entropy(&data[offset..end]);
+            Some(SectionEntropy {
+                name: sec.name.clone(),
+                entropy,
+                raw_size: end - offset,
+                executable: sec.is_executable(),
+                writable: sec.is_writable(),
+            })
+        })
+        .collect()
+}
+
+/// Compute entropy for each section of an ELF binary.
+#[must_use]
+pub fn elf_section_entropy(data: &[u8], elf: &crate::elf::ElfInfo) -> Vec<SectionEntropy> {
+    elf.sections
+        .iter()
+        .filter_map(|sec| {
+            let offset = sec.offset as usize;
+            let size = sec.size as usize;
+            if size == 0 || offset >= data.len() {
+                return None;
+            }
+            let end = (offset + size).min(data.len());
+            let entropy = shannon_entropy(&data[offset..end]);
+            Some(SectionEntropy {
+                name: sec.name.clone(),
+                entropy,
+                raw_size: end - offset,
+                executable: sec.is_executable(),
+                writable: sec.is_writable(),
+            })
+        })
+        .collect()
+}
+
+/// Suspicious entropy threshold for code sections (.text, .code).
+const CODE_SECTION_ENTROPY_THRESHOLD: f64 = 7.0;
+
+/// Generate findings from per-section entropy analysis.
+#[must_use]
+pub fn section_entropy_findings(
+    sections: &[SectionEntropy],
+    target: ScanTarget,
+) -> Vec<ThreatFinding> {
+    let mut findings = Vec::new();
+
+    for sec in sections {
+        let threshold = if sec.executable {
+            CODE_SECTION_ENTROPY_THRESHOLD
+        } else {
+            7.5
+        };
+
+        if sec.entropy > threshold {
+            let mut f = ThreatFinding::new(
+                target.clone(),
+                FindingCategory::Suspicious,
+                if sec.executable {
+                    FindingSeverity::High
+                } else {
+                    FindingSeverity::Medium
+                },
+                "high_section_entropy",
+                format!(
+                    "Section '{}' has high entropy: {:.2} bits/byte (threshold: {:.1})",
+                    sec.name, sec.entropy, threshold
+                ),
+            );
+            f.metadata.insert("section".into(), sec.name.clone());
+            f.metadata
+                .insert("entropy".into(), format!("{:.4}", sec.entropy));
+            f.metadata
+                .insert("executable".into(), sec.executable.to_string());
+            findings.push(f);
+        }
+    }
+
+    findings
+}
+
+// ---------------------------------------------------------------------------
+// PE overlay detection
+// ---------------------------------------------------------------------------
+
+/// Information about data appended after the last PE section (overlay).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverlayInfo {
+    /// Offset where the overlay begins.
+    pub offset: usize,
+    /// Size of the overlay in bytes.
+    pub size: usize,
+    /// Shannon entropy of the overlay data.
+    pub entropy: f64,
+}
+
+/// Detect overlay data in a PE binary (data appended after the last section).
+#[must_use]
+pub fn detect_pe_overlay(data: &[u8], pe: &crate::pe::PeInfo) -> Option<OverlayInfo> {
+    let pe_end = pe
+        .sections
+        .iter()
+        .map(|s| (s.raw_data_offset as usize).saturating_add(s.raw_data_size as usize))
+        .max()
+        .unwrap_or(0);
+
+    if pe_end == 0 || pe_end >= data.len() {
+        return None;
+    }
+
+    let overlay_size = data.len() - pe_end;
+    // Ignore tiny overlays (alignment padding)
+    if overlay_size < 64 {
+        return None;
+    }
+
+    let entropy = shannon_entropy(&data[pe_end..]);
+    Some(OverlayInfo {
+        offset: pe_end,
+        size: overlay_size,
+        entropy,
+    })
+}
+
+/// Generate findings from PE overlay analysis.
+#[must_use]
+pub fn overlay_findings(overlay: &OverlayInfo, target: ScanTarget) -> Vec<ThreatFinding> {
+    let mut findings = Vec::new();
+
+    let mut f = ThreatFinding::new(
+        target,
+        FindingCategory::Suspicious,
+        if is_suspicious_entropy(overlay.entropy) {
+            FindingSeverity::High
+        } else {
+            FindingSeverity::Low
+        },
+        "pe_overlay",
+        format!(
+            "PE overlay detected: {} bytes at offset 0x{:X} (entropy: {:.2})",
+            overlay.size, overlay.offset, overlay.entropy
+        ),
+    );
+    f.metadata
+        .insert("overlay_offset".into(), format!("0x{:X}", overlay.offset));
+    f.metadata
+        .insert("overlay_size".into(), overlay.size.to_string());
+    f.metadata
+        .insert("overlay_entropy".into(), format!("{:.4}", overlay.entropy));
+    findings.push(f);
+
+    findings
+}
+
+// ---------------------------------------------------------------------------
+// Packed binary heuristics
+// ---------------------------------------------------------------------------
+
+/// Known packer section names.
+const PACKER_SECTIONS: &[&str] = &[
+    "UPX0", "UPX1", "UPX2", "UPX!", ".aspack", ".adata", ".vmp0", ".vmp1", ".vmp2", ".themida",
+    ".petite", ".nsp0", ".nsp1", ".nsp2", ".packed", ".mpress1", ".mpress2",
+];
+
+/// Signals that suggest a binary is packed or encrypted.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PackingSignals {
+    /// Known packer section names found.
+    pub packer_sections: Vec<String>,
+    /// Sections that are both writable and executable (W^X violation).
+    pub wx_sections: Vec<String>,
+    /// Sections with raw_size = 0 but virtual_size > 0 (unpacking target).
+    pub hollow_sections: Vec<String>,
+    /// Number of imported functions (very few = suspicious).
+    pub import_count: usize,
+    /// Whether the entry point is in a high-entropy section.
+    pub entry_in_high_entropy: bool,
+    /// Whether an overlay with high entropy exists.
+    pub has_encrypted_overlay: bool,
+}
+
+impl PackingSignals {
+    /// How many distinct packing indicators fired.
+    #[must_use]
+    pub fn signal_count(&self) -> usize {
+        let mut count = 0;
+        if !self.packer_sections.is_empty() {
+            count += 1;
+        }
+        if !self.wx_sections.is_empty() {
+            count += 1;
+        }
+        if !self.hollow_sections.is_empty() {
+            count += 1;
+        }
+        if self.import_count < 5 && self.import_count > 0 {
+            count += 1;
+        }
+        if self.entry_in_high_entropy {
+            count += 1;
+        }
+        if self.has_encrypted_overlay {
+            count += 1;
+        }
+        count
+    }
+}
+
+/// Analyze a PE binary for packing indicators.
+#[must_use]
+pub fn detect_pe_packing(
+    _data: &[u8],
+    pe: &crate::pe::PeInfo,
+    section_entropies: &[SectionEntropy],
+    overlay: Option<&OverlayInfo>,
+) -> PackingSignals {
+    let mut signals = PackingSignals::default();
+
+    // Check for known packer section names
+    for sec in &pe.sections {
+        let name_lower = sec.name.to_lowercase();
+        if PACKER_SECTIONS
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(&sec.name))
+        {
+            signals.packer_sections.push(sec.name.clone());
+        }
+        // W^X: writable + executable
+        if sec.is_writable() && sec.is_executable() {
+            signals.wx_sections.push(sec.name.clone());
+        }
+        // Hollow section: raw_size = 0 but virtual_size > 0
+        if sec.raw_data_size == 0 && sec.virtual_size > 0 {
+            signals.hollow_sections.push(sec.name.clone());
+        }
+        let _ = name_lower; // suppress unused warning from lowercased name
+    }
+
+    // Import count
+    signals.import_count = pe.imports.len();
+
+    // Entry point in high-entropy section
+    for (sec, ent) in pe.sections.iter().zip(section_entropies.iter()) {
+        let sec_start = sec.virtual_address;
+        let sec_end = sec_start.saturating_add(sec.virtual_size);
+        if pe.entry_point >= sec_start
+            && pe.entry_point < sec_end
+            && ent.entropy > CODE_SECTION_ENTROPY_THRESHOLD
+        {
+            signals.entry_in_high_entropy = true;
+            break;
+        }
+    }
+
+    // Encrypted overlay
+    if let Some(ov) = overlay {
+        if is_suspicious_entropy(ov.entropy) {
+            signals.has_encrypted_overlay = true;
+        }
+    }
+
+    signals
+}
+
+/// Generate findings from packing analysis.
+#[must_use]
+pub fn packing_findings(signals: &PackingSignals, target: ScanTarget) -> Vec<ThreatFinding> {
+    let count = signals.signal_count();
+    if count == 0 {
+        return Vec::new();
+    }
+
+    let severity = match count {
+        1 => FindingSeverity::Low,
+        2 => FindingSeverity::Medium,
+        _ => FindingSeverity::High,
+    };
+
+    let mut descriptions = Vec::new();
+    if !signals.packer_sections.is_empty() {
+        descriptions.push(format!(
+            "packer sections: {}",
+            signals.packer_sections.join(", ")
+        ));
+    }
+    if !signals.wx_sections.is_empty() {
+        descriptions.push(format!("W^X sections: {}", signals.wx_sections.join(", ")));
+    }
+    if !signals.hollow_sections.is_empty() {
+        descriptions.push(format!(
+            "hollow sections: {}",
+            signals.hollow_sections.join(", ")
+        ));
+    }
+    if signals.import_count < 5 && signals.import_count > 0 {
+        descriptions.push(format!("few imports ({})", signals.import_count));
+    }
+    if signals.entry_in_high_entropy {
+        descriptions.push("entry point in high-entropy section".into());
+    }
+    if signals.has_encrypted_overlay {
+        descriptions.push("encrypted overlay".into());
+    }
+
+    let mut f = ThreatFinding::new(
+        target,
+        FindingCategory::Suspicious,
+        severity,
+        "packed_binary",
+        format!(
+            "Packed/encrypted binary ({} signal{}): {}",
+            count,
+            if count == 1 { "" } else { "s" },
+            descriptions.join("; ")
+        ),
+    );
+    f.metadata.insert("signal_count".into(), count.to_string());
+    for (i, desc) in descriptions.iter().enumerate() {
+        f.metadata.insert(format!("signal_{i}"), desc.clone());
+    }
+
+    vec![f]
 }
 
 // ---------------------------------------------------------------------------
@@ -753,5 +1109,296 @@ mod tests {
         let mut findings: Vec<ThreatFinding> = vec![];
         escalate_severity(&mut findings, &analysis);
         assert!(findings.is_empty());
+    }
+
+    // ── Section entropy tests ──────────────────────────────────────────
+
+    #[test]
+    fn pe_section_entropy_basic() {
+        // Build minimal PE with one section containing known data
+        let data = vec![0u8; 1024];
+        // Place section raw data at offset 512, size 256, all zeros
+        let pe = crate::pe::PeInfo {
+            machine: crate::pe::PeMachine::Amd64,
+            num_sections: 1,
+            timestamp: 0,
+            is_dll: false,
+            is_64bit: true,
+            entry_point: 0x1000,
+            sections: vec![crate::pe::PeSection {
+                name: ".text".into(),
+                virtual_size: 0x1000,
+                virtual_address: 0x1000,
+                raw_data_size: 256,
+                raw_data_offset: 512,
+                characteristics: 0x6000_0020, // CODE | EXECUTE | READ
+            }],
+            imports: vec![],
+            import_functions: vec![],
+            exports: vec![],
+        };
+
+        let entropies = pe_section_entropy(&data, &pe);
+        assert_eq!(entropies.len(), 1);
+        assert_eq!(entropies[0].name, ".text");
+        assert!(entropies[0].entropy < 0.01); // all zeros = ~0 entropy
+        assert!(entropies[0].executable);
+    }
+
+    #[test]
+    fn section_entropy_findings_high_code_entropy() {
+        let sections = vec![SectionEntropy {
+            name: ".text".into(),
+            entropy: 7.5,
+            raw_size: 4096,
+            executable: true,
+            writable: false,
+        }];
+        let findings = section_entropy_findings(&sections, ScanTarget::Memory);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_name, "high_section_entropy");
+        assert_eq!(findings[0].severity, FindingSeverity::High);
+    }
+
+    #[test]
+    fn section_entropy_findings_normal_code() {
+        let sections = vec![SectionEntropy {
+            name: ".text".into(),
+            entropy: 6.5,
+            raw_size: 4096,
+            executable: true,
+            writable: false,
+        }];
+        let findings = section_entropy_findings(&sections, ScanTarget::Memory);
+        assert!(findings.is_empty()); // 6.5 < 7.0 threshold for code
+    }
+
+    #[test]
+    fn section_entropy_findings_high_data_entropy() {
+        let sections = vec![SectionEntropy {
+            name: ".rsrc".into(),
+            entropy: 7.8,
+            raw_size: 4096,
+            executable: false,
+            writable: false,
+        }];
+        let findings = section_entropy_findings(&sections, ScanTarget::Memory);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, FindingSeverity::Medium);
+    }
+
+    // ── Overlay detection tests ────────────────────────────────────────
+
+    #[test]
+    fn detect_pe_overlay_present() {
+        let data = vec![0u8; 2048];
+        let pe = crate::pe::PeInfo {
+            machine: crate::pe::PeMachine::I386,
+            num_sections: 1,
+            timestamp: 0,
+            is_dll: false,
+            is_64bit: false,
+            entry_point: 0x1000,
+            sections: vec![crate::pe::PeSection {
+                name: ".text".into(),
+                virtual_size: 0x1000,
+                virtual_address: 0x1000,
+                raw_data_size: 512,
+                raw_data_offset: 512,
+                characteristics: 0x6000_0020,
+            }],
+            imports: vec![],
+            import_functions: vec![],
+            exports: vec![],
+        };
+        // PE ends at 512 + 512 = 1024, file is 2048, so 1024 bytes overlay
+        let overlay = detect_pe_overlay(&data, &pe);
+        assert!(overlay.is_some());
+        let ov = overlay.unwrap();
+        assert_eq!(ov.offset, 1024);
+        assert_eq!(ov.size, 1024);
+    }
+
+    #[test]
+    fn detect_pe_overlay_none() {
+        let data = vec![0u8; 1024];
+        let pe = crate::pe::PeInfo {
+            machine: crate::pe::PeMachine::I386,
+            num_sections: 1,
+            timestamp: 0,
+            is_dll: false,
+            is_64bit: false,
+            entry_point: 0x1000,
+            sections: vec![crate::pe::PeSection {
+                name: ".text".into(),
+                virtual_size: 0x1000,
+                virtual_address: 0x1000,
+                raw_data_size: 512,
+                raw_data_offset: 512,
+                characteristics: 0x6000_0020,
+            }],
+            imports: vec![],
+            import_functions: vec![],
+            exports: vec![],
+        };
+        // PE ends at 1024 = file size, no overlay
+        let overlay = detect_pe_overlay(&data, &pe);
+        assert!(overlay.is_none());
+    }
+
+    #[test]
+    fn overlay_findings_high_entropy() {
+        let ov = OverlayInfo {
+            offset: 1024,
+            size: 1024,
+            entropy: 7.9,
+        };
+        let findings = overlay_findings(&ov, ScanTarget::Memory);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, FindingSeverity::High);
+        assert_eq!(findings[0].rule_name, "pe_overlay");
+    }
+
+    #[test]
+    fn overlay_findings_low_entropy() {
+        let ov = OverlayInfo {
+            offset: 1024,
+            size: 1024,
+            entropy: 3.0,
+        };
+        let findings = overlay_findings(&ov, ScanTarget::Memory);
+        assert_eq!(findings[0].severity, FindingSeverity::Low);
+    }
+
+    // ── Packing heuristics tests ───────────────────────────────────────
+
+    #[test]
+    fn detect_pe_packing_upx() {
+        let pe = crate::pe::PeInfo {
+            machine: crate::pe::PeMachine::I386,
+            num_sections: 3,
+            timestamp: 0,
+            is_dll: false,
+            is_64bit: false,
+            entry_point: 0x1000,
+            sections: vec![
+                crate::pe::PeSection {
+                    name: "UPX0".into(),
+                    virtual_size: 0x10000,
+                    virtual_address: 0x1000,
+                    raw_data_size: 0,
+                    raw_data_offset: 0,
+                    characteristics: 0xE000_0020,
+                },
+                crate::pe::PeSection {
+                    name: "UPX1".into(),
+                    virtual_size: 0x5000,
+                    virtual_address: 0x11000,
+                    raw_data_size: 0x5000,
+                    raw_data_offset: 512,
+                    characteristics: 0xE000_0020,
+                },
+            ],
+            imports: vec!["kernel32.dll".into()],
+            import_functions: vec![],
+            exports: vec![],
+        };
+        let entropies = vec![
+            SectionEntropy {
+                name: "UPX0".into(),
+                entropy: 0.0,
+                raw_size: 0,
+                executable: true,
+                writable: true,
+            },
+            SectionEntropy {
+                name: "UPX1".into(),
+                entropy: 7.8,
+                raw_size: 0x5000,
+                executable: true,
+                writable: true,
+            },
+        ];
+        let signals = detect_pe_packing(&[], &pe, &entropies, None);
+        assert!(!signals.packer_sections.is_empty());
+        assert!(!signals.wx_sections.is_empty());
+        assert!(!signals.hollow_sections.is_empty());
+        assert!(signals.import_count < 5);
+        assert!(signals.signal_count() >= 4);
+    }
+
+    #[test]
+    fn detect_pe_packing_clean() {
+        let pe = crate::pe::PeInfo {
+            machine: crate::pe::PeMachine::Amd64,
+            num_sections: 2,
+            timestamp: 0,
+            is_dll: false,
+            is_64bit: true,
+            entry_point: 0x1000,
+            sections: vec![
+                crate::pe::PeSection {
+                    name: ".text".into(),
+                    virtual_size: 0x1000,
+                    virtual_address: 0x1000,
+                    raw_data_size: 0x1000,
+                    raw_data_offset: 512,
+                    characteristics: 0x6000_0020, // CODE | EXECUTE | READ (not writable)
+                },
+                crate::pe::PeSection {
+                    name: ".data".into(),
+                    virtual_size: 0x1000,
+                    virtual_address: 0x2000,
+                    raw_data_size: 0x200,
+                    raw_data_offset: 0x1200,
+                    characteristics: 0xC000_0040, // INITIALIZED | READ | WRITE (not executable)
+                },
+            ],
+            imports: vec![
+                "kernel32.dll".into(),
+                "user32.dll".into(),
+                "ntdll.dll".into(),
+                "advapi32.dll".into(),
+                "ws2_32.dll".into(),
+            ],
+            import_functions: vec![],
+            exports: vec![],
+        };
+        let entropies = vec![
+            SectionEntropy {
+                name: ".text".into(),
+                entropy: 6.2,
+                raw_size: 0x1000,
+                executable: true,
+                writable: false,
+            },
+            SectionEntropy {
+                name: ".data".into(),
+                entropy: 4.0,
+                raw_size: 0x200,
+                executable: false,
+                writable: true,
+            },
+        ];
+        let signals = detect_pe_packing(&[], &pe, &entropies, None);
+        assert_eq!(signals.signal_count(), 0);
+    }
+
+    #[test]
+    fn packing_findings_severity_scales() {
+        let mut signals = PackingSignals::default();
+        assert!(packing_findings(&signals, ScanTarget::Memory).is_empty());
+
+        signals.packer_sections = vec!["UPX0".into()];
+        let f = packing_findings(&signals, ScanTarget::Memory);
+        assert_eq!(f[0].severity, FindingSeverity::Low);
+
+        signals.wx_sections = vec![".text".into()];
+        let f = packing_findings(&signals, ScanTarget::Memory);
+        assert_eq!(f[0].severity, FindingSeverity::Medium);
+
+        signals.entry_in_high_entropy = true;
+        let f = packing_findings(&signals, ScanTarget::Memory);
+        assert_eq!(f[0].severity, FindingSeverity::High);
     }
 }
