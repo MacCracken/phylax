@@ -226,11 +226,7 @@ fn hex_has_wildcards(s: &str) -> bool {
 fn parse_hex_wildcard(s: &str) -> Result<YaraPattern> {
     use std::fmt::Write;
 
-    let clean: String = s
-        .chars()
-        .filter(|c| !c.is_whitespace() || *c == ' ')
-        .collect();
-    let tokens: Vec<&str> = clean.split_whitespace().collect();
+    let tokens: Vec<&str> = s.split_whitespace().collect();
 
     let mut regex = String::from("(?-u)");
 

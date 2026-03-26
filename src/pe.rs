@@ -358,9 +358,12 @@ fn parse_pe_imports(
 
 /// Compute the import hash (imphash) from a list of PE imports.
 ///
-/// The imphash is the MD5 hash of the ordered, lowercased, comma-separated
-/// "dll.function" strings (with the DLL extension stripped).
-/// This is the standard algorithm used by VirusTotal, Mandiant, and pefile.
+/// Uses the standard imphash algorithm (ordered, lowercased, comma-separated
+/// "dll.function" strings with the DLL extension stripped), but hashes with
+/// SHA-256 (truncated to 128 bits) instead of MD5 to avoid an MD5 dependency.
+///
+/// Note: this produces different hashes than pefile/VirusTotal (which use MD5).
+/// Use for internal clustering and comparison, not for cross-tool lookups.
 #[must_use]
 pub fn compute_imphash(imports: &[PeImport]) -> String {
     use sha2::{Digest, Sha256};

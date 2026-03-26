@@ -601,7 +601,6 @@ impl PackingSignals {
 /// Analyze a PE binary for packing indicators.
 #[must_use]
 pub fn detect_pe_packing(
-    _data: &[u8],
     pe: &crate::pe::PeInfo,
     section_entropies: &[SectionEntropy],
     overlay: Option<&OverlayInfo>,
@@ -610,7 +609,6 @@ pub fn detect_pe_packing(
 
     // Check for known packer section names
     for sec in &pe.sections {
-        let name_lower = sec.name.to_lowercase();
         if PACKER_SECTIONS
             .iter()
             .any(|p| p.eq_ignore_ascii_case(&sec.name))
@@ -625,7 +623,6 @@ pub fn detect_pe_packing(
         if sec.raw_data_size == 0 && sec.virtual_size > 0 {
             signals.hollow_sections.push(sec.name.clone());
         }
-        let _ = name_lower; // suppress unused warning from lowercased name
     }
 
     // Import count
@@ -1319,7 +1316,7 @@ mod tests {
                 writable: true,
             },
         ];
-        let signals = detect_pe_packing(&[], &pe, &entropies, None);
+        let signals = detect_pe_packing(&pe, &entropies, None);
         assert!(!signals.packer_sections.is_empty());
         assert!(!signals.wx_sections.is_empty());
         assert!(!signals.hollow_sections.is_empty());
@@ -1380,7 +1377,7 @@ mod tests {
                 writable: true,
             },
         ];
-        let signals = detect_pe_packing(&[], &pe, &entropies, None);
+        let signals = detect_pe_packing(&pe, &entropies, None);
         assert_eq!(signals.signal_count(), 0);
     }
 
