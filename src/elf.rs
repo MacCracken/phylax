@@ -27,6 +27,62 @@ pub struct ElfInfo {
     pub needed_libs: Vec<String>,
     /// Symbol names from .dynsym / .symtab.
     pub symbols: Vec<String>,
+    /// Program headers (segments).
+    pub segments: Vec<ElfSegment>,
+    /// Interpreter path (from PT_INTERP), if present. Absent = statically linked.
+    pub interpreter: Option<String>,
+    /// Security features detected from program headers.
+    pub security: ElfSecurity,
+}
+
+/// An ELF program header (segment).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElfSegment {
+    /// Segment type (PT_LOAD, PT_INTERP, etc.).
+    pub seg_type: u32,
+    /// Segment flags (PF_R, PF_W, PF_X).
+    pub flags: u32,
+    /// Virtual address.
+    pub vaddr: u64,
+    /// File offset.
+    pub offset: u64,
+    /// File size.
+    pub file_size: u64,
+    /// Memory size.
+    pub mem_size: u64,
+}
+
+impl ElfSegment {
+    /// Whether this segment is readable.
+    #[must_use]
+    pub fn is_readable(&self) -> bool {
+        self.flags & 0x4 != 0
+    }
+
+    /// Whether this segment is writable.
+    #[must_use]
+    pub fn is_writable(&self) -> bool {
+        self.flags & 0x2 != 0
+    }
+
+    /// Whether this segment is executable.
+    #[must_use]
+    pub fn is_executable(&self) -> bool {
+        self.flags & 0x1 != 0
+    }
+}
+
+/// Security feature detection from ELF program headers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ElfSecurity {
+    /// Whether GNU_RELRO is present (read-only relocations).
+    pub has_relro: bool,
+    /// Whether any segment has RWX permissions (W^X violation).
+    pub has_rwx_segment: bool,
+    /// Whether the binary is statically linked (no PT_INTERP).
+    pub is_static: bool,
+    /// Whether a GNU_STACK segment exists with execute permission.
+    pub executable_stack: bool,
 }
 
 /// ELF class (bitness).
@@ -234,27 +290,43 @@ pub fn parse_elf(data: &[u8]) -> Option<ElfInfo> {
     let is_64 = class == ElfClass::Elf64;
 
     // Parse header fields based on class
-    let (entry_point, sh_offset, sh_entsize, sh_num, sh_strndx) = if is_64 {
-        if data.len() < 64 {
-            return None;
-        }
-        let entry = read_u64(data, 24, le)?;
-        let shoff = read_u64(data, 40, le)? as usize;
-        let shentsize = read_u16(data, 58, le)? as usize;
-        let shnum = read_u16(data, 60, le)? as usize;
-        let shstrndx = read_u16(data, 62, le)? as usize;
-        (entry, shoff, shentsize, shnum, shstrndx)
-    } else {
-        if data.len() < 52 {
-            return None;
-        }
-        let entry = read_u32(data, 24, le)? as u64;
-        let shoff = read_u32(data, 32, le)? as usize;
-        let shentsize = read_u16(data, 46, le)? as usize;
-        let shnum = read_u16(data, 48, le)? as usize;
-        let shstrndx = read_u16(data, 50, le)? as usize;
-        (entry, shoff, shentsize, shnum, shstrndx)
-    };
+    #[allow(clippy::type_complexity)]
+    let (entry_point, ph_offset, ph_entsize, ph_num, sh_offset, sh_entsize, sh_num, sh_strndx) =
+        if is_64 {
+            if data.len() < 64 {
+                return None;
+            }
+            let entry = read_u64(data, 24, le)?;
+            let phoff = read_u64(data, 32, le)? as usize;
+            let shoff = read_u64(data, 40, le)? as usize;
+            let phentsize = read_u16(data, 54, le)? as usize;
+            let phnum = read_u16(data, 56, le)? as usize;
+            let shentsize = read_u16(data, 58, le)? as usize;
+            let shnum = read_u16(data, 60, le)? as usize;
+            let shstrndx = read_u16(data, 62, le)? as usize;
+            (
+                entry, phoff, phentsize, phnum, shoff, shentsize, shnum, shstrndx,
+            )
+        } else {
+            if data.len() < 52 {
+                return None;
+            }
+            let entry = read_u32(data, 24, le)? as u64;
+            let phoff = read_u32(data, 28, le)? as usize;
+            let shoff = read_u32(data, 32, le)? as usize;
+            let phentsize = read_u16(data, 42, le)? as usize;
+            let phnum = read_u16(data, 44, le)? as usize;
+            let shentsize = read_u16(data, 46, le)? as usize;
+            let shnum = read_u16(data, 48, le)? as usize;
+            let shstrndx = read_u16(data, 50, le)? as usize;
+            (
+                entry, phoff, phentsize, phnum, shoff, shentsize, shnum, shstrndx,
+            )
+        };
+
+    // Parse program headers (segments)
+    let (segments, interpreter, security) =
+        parse_program_headers(data, ph_offset, ph_entsize, ph_num, is_64, le);
 
     if sh_offset == 0 || sh_entsize == 0 || sh_num == 0 {
         return Some(ElfInfo {
@@ -267,6 +339,9 @@ pub fn parse_elf(data: &[u8]) -> Option<ElfInfo> {
             sections: vec![],
             needed_libs: vec![],
             symbols: vec![],
+            segments,
+            interpreter,
+            security,
         });
     }
 
@@ -368,7 +443,103 @@ pub fn parse_elf(data: &[u8]) -> Option<ElfInfo> {
         sections,
         needed_libs,
         symbols,
+        segments,
+        interpreter,
+        security,
     })
+}
+
+/// Parse program headers into segments with security feature detection.
+fn parse_program_headers(
+    data: &[u8],
+    ph_offset: usize,
+    ph_entsize: usize,
+    ph_num: usize,
+    is_64: bool,
+    le: bool,
+) -> (Vec<ElfSegment>, Option<String>, ElfSecurity) {
+    const PT_INTERP: u32 = 3;
+    const PT_GNU_RELRO: u32 = 0x6474E552;
+    const PT_GNU_STACK: u32 = 0x6474E551;
+    const MAX_SEGMENTS: usize = 256;
+
+    let mut segments = Vec::new();
+    let mut interpreter = None;
+    let mut security = ElfSecurity {
+        is_static: true, // assume static until PT_INTERP found
+        ..Default::default()
+    };
+
+    if ph_offset == 0 || ph_entsize == 0 || ph_num == 0 {
+        return (segments, interpreter, security);
+    }
+
+    let capped = ph_num.min(MAX_SEGMENTS);
+    for i in 0..capped {
+        let ph = ph_offset + i * ph_entsize;
+        if data.len() < ph + ph_entsize {
+            break;
+        }
+
+        let seg_type = read_u32(data, ph, le).unwrap_or(0);
+
+        let (flags, vaddr, offset, file_size, mem_size) = if is_64 {
+            (
+                read_u32(data, ph + 4, le).unwrap_or(0),
+                read_u64(data, ph + 16, le).unwrap_or(0),
+                read_u64(data, ph + 8, le).unwrap_or(0),
+                read_u64(data, ph + 32, le).unwrap_or(0),
+                read_u64(data, ph + 40, le).unwrap_or(0),
+            )
+        } else {
+            (
+                read_u32(data, ph + 24, le).unwrap_or(0),
+                read_u32(data, ph + 8, le).unwrap_or(0) as u64,
+                read_u32(data, ph + 4, le).unwrap_or(0) as u64,
+                read_u32(data, ph + 16, le).unwrap_or(0) as u64,
+                read_u32(data, ph + 20, le).unwrap_or(0) as u64,
+            )
+        };
+
+        let seg = ElfSegment {
+            seg_type,
+            flags,
+            vaddr,
+            offset,
+            file_size,
+            mem_size,
+        };
+
+        // Security checks
+        if seg_type == PT_INTERP {
+            security.is_static = false;
+            let interp_off = offset as usize;
+            let interp_len = file_size as usize;
+            if interp_off < data.len() {
+                let end = (interp_off + interp_len).min(data.len());
+                let s = &data[interp_off..end];
+                let nul = s.iter().position(|&b| b == 0).unwrap_or(s.len());
+                interpreter = Some(String::from_utf8_lossy(&s[..nul]).into_owned());
+            }
+        }
+
+        if seg_type == PT_GNU_RELRO {
+            security.has_relro = true;
+        }
+
+        if seg_type == PT_GNU_STACK && seg.is_executable() {
+            security.executable_stack = true;
+        }
+
+        // RWX segment detection
+        if seg.is_readable() && seg.is_writable() && seg.is_executable() {
+            security.has_rwx_segment = true;
+        }
+
+        segments.push(seg);
+    }
+
+    (segments, interpreter, security)
 }
 
 /// Extract DT_NEEDED entries from the .dynamic section.
@@ -535,6 +706,9 @@ mod tests {
             sections: vec![],
             needed_libs: vec!["libc.so.6".into()],
             symbols: vec!["main".into()],
+            segments: vec![],
+            interpreter: Some("/lib64/ld-linux-x86-64.so.2".into()),
+            security: ElfSecurity::default(),
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: ElfInfo = serde_json::from_str(&json).unwrap();
@@ -671,6 +845,46 @@ mod tests {
             "sections should be capped, got {}",
             info.sections.len()
         );
+    }
+
+    #[test]
+    fn parse_elf_static_no_interp() {
+        // Minimal ELF with no program headers — should be detected as static
+        let mut data = vec![0u8; 128];
+        data[0..4].copy_from_slice(&[0x7f, 0x45, 0x4c, 0x46]);
+        data[4] = 2; // 64-bit
+        data[5] = 1; // little
+        data[6] = 1;
+        data[16] = 2; // executable
+        data[18] = 62; // x86_64
+
+        let info = parse_elf(&data).unwrap();
+        assert!(info.interpreter.is_none());
+        assert!(info.security.is_static);
+    }
+
+    #[test]
+    fn elf_segment_flags() {
+        let seg = ElfSegment {
+            seg_type: 1,
+            flags: 0x7, // PF_X | PF_W | PF_R
+            vaddr: 0,
+            offset: 0,
+            file_size: 0,
+            mem_size: 0,
+        };
+        assert!(seg.is_readable());
+        assert!(seg.is_writable());
+        assert!(seg.is_executable());
+    }
+
+    #[test]
+    fn elf_security_default() {
+        let sec = ElfSecurity::default();
+        assert!(!sec.has_relro);
+        assert!(!sec.has_rwx_segment);
+        assert!(!sec.is_static);
+        assert!(!sec.executable_stack);
     }
 
     mod proptest_tests {

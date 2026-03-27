@@ -57,6 +57,76 @@ pub fn is_suspicious_entropy(entropy: f64) -> bool {
     entropy > 7.5
 }
 
+/// Compute the chi-squared statistic for a byte distribution.
+///
+/// Measures how much the byte frequency distribution deviates from uniform.
+/// For truly random data (encryption), chi² ≈ 256 (degrees of freedom = 255).
+/// For compressed data, chi² is typically higher (skewed distribution).
+/// For plaintext/code, chi² is much higher (very non-uniform).
+///
+/// Returns 0.0 for empty data.
+#[inline]
+#[must_use]
+pub fn chi_squared(data: &[u8]) -> f64 {
+    if data.is_empty() {
+        return 0.0;
+    }
+
+    let mut freq = [0u64; 256];
+    for &b in data {
+        freq[b as usize] += 1;
+    }
+
+    let expected = data.len() as f64 / 256.0;
+    let mut chi2 = 0.0;
+
+    for &count in &freq {
+        let diff = count as f64 - expected;
+        chi2 += (diff * diff) / expected;
+    }
+
+    chi2
+}
+
+/// Classify data randomness based on chi-squared value.
+///
+/// - `Encrypted`: chi² close to 256 (uniform distribution)
+/// - `Compressed`: chi² moderately elevated (slightly skewed)
+/// - `Normal`: chi² very high (structured data like text/code)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum RandomnessClass {
+    /// Likely encrypted or truly random (chi² roughly 128–512).
+    Encrypted,
+    /// Likely compressed (chi² roughly 512–4096).
+    Compressed,
+    /// Normal structured data (chi² > 4096).
+    Normal,
+}
+
+impl fmt::Display for RandomnessClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Encrypted => write!(f, "encrypted"),
+            Self::Compressed => write!(f, "compressed"),
+            Self::Normal => write!(f, "normal"),
+        }
+    }
+}
+
+/// Classify data based on its chi-squared statistic.
+#[inline]
+#[must_use]
+pub fn classify_randomness(chi2: f64) -> RandomnessClass {
+    if chi2 <= 512.0 {
+        RandomnessClass::Encrypted
+    } else if chi2 <= 4096.0 {
+        RandomnessClass::Compressed
+    } else {
+        RandomnessClass::Normal
+    }
+}
+
 // ---------------------------------------------------------------------------
 // File type detection via magic bytes
 // ---------------------------------------------------------------------------
@@ -1133,6 +1203,9 @@ mod tests {
             imports: vec![],
             import_functions: vec![],
             exports: vec![],
+            has_tls_callbacks: false,
+            pdb_path: None,
+            rich_entries: vec![],
         };
 
         let entropies = pe_section_entropy(&data, &pe);
@@ -1207,6 +1280,9 @@ mod tests {
             imports: vec![],
             import_functions: vec![],
             exports: vec![],
+            has_tls_callbacks: false,
+            pdb_path: None,
+            rich_entries: vec![],
         };
         // PE ends at 512 + 512 = 1024, file is 2048, so 1024 bytes overlay
         let overlay = detect_pe_overlay(&data, &pe);
@@ -1237,6 +1313,9 @@ mod tests {
             imports: vec![],
             import_functions: vec![],
             exports: vec![],
+            has_tls_callbacks: false,
+            pdb_path: None,
+            rich_entries: vec![],
         };
         // PE ends at 1024 = file size, no overlay
         let overlay = detect_pe_overlay(&data, &pe);
@@ -1299,6 +1378,9 @@ mod tests {
             imports: vec!["kernel32.dll".into()],
             import_functions: vec![],
             exports: vec![],
+            has_tls_callbacks: false,
+            pdb_path: None,
+            rich_entries: vec![],
         };
         let entropies = vec![
             SectionEntropy {
@@ -1360,6 +1442,9 @@ mod tests {
             ],
             import_functions: vec![],
             exports: vec![],
+            has_tls_callbacks: false,
+            pdb_path: None,
+            rich_entries: vec![],
         };
         let entropies = vec![
             SectionEntropy {
@@ -1397,5 +1482,50 @@ mod tests {
         signals.entry_in_high_entropy = true;
         let f = packing_findings(&signals, ScanTarget::Memory);
         assert_eq!(f[0].severity, FindingSeverity::High);
+    }
+
+    // ── Chi-squared tests ──────────────────────────────────────────────
+
+    #[test]
+    fn chi_squared_empty() {
+        assert_eq!(chi_squared(&[]), 0.0);
+    }
+
+    #[test]
+    fn chi_squared_uniform() {
+        // Perfectly uniform distribution: all 256 values equally represented
+        let mut data = Vec::with_capacity(256 * 100);
+        for _ in 0..100 {
+            for b in 0..=255u8 {
+                data.push(b);
+            }
+        }
+        let chi2 = chi_squared(&data);
+        // Perfectly uniform: chi² should be very close to 0
+        assert!(
+            chi2 < 1.0,
+            "uniform distribution chi² should be ~0, got {chi2}"
+        );
+    }
+
+    #[test]
+    fn chi_squared_single_value() {
+        // All zeros — maximally non-uniform
+        let data = vec![0u8; 1024];
+        let chi2 = chi_squared(&data);
+        // Should be very high (one bin has all, 255 bins empty)
+        assert!(
+            chi2 > 100_000.0,
+            "single-value chi² should be very high, got {chi2}"
+        );
+    }
+
+    #[test]
+    fn classify_randomness_ranges() {
+        assert_eq!(classify_randomness(200.0), RandomnessClass::Encrypted);
+        assert_eq!(classify_randomness(512.0), RandomnessClass::Encrypted);
+        assert_eq!(classify_randomness(1000.0), RandomnessClass::Compressed);
+        assert_eq!(classify_randomness(4096.0), RandomnessClass::Compressed);
+        assert_eq!(classify_randomness(10000.0), RandomnessClass::Normal);
     }
 }

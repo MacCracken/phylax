@@ -45,6 +45,23 @@ pub struct PeInfo {
     pub import_functions: Vec<PeImport>,
     /// Exported function names.
     pub exports: Vec<String>,
+    /// Whether TLS callbacks are present (anti-debug / pre-entrypoint execution).
+    pub has_tls_callbacks: bool,
+    /// PDB debug path (from debug directory), if present.
+    pub pdb_path: Option<String>,
+    /// Rich header entries (compiler/linker tool IDs), if present.
+    pub rich_entries: Vec<RichEntry>,
+}
+
+/// A Rich header entry — identifies a build tool and its usage count.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RichEntry {
+    /// Tool ID (product ID << 16 | build ID).
+    pub tool_id: u16,
+    /// Product/compiler version.
+    pub product_id: u16,
+    /// Number of times this tool was used.
+    pub count: u32,
 }
 
 /// PE machine architecture.
@@ -219,6 +236,15 @@ pub fn parse_pe(data: &[u8]) -> Option<PeInfo> {
     // Parse export directory
     let exports = parse_pe_exports(data, opt_offset, is_64bit);
 
+    // TLS callback detection (data directory entry #9)
+    let has_tls_callbacks = detect_tls_callbacks(data, opt_offset, is_64bit);
+
+    // Debug directory / PDB path (data directory entry #6)
+    let pdb_path = parse_debug_directory(data, opt_offset, is_64bit);
+
+    // Rich header (between DOS stub and PE signature)
+    let rich_entries = parse_rich_header(data, pe_offset);
+
     Some(PeInfo {
         machine,
         num_sections,
@@ -230,6 +256,9 @@ pub fn parse_pe(data: &[u8]) -> Option<PeInfo> {
         imports,
         import_functions,
         exports,
+        has_tls_callbacks,
+        pdb_path,
+        rich_entries,
     })
 }
 
@@ -484,6 +513,158 @@ fn rva_to_offset(data: &[u8], opt_offset: usize, rva: u32) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
+// TLS callback detection
+// ---------------------------------------------------------------------------
+
+/// Check if the PE has TLS callbacks (data directory entry #9).
+fn detect_tls_callbacks(data: &[u8], opt_offset: usize, is_64bit: bool) -> bool {
+    // TLS directory is data directory entry #9
+    // PE32: base offset 96 + 9*8 = 168; PE32+: base offset 112 + 9*8 = 184
+    let dd_offset = if is_64bit {
+        opt_offset + 184
+    } else {
+        opt_offset + 168
+    };
+
+    let tls_rva = match read_u32_le(data, dd_offset) {
+        Some(rva) if rva > 0 => rva,
+        _ => return false,
+    };
+
+    let tls_size = read_u32_le(data, dd_offset + 4).unwrap_or(0);
+    if tls_size == 0 {
+        return false;
+    }
+
+    // TLS directory exists — check if callback table pointer is non-zero
+    if let Some(tls_offset) = rva_to_offset(data, opt_offset, tls_rva) {
+        // AddressOfCallBacks is at offset 12 (PE32) or 24 (PE32+) in the TLS directory
+        let cb_field_offset = if is_64bit {
+            tls_offset + 24
+        } else {
+            tls_offset + 12
+        };
+
+        let callbacks_ptr = if is_64bit {
+            data.get(cb_field_offset..cb_field_offset + 8)
+                .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+                .unwrap_or(0)
+        } else {
+            read_u32_le(data, cb_field_offset).unwrap_or(0) as u64
+        };
+
+        return callbacks_ptr != 0;
+    }
+
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Debug directory / PDB path
+// ---------------------------------------------------------------------------
+
+/// Extract PDB path from the PE debug directory (data directory entry #6).
+fn parse_debug_directory(data: &[u8], opt_offset: usize, is_64bit: bool) -> Option<String> {
+    // Debug directory is data directory entry #6
+    let dd_offset = if is_64bit {
+        opt_offset + 160
+    } else {
+        opt_offset + 144
+    };
+
+    let debug_rva = match read_u32_le(data, dd_offset) {
+        Some(rva) if rva > 0 => rva,
+        _ => return None,
+    };
+
+    let debug_offset = rva_to_offset(data, opt_offset, debug_rva)?;
+
+    // Debug directory entry: Type is at offset +12 (u32)
+    // IMAGE_DEBUG_TYPE_CODEVIEW = 2
+    let debug_type = read_u32_le(data, debug_offset + 12)?;
+    if debug_type != 2 {
+        return None;
+    }
+
+    // PointerToRawData at offset +24
+    let raw_offset = read_u32_le(data, debug_offset + 24)? as usize;
+
+    // CodeView header: check for "RSDS" signature
+    if data.len() < raw_offset + 24 {
+        return None;
+    }
+    if data.get(raw_offset..raw_offset + 4)? != b"RSDS" {
+        return None;
+    }
+
+    // PDB path starts at offset +24 from RSDS header
+    let path = read_ascii(data, raw_offset + 24, 260);
+    if path.is_empty() { None } else { Some(path) }
+}
+
+// ---------------------------------------------------------------------------
+// Rich header parsing
+// ---------------------------------------------------------------------------
+
+/// Parse the Rich header from between the DOS stub and PE signature.
+///
+/// The Rich header is XOR-encrypted with a key found at the "Rich" marker.
+fn parse_rich_header(data: &[u8], pe_offset: usize) -> Vec<RichEntry> {
+    let mut entries = Vec::new();
+
+    // Search for "Rich" marker between DOS header and PE signature
+    let search_end = pe_offset.min(data.len());
+    let rich_pos = (0x80..search_end).find(|&i| data.get(i..i + 4) == Some(b"Rich"));
+
+    let rich_pos = match rich_pos {
+        Some(p) => p,
+        None => return entries,
+    };
+
+    // XOR key is the 4 bytes after "Rich"
+    let key = match read_u32_le(data, rich_pos + 4) {
+        Some(k) => k,
+        None => return entries,
+    };
+
+    // Search backwards for "DanS" marker (XOR'd with key)
+    let dans_marker = 0x536E6144u32 ^ key; // "DanS" XOR'd
+    let dans_pos = (0x80..rich_pos)
+        .rev()
+        .find(|&i| read_u32_le(data, i) == Some(dans_marker));
+
+    let dans_pos = match dans_pos {
+        Some(p) => p,
+        None => return entries,
+    };
+
+    // Entries start after DanS + 3 padding DWORDs (each XOR'd with key)
+    let entries_start = dans_pos + 16; // DanS(4) + 3 * padding(4) = 16
+
+    // Each entry is 8 bytes: tool_id(2) + product_id(2) (as u32) + count(4)
+    let mut i = entries_start;
+    while i + 8 <= rich_pos {
+        let val1 = read_u32_le(data, i).unwrap_or(0) ^ key;
+        let val2 = read_u32_le(data, i + 4).unwrap_or(0) ^ key;
+
+        let tool_id = (val1 & 0xFFFF) as u16;
+        let product_id = (val1 >> 16) as u16;
+        let count = val2;
+
+        if tool_id != 0 || product_id != 0 {
+            entries.push(RichEntry {
+                tool_id,
+                product_id,
+                count,
+            });
+        }
+        i += 8;
+    }
+
+    entries
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -731,6 +912,9 @@ mod tests {
             imports: vec!["kernel32.dll".into()],
             import_functions: vec![],
             exports: vec!["DllMain".into()],
+            has_tls_callbacks: false,
+            pdb_path: None,
+            rich_entries: vec![],
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: PeInfo = serde_json::from_str(&json).unwrap();
@@ -875,5 +1059,41 @@ mod tests {
                 let _ = read_u32_le(&data, offset);
             }
         }
+    }
+
+    // ── New feature tests ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_pe_pdb_path_absent() {
+        // Minimal PE without debug directory — pdb_path should be None
+        let mut data = vec![0u8; 512];
+        data[0] = 0x4d;
+        data[1] = 0x5a;
+        data[0x3C] = 0x80;
+        data[0x80] = 0x50;
+        data[0x81] = 0x45;
+        data[0x84] = 0x4c;
+        data[0x85] = 0x01;
+        data[0x94] = 0x70;
+        data[0x98] = 0x0b;
+        data[0x99] = 0x01;
+
+        let info = parse_pe(&data).unwrap();
+        assert!(info.pdb_path.is_none());
+        assert!(!info.has_tls_callbacks);
+        assert!(info.rich_entries.is_empty());
+    }
+
+    #[test]
+    fn rich_entry_serialization() {
+        let entry = RichEntry {
+            tool_id: 259,
+            product_id: 30729,
+            count: 42,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: RichEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.tool_id, 259);
+        assert_eq!(parsed.count, 42);
     }
 }
