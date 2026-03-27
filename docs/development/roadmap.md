@@ -4,12 +4,6 @@
 
 ### YARA
 - YARA module system: `import "pe"` / `import "elf"` with structured access in conditions
-- Optional `yara-x` backend feature gate for 100% YARA compatibility
-
-### Binary Analysis
-- Fuzzy hashing (ssdeep/TLSH) for variant similarity detection
-- PE resource directory parsing (embedded executables, configs)
-- PE Authenticode / certificate extraction and validation
 
 ### UX / CLI
 - Config file support (`phylax.toml`, `$XDG_CONFIG_HOME/phylax/config.toml`)

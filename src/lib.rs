@@ -17,6 +17,7 @@ pub mod quarantine;
 pub mod queue;
 pub mod report;
 pub mod script;
+pub mod ssdeep;
 pub mod strings;
 pub mod tlsh;
 pub mod types;
