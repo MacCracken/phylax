@@ -16,6 +16,7 @@ pub mod pe;
 pub mod quarantine;
 pub mod queue;
 pub mod report;
+pub mod script;
 pub mod strings;
 pub mod types;
 pub mod watch;

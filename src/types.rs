@@ -202,6 +202,29 @@ impl ThreatFinding {
     pub fn is_critical(&self) -> bool {
         self.severity == FindingSeverity::Critical
     }
+
+    /// Compute a stable fingerprint for deduplication across scans.
+    ///
+    /// The fingerprint is a hex-encoded SHA-256 of `rule_name || target || severity`.
+    /// Findings with the same fingerprint across different scans represent the same
+    /// issue and can be suppressed via baseline files.
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write;
+        let mut hasher = Sha256::new();
+        hasher.update(self.rule_name.as_bytes());
+        hasher.update(b"|");
+        hasher.update(self.target.to_string().as_bytes());
+        hasher.update(b"|");
+        hasher.update(self.severity.to_string().as_bytes());
+        let result = hasher.finalize();
+        let mut s = String::with_capacity(64);
+        for &b in result.as_slice() {
+            let _ = write!(s, "{b:02x}");
+        }
+        s
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +296,95 @@ impl Default for ScanConfig {
             enable_ml: true,
             rule_paths: Vec::new(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Baseline suppression
+// ---------------------------------------------------------------------------
+
+/// A set of known finding fingerprints for suppression.
+///
+/// Load from a previous scan result (JSON) or a `.phylax-ignore` file
+/// (one fingerprint or rule name per line).
+#[derive(Debug, Default)]
+pub struct Baseline {
+    fingerprints: std::collections::HashSet<String>,
+    rule_names: std::collections::HashSet<String>,
+}
+
+impl Baseline {
+    /// Load a baseline from a `.phylax-ignore` file.
+    ///
+    /// Each line is either a 64-char hex fingerprint or a rule name.
+    /// Empty lines and lines starting with `#` are skipped.
+    pub fn from_ignore_file(content: &str) -> Self {
+        let mut b = Self::default();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+                b.fingerprints.insert(trimmed.to_string());
+            } else {
+                b.rule_names.insert(trimmed.to_string());
+            }
+        }
+        b
+    }
+
+    /// Load a baseline from a previous scan result JSON file.
+    ///
+    /// Extracts fingerprints from all findings in the scan results.
+    pub fn from_scan_json(json: &str) -> Self {
+        let mut b = Self::default();
+        if let Ok(results) = serde_json::from_str::<Vec<ScanResult>>(json) {
+            for result in &results {
+                for finding in &result.findings {
+                    b.fingerprints.insert(finding.fingerprint());
+                }
+            }
+        }
+        // Also try as a ThreatReport
+        if b.fingerprints.is_empty() {
+            if let Ok(report) = serde_json::from_str::<crate::report::ThreatReport>(json) {
+                for result in &report.results {
+                    for finding in &result.findings {
+                        b.fingerprints.insert(finding.fingerprint());
+                    }
+                }
+            }
+        }
+        b
+    }
+
+    /// Check if a finding should be suppressed.
+    #[must_use]
+    pub fn is_suppressed(&self, finding: &ThreatFinding) -> bool {
+        self.fingerprints.contains(&finding.fingerprint())
+            || self.rule_names.contains(&finding.rule_name)
+    }
+
+    /// Number of entries in the baseline.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.fingerprints.len() + self.rule_names.len()
+    }
+
+    /// Whether the baseline is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.fingerprints.is_empty() && self.rule_names.is_empty()
+    }
+
+    /// Filter a list of findings, removing suppressed ones.
+    #[must_use]
+    pub fn filter(&self, findings: Vec<ThreatFinding>) -> Vec<ThreatFinding> {
+        findings
+            .into_iter()
+            .filter(|f| !self.is_suppressed(f))
+            .collect()
     }
 }
 
@@ -569,5 +681,106 @@ mod tests {
                 FindingSeverity::Critical,
             ]
         );
+    }
+
+    // ── Fingerprint + baseline tests ───────────────────────────────────
+
+    #[test]
+    fn fingerprint_deterministic() {
+        let f = ThreatFinding::new(
+            ScanTarget::File("/tmp/test".into()),
+            FindingCategory::Malware,
+            FindingSeverity::High,
+            "test_rule",
+            "desc",
+        );
+        assert_eq!(f.fingerprint().len(), 64);
+        assert_eq!(f.fingerprint(), f.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_with_rule() {
+        let f1 = ThreatFinding::new(
+            ScanTarget::Memory,
+            FindingCategory::Malware,
+            FindingSeverity::High,
+            "rule_a",
+            "desc",
+        );
+        let f2 = ThreatFinding::new(
+            ScanTarget::Memory,
+            FindingCategory::Malware,
+            FindingSeverity::High,
+            "rule_b",
+            "desc",
+        );
+        assert_ne!(f1.fingerprint(), f2.fingerprint());
+    }
+
+    #[test]
+    fn baseline_from_ignore_file() {
+        let content = "# comment\nhigh_entropy\n\nabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\n";
+        let baseline = Baseline::from_ignore_file(content);
+        assert_eq!(baseline.rule_names.len(), 1);
+        assert_eq!(baseline.fingerprints.len(), 1);
+        assert!(baseline.rule_names.contains("high_entropy"));
+    }
+
+    #[test]
+    fn baseline_suppresses_by_rule_name() {
+        let baseline = Baseline::from_ignore_file("test_rule\n");
+        let f = ThreatFinding::new(
+            ScanTarget::Memory,
+            FindingCategory::Suspicious,
+            FindingSeverity::Low,
+            "test_rule",
+            "desc",
+        );
+        assert!(baseline.is_suppressed(&f));
+    }
+
+    #[test]
+    fn baseline_suppresses_by_fingerprint() {
+        let f = ThreatFinding::new(
+            ScanTarget::Memory,
+            FindingCategory::Suspicious,
+            FindingSeverity::Low,
+            "test_rule",
+            "desc",
+        );
+        let fp = f.fingerprint();
+        let baseline = Baseline::from_ignore_file(&fp);
+        assert!(baseline.is_suppressed(&f));
+    }
+
+    #[test]
+    fn baseline_filter() {
+        let baseline = Baseline::from_ignore_file("suppress_me\n");
+        let findings = vec![
+            ThreatFinding::new(
+                ScanTarget::Memory,
+                FindingCategory::Suspicious,
+                FindingSeverity::Low,
+                "suppress_me",
+                "will be filtered",
+            ),
+            ThreatFinding::new(
+                ScanTarget::Memory,
+                FindingCategory::Suspicious,
+                FindingSeverity::High,
+                "keep_me",
+                "will remain",
+            ),
+        ];
+        let filtered = baseline.filter(findings);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].rule_name, "keep_me");
+    }
+
+    #[test]
+    fn baseline_empty() {
+        let baseline = Baseline::default();
+        assert!(baseline.is_empty());
+        assert_eq!(baseline.len(), 0);
     }
 }

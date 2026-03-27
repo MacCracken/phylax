@@ -155,6 +155,11 @@ enum RulesAction {
         #[arg(short, long)]
         file: Option<PathBuf>,
     },
+    /// Validate rule files without scanning
+    Validate {
+        /// Rule files to validate (TOML or .yar)
+        files: Vec<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -234,6 +239,7 @@ fn main() -> Result<()> {
         ),
         Commands::Rules { action } => match action {
             RulesAction::List { file } => cmd_rules_list(file.as_deref()),
+            RulesAction::Validate { files } => cmd_rules_validate(&files),
         },
         Commands::Status => cmd_status(),
     }
@@ -935,6 +941,62 @@ fn cmd_rules_list(file: Option<&Path>) -> Result<()> {
             } else {
                 rule.tags.join(", ")
             },
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_rules_validate(files: &[PathBuf]) -> Result<()> {
+    if files.is_empty() {
+        println!("No files specified.");
+        println!("Usage: phylax rules validate <file1.toml> [file2.yar] ...");
+        return Ok(());
+    }
+
+    let mut total_rules = 0usize;
+    let mut errors = 0usize;
+
+    for file in files {
+        let content = match std::fs::read_to_string(file) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("  [ERROR] {} — {e}", file.display());
+                errors += 1;
+                continue;
+            }
+        };
+
+        let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        let mut engine = YaraEngine::new();
+        let result = match ext {
+            "yar" | "yara" => engine.load_rules_yar(&content),
+            _ => engine.load_rules_toml(&content),
+        };
+
+        match result {
+            Ok(count) => {
+                println!("  [OK]    {} — {count} rule(s)", file.display());
+                total_rules += count;
+            }
+            Err(e) => {
+                println!("  [ERROR] {} — {e}", file.display());
+                errors += 1;
+            }
+        }
+    }
+
+    println!();
+    if errors == 0 {
+        println!(
+            "Validated {total_rules} rule(s) across {} file(s) — all OK.",
+            files.len()
+        );
+    } else {
+        println!(
+            "Validated {} file(s): {total_rules} rule(s) OK, {errors} error(s).",
+            files.len()
         );
     }
 

@@ -56,12 +56,46 @@ pub struct PeInfo {
 /// A Rich header entry — identifies a build tool and its usage count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RichEntry {
-    /// Tool ID (product ID << 16 | build ID).
+    /// Tool ID (build number).
     pub tool_id: u16,
-    /// Product/compiler version.
+    /// Product/compiler identifier.
     pub product_id: u16,
     /// Number of times this tool was used.
     pub count: u32,
+}
+
+impl RichEntry {
+    /// Look up a human-readable name for this tool.
+    #[must_use]
+    pub fn tool_name(&self) -> &'static str {
+        rich_product_name(self.product_id)
+    }
+}
+
+/// Look up a human-readable product name from a Rich header product ID.
+///
+/// Based on the well-known product ID table from the MSVC toolchain.
+#[must_use]
+pub fn rich_product_name(product_id: u16) -> &'static str {
+    match product_id {
+        // Visual Studio version by product ID ranges
+        0 => "[padding]",
+        1 => "Import",
+        2..=6 => "VS6.0 (1998)",
+        7..=9 => "VS2002 (7.0)",
+        10..=13 => "VS2003 (7.1)",
+        14..=39 => "VS2005 (8.0)",
+        40..=83 => "VS2008 (9.0)",
+        84..=146 => "VS2010 (10.0)",
+        147..=169 => "VS2012 (11.0)",
+        170..=199 => "VS2013 (12.0)",
+        200..=219 => "VS2015 (14.0)",
+        220..=260 => "VS2017 (14.1)",
+        261..=270 => "VS2019 (14.2)",
+        271..=280 => "VS2022 (14.3)",
+        281..=300 => "VS2022 (14.4+)",
+        _ => "Unknown",
+    }
 }
 
 /// PE machine architecture.
