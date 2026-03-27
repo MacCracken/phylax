@@ -180,12 +180,13 @@ fn full_pipeline_scan_escalate_report() {
 
     // Generate report from results
     let result = phylax::types::ScanResult {
+        session_id: uuid::Uuid::new_v4(),
         target: ScanTarget::Memory,
         findings,
         scan_duration: Duration::from_millis(42),
         scanner_version: "test".into(),
     };
-    let report = ThreatReport::from_results(vec![result]);
+    let report = ThreatReport::from_results(uuid::Uuid::new_v4(), vec![result]);
     assert!(report.total_findings > 0);
     assert!(report.summary.targets_with_findings == 1);
 
@@ -328,6 +329,7 @@ fn queue_feeds_report() {
 
     // Simulate scan results from queue
     let results: Vec<phylax::types::ScanResult> = vec![phylax::types::ScanResult {
+        session_id: uuid::Uuid::new_v4(),
         target: first.target,
         findings: vec![ThreatFinding::new(
             ScanTarget::File("/a".into()),
@@ -340,7 +342,7 @@ fn queue_feeds_report() {
         scanner_version: "test".into(),
     }];
 
-    let report = ThreatReport::from_results(results);
+    let report = ThreatReport::from_results(uuid::Uuid::new_v4(), results);
     assert_eq!(report.summary.critical_count, 1);
     assert_eq!(report.total_findings, 1);
 }

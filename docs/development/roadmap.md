@@ -1,9 +1,46 @@
 # Roadmap
 
-All planned features and polish items for v1.0.0 have been implemented.
+## v0.6.0
+
+### Detection
+- Script language classification (PowerShell, VBA, JavaScript, Python, Batch)
+- Script obfuscation indicators (high per-line entropy, `eval(atob(...))`, `[char]` casting chains, base64 blocks)
+- Packer/compiler identification lookup table from Rich header tool IDs
+- Finding fingerprint + baseline suppression (`--baseline scan.json`, `.phylax-ignore`)
+
+### YARA Condition Extensions
+- `for..of` with positional constraints (`$ at entrypoint`, `$ in (0..100)`)
+- `#count` operator — pattern occurrence counting (`#a > 3`)
+- `@offset` operator — match position access (`@a[0] < 0x100`)
+- YARA module system: `import "pe"` / `import "elf"` with structured access in conditions
+- Optional `yara-x` backend feature gate for 100% YARA compatibility
+
+### Binary Analysis
+- Fuzzy hashing (ssdeep/TLSH) for variant similarity detection
+- PE resource directory parsing (embedded executables, configs)
+- PE Authenticode / certificate extraction and validation
+
+### UX / CLI
+- Rule management: `rules validate`, `rules fetch <source>`
+- Config file support (`phylax.toml`, `$XDG_CONFIG_HOME/phylax/config.toml`)
+- Progress indicator for multi-file scans (`indicatif`, feature-gated)
+- `-v`/`-vv`/`-q` verbosity flags mapped to tracing levels
+
+### Integration
+- STIX/TAXII threat intel import (`phylax intel import --stix <file>`)
+- MalwareBazaar SHA-256 hash feed (`phylax intel update`)
+- Archive recursive scanning (ZIP/GZIP/TAR) with bomb protection
+
+### Performance & Hardening
+- Memory-mapped I/O for files > 4 MB (`memmap2`)
+- `O_NOFOLLOW` + `fstat` hardening in scan path (Linux-specific)
+- Quarantine path traversal hardening (canonicalize + verify under root)
+- Per-scan allocation limits (cap total memory per scan)
+- Daemon rate limiting and max concurrent scans
 
 ## Non-goals
 
 - Full antivirus engine (not a replacement for ClamAV)
 - Network packet inspection (out of scope)
 - Kernel-level monitoring (userspace only)
+- WASM plugin system (reconsider post-v1)

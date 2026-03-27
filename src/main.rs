@@ -21,6 +21,10 @@ use phylax::yara::YaraEngine;
     version = VERSION,
 )]
 struct Cli {
+    /// Log output format: text or json (for SIEM ingestion)
+    #[arg(long, global = true, default_value = "text")]
+    log_format: String,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -51,6 +55,14 @@ enum Commands {
         /// LLM model for triage
         #[arg(long, default_value = phylax::hoosh::HOOSH_DEFAULT_MODEL)]
         hoosh_model: String,
+
+        /// Exit code when findings are detected (default: 1, 0 to always succeed)
+        #[arg(long, default_value = "1")]
+        exit_code: i32,
+
+        /// Minimum severity to trigger non-zero exit (info, low, medium, high, critical)
+        #[arg(long, default_value = "info")]
+        severity_threshold: String,
     },
 
     /// Run as a background daemon (Unix only)
@@ -146,13 +158,20 @@ enum RulesAction {
 }
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+
     let env_filter = EnvFilter::try_from_env("PHYLAX_LOG")
         .or_else(|_| EnvFilter::try_from_default_env())
         .unwrap_or_else(|_| EnvFilter::new("warn"));
 
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
-
-    let cli = Cli::parse();
+    if cli.log_format == "json" {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(env_filter)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    }
 
     match cli.command {
         Commands::Scan {
@@ -162,14 +181,27 @@ fn main() -> Result<()> {
             triage,
             hoosh_url,
             hoosh_model,
-        } => cmd_scan(
-            &paths,
-            rules.as_deref(),
-            block_size,
-            triage,
-            &hoosh_url,
-            &hoosh_model,
-        ),
+            exit_code,
+            severity_threshold,
+        } => {
+            let threshold = severity_threshold
+                .parse::<phylax::types::FindingSeverity>()
+                .unwrap_or(phylax::types::FindingSeverity::Info);
+            let highest = cmd_scan(
+                &paths,
+                rules.as_deref(),
+                block_size,
+                triage,
+                &hoosh_url,
+                &hoosh_model,
+            )?;
+            if let Some(sev) = highest {
+                if sev >= threshold && exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+            }
+            Ok(())
+        }
         #[cfg(unix)]
         Commands::Daemon {
             socket,
@@ -257,7 +289,11 @@ fn load_yara_engine(rules_path: Option<&Path>) -> Result<YaraEngine> {
 }
 
 /// Run a complete scan on a file using a pre-loaded YARA engine.
-fn run_scan_with_engine(path: &Path, engine: &YaraEngine) -> Result<ScanResult> {
+fn run_scan_with_engine(
+    path: &Path,
+    engine: &YaraEngine,
+    session_id: uuid::Uuid,
+) -> Result<ScanResult> {
     let config = ScanConfig::default();
     let metadata = std::fs::metadata(path)?;
     if metadata.len() > config.max_file_size {
@@ -269,13 +305,18 @@ fn run_scan_with_engine(path: &Path, engine: &YaraEngine) -> Result<ScanResult> 
     }
 
     let data = std::fs::read(path)?;
-    scan_data(&data, path, engine)
+    scan_data(&data, path, engine, session_id)
 }
 
 /// Run a complete scan on already-loaded data using a pre-loaded YARA engine.
 ///
 /// Use this when you already have the file data in memory to avoid a redundant read.
-fn scan_data(data: &[u8], path: &Path, engine: &YaraEngine) -> Result<ScanResult> {
+fn scan_data(
+    data: &[u8],
+    path: &Path,
+    engine: &YaraEngine,
+    session_id: uuid::Uuid,
+) -> Result<ScanResult> {
     let start = std::time::Instant::now();
     let analysis = analyze(data);
 
@@ -288,6 +329,7 @@ fn scan_data(data: &[u8], path: &Path, engine: &YaraEngine) -> Result<ScanResult
     all_findings.extend(analyze_findings);
 
     Ok(ScanResult {
+        session_id,
         target: ScanTarget::File(path.to_path_buf()),
         findings: all_findings,
         scan_duration: start.elapsed(),
@@ -298,7 +340,7 @@ fn scan_data(data: &[u8], path: &Path, engine: &YaraEngine) -> Result<ScanResult
 /// Convenience: load rules and scan a single file.
 fn run_scan(path: &Path, rules_path: Option<&Path>) -> Result<ScanResult> {
     let engine = load_yara_engine(rules_path)?;
-    run_scan_with_engine(path, &engine)
+    run_scan_with_engine(path, &engine, uuid::Uuid::new_v4())
 }
 
 /// Send findings to hoosh for LLM triage and print results.
@@ -343,6 +385,7 @@ async fn triage_findings(findings: &[ThreatFinding], hoosh_url: &str, model: &st
 // CLI commands
 // ---------------------------------------------------------------------------
 
+/// Returns the highest severity found across all scan results, or None if clean.
 fn cmd_scan(
     paths: &[PathBuf],
     rules_path: Option<&Path>,
@@ -350,13 +393,13 @@ fn cmd_scan(
     do_triage: bool,
     hoosh_url: &str,
     hoosh_model: &str,
-) -> Result<()> {
+) -> Result<Option<phylax::types::FindingSeverity>> {
     let config = ScanConfig::default();
     let files = collect_files(paths, config.max_file_size);
 
     if files.is_empty() {
         println!("No scannable files found.");
-        return Ok(());
+        return Ok(None);
     }
 
     let multi = files.len() > 1;
@@ -367,6 +410,7 @@ fn cmd_scan(
 
     // Load YARA rules once for all files
     let engine = load_yara_engine(rules_path)?;
+    let session_id = uuid::Uuid::new_v4();
 
     let overall_start = std::time::Instant::now();
 
@@ -412,7 +456,7 @@ fn cmd_scan(
             println!("[YARA]        Rules from {}", rp.display());
         }
 
-        let result = scan_data(&data, file, &engine)?;
+        let result = scan_data(&data, file, &engine, session_id)?;
         let n = result.findings.len();
         println!();
         if n == 0 {
@@ -436,7 +480,7 @@ fn cmd_scan(
             rt.block_on(triage_findings(&owned, hoosh_url, hoosh_model));
         }
 
-        return Ok(());
+        return Ok(result.highest_severity());
     }
 
     // Multi-file mode: parallel scanning with rayon
@@ -445,7 +489,7 @@ fn cmd_scan(
     let scan_results: Vec<(PathBuf, std::result::Result<ScanResult, String>)> = files
         .par_iter()
         .map(|file| {
-            let result = run_scan_with_engine(file, &engine).map_err(|e| e.to_string());
+            let result = run_scan_with_engine(file, &engine, session_id).map_err(|e| e.to_string());
             (file.clone(), result)
         })
         .collect();
@@ -509,7 +553,11 @@ fn cmd_scan(
         rt.block_on(triage_findings(&owned, hoosh_url, hoosh_model));
     }
 
-    Ok(())
+    let highest = all_results
+        .iter()
+        .filter_map(|r| r.highest_severity())
+        .max();
+    Ok(highest)
 }
 
 #[cfg(unix)]
@@ -726,9 +774,10 @@ fn cmd_report(
         });
     }
 
-    let report = ThreatReport::from_results(vec![result]);
+    let report = ThreatReport::from_results(result.session_id, vec![result]);
     let fmt = match format {
         "markdown" | "md" => ReportFormat::Markdown,
+        "sarif" => ReportFormat::Sarif,
         _ => ReportFormat::Json,
     };
     println!("{}", report.render(fmt));

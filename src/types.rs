@@ -211,6 +211,8 @@ impl ThreatFinding {
 /// Result of scanning a target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanResult {
+    /// Scan session ID (shared across all targets in one invocation).
+    pub session_id: Uuid,
     pub target: ScanTarget,
     pub findings: Vec<ThreatFinding>,
     pub scan_duration: std::time::Duration,
@@ -382,6 +384,7 @@ mod tests {
     #[test]
     fn scan_result_empty() {
         let r = ScanResult {
+            session_id: Uuid::new_v4(),
             target: ScanTarget::Memory,
             findings: vec![],
             scan_duration: std::time::Duration::from_millis(10),
@@ -395,6 +398,7 @@ mod tests {
     #[test]
     fn scan_result_highest_severity() {
         let r = ScanResult {
+            session_id: Uuid::new_v4(),
             target: ScanTarget::Memory,
             findings: vec![
                 ThreatFinding::new(

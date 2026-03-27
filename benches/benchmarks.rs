@@ -564,6 +564,7 @@ fn bench_report(c: &mut Criterion) {
     // Build sample results
     let results: Vec<ScanResult> = (0..10)
         .map(|i| ScanResult {
+            session_id: uuid::Uuid::new_v4(),
             target: ScanTarget::File(format!("/tmp/file_{i}.bin").into()),
             findings: (0..5)
                 .map(|j| {
@@ -581,7 +582,7 @@ fn bench_report(c: &mut Criterion) {
         })
         .collect();
 
-    let report = ThreatReport::from_results(results);
+    let report = ThreatReport::from_results(uuid::Uuid::new_v4(), results);
 
     group.bench_function("render_json", |b| {
         b.iter(|| black_box(report.render(ReportFormat::Json)));
