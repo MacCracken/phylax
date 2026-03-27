@@ -18,6 +18,7 @@ pub mod queue;
 pub mod report;
 pub mod script;
 pub mod strings;
+pub mod tlsh;
 pub mod types;
 pub mod watch;
 pub mod yara;

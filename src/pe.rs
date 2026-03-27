@@ -51,6 +51,34 @@ pub struct PeInfo {
     pub pdb_path: Option<String>,
     /// Rich header entries (compiler/linker tool IDs), if present.
     pub rich_entries: Vec<RichEntry>,
+    /// Resources extracted from the resource directory.
+    pub resources: Vec<PeResource>,
+    /// Authenticode certificate info, if present.
+    pub certificate: Option<PeCertificate>,
+}
+
+/// PE Authenticode certificate information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeCertificate {
+    /// Certificate table file offset.
+    pub offset: u32,
+    /// Certificate table total size.
+    pub size: u32,
+    /// Whether the certificate is present (non-zero size).
+    pub present: bool,
+}
+
+/// A PE resource entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeResource {
+    /// Resource type ID (e.g. 3=ICON, 6=STRING, 16=VERSION, 24=MANIFEST).
+    pub type_id: u32,
+    /// Human-readable type name.
+    pub type_name: String,
+    /// Resource size in bytes.
+    pub size: u32,
+    /// File offset of the resource data.
+    pub offset: u32,
 }
 
 /// A Rich header entry — identifies a build tool and its usage count.
@@ -279,6 +307,12 @@ pub fn parse_pe(data: &[u8]) -> Option<PeInfo> {
     // Rich header (between DOS stub and PE signature)
     let rich_entries = parse_rich_header(data, pe_offset);
 
+    // Resource directory (data directory entry #2)
+    let resources = parse_pe_resources(data, opt_offset, is_64bit);
+
+    // Certificate table (data directory entry #4) — uses file offsets, not RVAs
+    let certificate = parse_pe_certificate(data, opt_offset, is_64bit);
+
     Some(PeInfo {
         machine,
         num_sections,
@@ -293,6 +327,8 @@ pub fn parse_pe(data: &[u8]) -> Option<PeInfo> {
         has_tls_callbacks,
         pdb_path,
         rich_entries,
+        resources,
+        certificate,
     })
 }
 
@@ -699,6 +735,173 @@ fn parse_rich_header(data: &[u8], pe_offset: usize) -> Vec<RichEntry> {
 }
 
 // ---------------------------------------------------------------------------
+// Resource directory parsing
+// ---------------------------------------------------------------------------
+
+/// Well-known PE resource type IDs.
+fn resource_type_name(id: u32) -> &'static str {
+    match id {
+        1 => "CURSOR",
+        2 => "BITMAP",
+        3 => "ICON",
+        4 => "MENU",
+        5 => "DIALOG",
+        6 => "STRING",
+        7 => "FONTDIR",
+        8 => "FONT",
+        9 => "ACCELERATOR",
+        10 => "RCDATA",
+        11 => "MESSAGETABLE",
+        12 => "GROUP_CURSOR",
+        14 => "GROUP_ICON",
+        16 => "VERSION",
+        24 => "MANIFEST",
+        _ => "UNKNOWN",
+    }
+}
+
+/// Parse the PE resource directory (data directory entry #2).
+fn parse_pe_resources(data: &[u8], opt_offset: usize, is_64bit: bool) -> Vec<PeResource> {
+    const MAX_RESOURCES: usize = 512;
+
+    // Resource directory is data directory entry #2
+    let dd_offset = if is_64bit {
+        opt_offset + 136
+    } else {
+        opt_offset + 120
+    };
+
+    let rsrc_rva = match read_u32_le(data, dd_offset) {
+        Some(rva) if rva > 0 => rva,
+        _ => return Vec::new(),
+    };
+
+    let rsrc_base = match rva_to_offset(data, opt_offset, rsrc_rva) {
+        Some(off) => off,
+        None => return Vec::new(),
+    };
+
+    let mut resources = Vec::new();
+
+    // Parse root directory: each entry is a resource type
+    let num_named = read_u16_le(data, rsrc_base + 12).unwrap_or(0) as usize;
+    let num_id = read_u16_le(data, rsrc_base + 14).unwrap_or(0) as usize;
+    let total = (num_named + num_id).min(64);
+
+    for i in 0..total {
+        let entry_off = rsrc_base + 16 + i * 8;
+        if data.len() < entry_off + 8 {
+            break;
+        }
+
+        let type_id = read_u32_le(data, entry_off).unwrap_or(0) & 0x7FFFFFFF;
+        let offset_or_dir = read_u32_le(data, entry_off + 4).unwrap_or(0);
+
+        // If high bit set, it points to a subdirectory
+        if offset_or_dir & 0x80000000 != 0 {
+            let subdir_off = rsrc_base + (offset_or_dir & 0x7FFFFFFF) as usize;
+            // Parse second-level directory (name/ID entries)
+            let sub_named = read_u16_le(data, subdir_off + 12).unwrap_or(0) as usize;
+            let sub_id = read_u16_le(data, subdir_off + 14).unwrap_or(0) as usize;
+            let sub_total = (sub_named + sub_id).min(64);
+
+            for j in 0..sub_total {
+                let sub_entry = subdir_off + 16 + j * 8;
+                if data.len() < sub_entry + 8 {
+                    break;
+                }
+                let sub_offset = read_u32_le(data, sub_entry + 4).unwrap_or(0);
+
+                // Third level: language entries
+                if sub_offset & 0x80000000 != 0 {
+                    let lang_dir = rsrc_base + (sub_offset & 0x7FFFFFFF) as usize;
+                    let lang_named = read_u16_le(data, lang_dir + 12).unwrap_or(0) as usize;
+                    let lang_id = read_u16_le(data, lang_dir + 14).unwrap_or(0) as usize;
+                    let lang_total = (lang_named + lang_id).min(16);
+
+                    for k in 0..lang_total {
+                        let lang_entry = lang_dir + 16 + k * 8;
+                        if data.len() < lang_entry + 8 {
+                            break;
+                        }
+                        let data_off = read_u32_le(data, lang_entry + 4).unwrap_or(0);
+                        if data_off & 0x80000000 == 0 {
+                            // Data entry: RVA(4) + Size(4) + CodePage(4) + Reserved(4)
+                            let data_entry = rsrc_base + data_off as usize;
+                            if let (Some(rva), Some(size)) = (
+                                read_u32_le(data, data_entry),
+                                read_u32_le(data, data_entry + 4),
+                            ) {
+                                let file_off =
+                                    rva_to_offset(data, opt_offset, rva).unwrap_or(0) as u32;
+                                resources.push(PeResource {
+                                    type_id,
+                                    type_name: resource_type_name(type_id).to_string(),
+                                    size,
+                                    offset: file_off,
+                                });
+                                if resources.len() >= MAX_RESOURCES {
+                                    return resources;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Direct data entry
+                    let data_entry = rsrc_base + sub_offset as usize;
+                    if let (Some(rva), Some(size)) = (
+                        read_u32_le(data, data_entry),
+                        read_u32_le(data, data_entry + 4),
+                    ) {
+                        let file_off = rva_to_offset(data, opt_offset, rva).unwrap_or(0) as u32;
+                        resources.push(PeResource {
+                            type_id,
+                            type_name: resource_type_name(type_id).to_string(),
+                            size,
+                            offset: file_off,
+                        });
+                        if resources.len() >= MAX_RESOURCES {
+                            return resources;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    resources
+}
+
+// ---------------------------------------------------------------------------
+// Certificate table (Authenticode)
+// ---------------------------------------------------------------------------
+
+/// Parse the PE certificate table (data directory entry #4).
+///
+/// Unlike other data directories, the certificate table uses a file offset, not an RVA.
+fn parse_pe_certificate(data: &[u8], opt_offset: usize, is_64bit: bool) -> Option<PeCertificate> {
+    // Certificate table is data directory entry #4
+    let dd_offset = if is_64bit {
+        opt_offset + 144
+    } else {
+        opt_offset + 128
+    };
+
+    let cert_offset = read_u32_le(data, dd_offset)?;
+    let cert_size = read_u32_le(data, dd_offset + 4)?;
+
+    if cert_size == 0 {
+        return None;
+    }
+
+    Some(PeCertificate {
+        offset: cert_offset,
+        size: cert_size,
+        present: cert_offset > 0 && cert_size > 0 && (cert_offset as usize) < data.len(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -949,6 +1152,8 @@ mod tests {
             has_tls_callbacks: false,
             pdb_path: None,
             rich_entries: vec![],
+            resources: vec![],
+            certificate: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: PeInfo = serde_json::from_str(&json).unwrap();

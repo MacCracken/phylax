@@ -1206,6 +1206,8 @@ mod tests {
             has_tls_callbacks: false,
             pdb_path: None,
             rich_entries: vec![],
+            resources: vec![],
+            certificate: None,
         };
 
         let entropies = pe_section_entropy(&data, &pe);
@@ -1283,6 +1285,8 @@ mod tests {
             has_tls_callbacks: false,
             pdb_path: None,
             rich_entries: vec![],
+            resources: vec![],
+            certificate: None,
         };
         // PE ends at 512 + 512 = 1024, file is 2048, so 1024 bytes overlay
         let overlay = detect_pe_overlay(&data, &pe);
@@ -1316,6 +1320,8 @@ mod tests {
             has_tls_callbacks: false,
             pdb_path: None,
             rich_entries: vec![],
+            resources: vec![],
+            certificate: None,
         };
         // PE ends at 1024 = file size, no overlay
         let overlay = detect_pe_overlay(&data, &pe);
@@ -1381,6 +1387,8 @@ mod tests {
             has_tls_callbacks: false,
             pdb_path: None,
             rich_entries: vec![],
+            resources: vec![],
+            certificate: None,
         };
         let entropies = vec![
             SectionEntropy {
@@ -1445,6 +1453,8 @@ mod tests {
             has_tls_callbacks: false,
             pdb_path: None,
             rich_entries: vec![],
+            resources: vec![],
+            certificate: None,
         };
         let entropies = vec![
             SectionEntropy {

@@ -2,6 +2,15 @@
 all-features = true
 
 [advisories]
+ignore = [
+    # rsa crate: Marvin Attack timing sidechannel — yara-x transitive dep, not used in phylax's hot path
+    "RUSTSEC-2023-0071",
+    # bincode: unmaintained — yara-x transitive dep, not used by phylax directly
+    "RUSTSEC-2024-0406",
+    # bincode v2: unmaintained — yara-x transitive dep
+    "RUSTSEC-2025-0014",
+    "RUSTSEC-2025-0141",
+]
 
 [licenses]
 allow = [
@@ -19,7 +28,17 @@ allow = [
     "Artistic-2.0",
     "Zlib",
     "OpenSSL",
+    # yara-x transitive deps
+    "BSL-1.0",
+    "MPL-2.0",
+    "Unlicense",
+    "bzip2-1.0.6",
 ]
+
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [bans]
 multiple-versions = "warn"
