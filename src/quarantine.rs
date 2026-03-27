@@ -49,6 +49,16 @@ impl QuarantineManager {
         let dir = dir.into();
         fs::create_dir_all(&dir)?;
 
+        // Canonicalize to prevent path traversal via symlinks
+        let dir = fs::canonicalize(&dir)?;
+
+        // Set restrictive permissions on Unix (owner-only)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+        }
+
         let mut mgr = Self {
             dir,
             entries: HashMap::new(),
@@ -72,8 +82,17 @@ impl QuarantineManager {
         let data = fs::read(source)?;
         let sha256 = crate::analyze::file_sha256(&data);
 
+        // Use UUID-based filename (not derived from original path) to prevent traversal
         let id = uuid::Uuid::new_v4().to_string();
         let quarantine_path = self.dir.join(&id);
+
+        // Verify the quarantine path is under our root (defense-in-depth)
+        if !quarantine_path.starts_with(&self.dir) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "quarantine path escapes root directory",
+            ));
+        }
 
         fs::rename(source, &quarantine_path)?;
         info!(
@@ -103,6 +122,14 @@ impl QuarantineManager {
     /// # Errors
     /// Returns `io::Error` if the quarantine ID is unknown or the file cannot be moved.
     pub fn release(&mut self, id: &str) -> std::io::Result<PathBuf> {
+        // Validate ID doesn't contain path separators (defense-in-depth)
+        if id.contains('/') || id.contains('\\') || id.contains("..") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid quarantine ID",
+            ));
+        }
+
         let entry = self
             .entries
             .get(id)
@@ -334,5 +361,24 @@ mod tests {
         assert!(!qdir.exists());
         let _mgr = QuarantineManager::new(&qdir).unwrap();
         assert!(qdir.exists());
+    }
+
+    #[test]
+    fn release_rejects_path_traversal_id() {
+        let (_, mut mgr) = temp_quarantine();
+        assert!(mgr.release("../etc/passwd").is_err());
+        assert!(mgr.release("foo/bar").is_err());
+        assert!(mgr.release("foo\\bar").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quarantine_dir_has_restricted_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmpdir = TempDir::new().unwrap();
+        let qdir = tmpdir.path().join("secure_quarantine");
+        let _mgr = QuarantineManager::new(&qdir).unwrap();
+        let mode = fs::metadata(&qdir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "quarantine dir should be 0700, got {mode:o}");
     }
 }

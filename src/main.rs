@@ -25,6 +25,14 @@ struct Cli {
     #[arg(long, global = true, default_value = "text")]
     log_format: String,
 
+    /// Increase verbosity (-v info, -vv debug, -vvv trace)
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    /// Quiet mode — suppress all output except findings and errors
+    #[arg(short, long, global = true)]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -165,9 +173,19 @@ enum RulesAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let env_filter = EnvFilter::try_from_env("PHYLAX_LOG")
-        .or_else(|_| EnvFilter::try_from_default_env())
-        .unwrap_or_else(|_| EnvFilter::new("warn"));
+    // CLI flags override env var: -q → error, -v → info, -vv → debug, -vvv → trace
+    let default_level = if cli.quiet {
+        "error"
+    } else {
+        match cli.verbose {
+            0 => "warn",
+            1 => "info",
+            2 => "debug",
+            _ => "trace",
+        }
+    };
+    let env_filter =
+        EnvFilter::try_from_env("PHYLAX_LOG").unwrap_or_else(|_| EnvFilter::new(default_level));
 
     if cli.log_format == "json" {
         tracing_subscriber::fmt()
