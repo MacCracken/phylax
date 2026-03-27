@@ -101,6 +101,19 @@ impl Lexer {
         self.chars.get(self.pos).copied()
     }
 
+    /// Consume and return the next char while a predicate holds.
+    /// Appends matching chars to `buf`.
+    fn consume_while(&mut self, buf: &mut String, pred: impl Fn(char) -> bool) {
+        while let Some(ch) = self.peek_char() {
+            if pred(ch) {
+                self.pos += 1;
+                buf.push(ch);
+            } else {
+                break;
+            }
+        }
+    }
+
     fn next_char(&mut self) -> Option<char> {
         let ch = self.chars.get(self.pos).copied();
         if ch.is_some() {
@@ -196,12 +209,7 @@ impl Lexer {
         if ch == '$' {
             self.next_char();
             let mut name = String::from("$");
-            while self
-                .peek_char()
-                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                name.push(self.next_char().unwrap());
-            }
+            self.consume_while(&mut name, |c| c.is_ascii_alphanumeric() || c == '_');
             return Ok(Token::PatternId(name));
         }
 
@@ -212,12 +220,7 @@ impl Lexer {
         {
             self.next_char();
             let mut name = String::from("$"); // normalize to $ prefix for lookup
-            while self
-                .peek_char()
-                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                name.push(self.next_char().unwrap());
-            }
+            self.consume_while(&mut name, |c| c.is_ascii_alphanumeric() || c == '_');
             return Ok(Token::PatternCountId(name));
         }
 
@@ -225,12 +228,7 @@ impl Lexer {
         if ch == '@' {
             self.next_char();
             let mut name = String::from("$"); // normalize to $ prefix for lookup
-            while self
-                .peek_char()
-                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                name.push(self.next_char().unwrap());
-            }
+            self.consume_while(&mut name, |c| c.is_ascii_alphanumeric() || c == '_');
             return Ok(Token::PatternOffsetId(name));
         }
 
