@@ -16,7 +16,10 @@ Major feature release: native YARA syntax, deep binary analysis, script obfuscat
   - `import` statements silently skipped (module system not yet supported)
 - **Hex wildcard bytes** (`??`) and **jumps** (`[n-m]`) in hex patterns — auto-compiled to regex
 - **Aho-Corasick multi-pattern automaton** — single-pass scanning with adaptive threshold (AC for 8+ patterns, memmem fallback below)
-- `ConditionExpr` recursive AST with `eval_condition()` evaluator
+- **`#count` operator** — `#a >= 3` counts pattern occurrences
+- **`@offset` operator** — `@a[0] == 0` accesses match positions, with optional index `@a[N]`
+- **`for..of` positional constraints** — `for any of ($a, $b) : ($ at 0)`, `for 2 of them : ($ in (0..100))`
+- `ConditionExpr` recursive AST with `PatternMatchInfo` carrying counts + offsets
 - `RegexBuilder` with 10 MB size/DFA limits to prevent DoS from crafted patterns
 - `phylax rules validate` — syntax-check TOML and .yar files without scanning
 
@@ -63,6 +66,7 @@ Major feature release: native YARA syntax, deep binary analysis, script obfuscat
 - Symlink skip in `collect_files` — prevents directory traversal and infinite loops
 - **Quarantine hardening** — canonicalized root, 0700 permissions (Unix), UUID-only filenames, path traversal rejection on release IDs
 - `#[non_exhaustive]` on `WatchEvent` enum
+- Zero `.unwrap()` / `.expect()` in library code — lexer uses `consume_while` helper
 
 ### Correctness
 - `escalate_severity` metadata keys now distinct (`escalated_polyglot`, `escalated_executable`, `escalated_signals`)
@@ -77,7 +81,7 @@ Major feature release: native YARA syntax, deep binary analysis, script obfuscat
 - Updated `cc` 1.2.58, `mio` 1.2.0, `proptest` 1.11.0, `uuid` 1.23.0
 
 ### Quality
-- 344 tests (334 unit + 10 integration)
+- 355 tests (345 unit + 10 integration)
 - 13 proptest property-based tests
 - 16 benchmark groups with throughput measurement
 - 3 fuzz targets (YARA, analyze, entropy)

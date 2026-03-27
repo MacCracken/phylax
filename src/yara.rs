@@ -163,6 +163,13 @@ pub enum ConditionExpr {
         patterns: ForPatterns,
         constraint: ForConstraint,
     },
+    /// Module field access: `pe.is_dll`, `pe.timestamp > N`, `elf.machine == 0x3E`.
+    ModuleField {
+        module: String,
+        field: String,
+        /// None for boolean fields (e.g. `pe.is_dll`), Some for comparisons.
+        comparison: Option<(CmpOp, u64)>,
+    },
     /// `filesize < N`, `filesize > N`, etc.
     FileSize { op: CmpOp, value: u64 },
     /// `not <expr>`.
@@ -212,9 +219,18 @@ pub enum CmpOp {
     Ne,
 }
 
-/// Evaluate a condition expression against pattern match results.
+/// Context for condition evaluation — carries pattern matches and optional module data.
+pub struct ScanContext<'a> {
+    pub patterns: &'a [PatternMatchInfo],
+    pub data_len: u64,
+    pub pe: Option<&'a crate::pe::PeInfo>,
+    pub elf: Option<&'a crate::elf::ElfInfo>,
+}
+
+/// Evaluate a condition expression against scan context.
 #[must_use]
-pub fn eval_condition(expr: &ConditionExpr, patterns: &[PatternMatchInfo], data_len: u64) -> bool {
+pub fn eval_condition(expr: &ConditionExpr, ctx: &ScanContext<'_>) -> bool {
+    let patterns = ctx.patterns;
     match expr {
         ConditionExpr::Bool(b) => *b,
         ConditionExpr::PatternMatch(name) => patterns.iter().any(|p| p.name == *name && p.matched),
@@ -279,14 +295,86 @@ pub fn eval_condition(expr: &ConditionExpr, patterns: &[PatternMatchInfo], data_
                 ForQuantifier::Count(n) => matching.count() >= *n,
             }
         }
-        ConditionExpr::FileSize { op, value } => compare_u64(data_len, *op, *value),
-        ConditionExpr::Not(inner) => !eval_condition(inner, patterns, data_len),
-        ConditionExpr::And(lhs, rhs) => {
-            eval_condition(lhs, patterns, data_len) && eval_condition(rhs, patterns, data_len)
+        ConditionExpr::ModuleField {
+            module,
+            field,
+            comparison,
+        } => eval_module_field(module, field, comparison.as_ref(), ctx),
+        ConditionExpr::FileSize { op, value } => compare_u64(ctx.data_len, *op, *value),
+        ConditionExpr::Not(inner) => !eval_condition(inner, ctx),
+        ConditionExpr::And(lhs, rhs) => eval_condition(lhs, ctx) && eval_condition(rhs, ctx),
+        ConditionExpr::Or(lhs, rhs) => eval_condition(lhs, ctx) || eval_condition(rhs, ctx),
+    }
+}
+
+/// Evaluate a module field access (pe.*, elf.*).
+fn eval_module_field(
+    module: &str,
+    field: &str,
+    comparison: Option<&(CmpOp, u64)>,
+    ctx: &ScanContext<'_>,
+) -> bool {
+    match module {
+        "pe" => {
+            let pe = match ctx.pe {
+                Some(pe) => pe,
+                None => return false,
+            };
+            let val: Option<u64> = match field {
+                "is_dll" => return pe.is_dll,
+                "is_64bit" => return pe.is_64bit,
+                "has_tls_callbacks" => return pe.has_tls_callbacks,
+                "timestamp" => Some(pe.timestamp as u64),
+                "entry_point" => Some(pe.entry_point as u64),
+                "number_of_sections" => Some(pe.num_sections as u64),
+                "machine" => Some(match pe.machine {
+                    crate::pe::PeMachine::I386 => 0x014c,
+                    crate::pe::PeMachine::Amd64 => 0x8664,
+                    crate::pe::PeMachine::Arm => 0x01c0,
+                    crate::pe::PeMachine::Arm64 => 0xaa64,
+                    crate::pe::PeMachine::Unknown(v) => v as u64,
+                }),
+                _ => None,
+            };
+            match (val, comparison) {
+                (Some(v), Some((op, rhs))) => compare_u64(v, *op, *rhs),
+                (Some(v), None) => v != 0, // treat as truthy
+                _ => false,
+            }
         }
-        ConditionExpr::Or(lhs, rhs) => {
-            eval_condition(lhs, patterns, data_len) || eval_condition(rhs, patterns, data_len)
+        "elf" => {
+            let elf = match ctx.elf {
+                Some(elf) => elf,
+                None => return false,
+            };
+            let val: Option<u64> = match field {
+                "entry_point" => Some(elf.entry_point),
+                "number_of_sections" => Some(elf.sections.len() as u64),
+                "machine" => Some(match elf.machine {
+                    crate::elf::ElfMachine::X86 => 3,
+                    crate::elf::ElfMachine::X86_64 => 62,
+                    crate::elf::ElfMachine::Arm => 40,
+                    crate::elf::ElfMachine::Aarch64 => 183,
+                    crate::elf::ElfMachine::Mips => 8,
+                    crate::elf::ElfMachine::Riscv => 243,
+                    crate::elf::ElfMachine::Unknown(v) => v as u64,
+                }),
+                "type" => Some(match elf.file_type {
+                    crate::elf::ElfType::Relocatable => 1,
+                    crate::elf::ElfType::Executable => 2,
+                    crate::elf::ElfType::SharedObject => 3,
+                    crate::elf::ElfType::Core => 4,
+                    crate::elf::ElfType::Unknown(v) => v as u64,
+                }),
+                _ => None,
+            };
+            match (val, comparison) {
+                (Some(v), Some((op, rhs))) => compare_u64(v, *op, *rhs),
+                (Some(v), None) => v != 0,
+                _ => false,
+            }
         }
+        _ => false,
     }
 }
 
@@ -750,6 +838,22 @@ impl YaraEngine {
             }
         }
 
+        // Lazy-parse PE/ELF for module conditions (only if any Expression rules exist)
+        let has_expr_rules = self
+            .rules
+            .iter()
+            .any(|r| matches!(r.condition, RuleCondition::Expression(_)));
+        let pe_info = if has_expr_rules {
+            crate::pe::parse_pe(data)
+        } else {
+            None
+        };
+        let elf_info = if has_expr_rules {
+            crate::elf::parse_elf(data)
+        } else {
+            None
+        };
+
         // Phase 2: evaluate each rule
         let mut findings = Vec::new();
         for (rule_idx, rule) in self.rules.iter().enumerate() {
@@ -814,7 +918,13 @@ impl YaraEngine {
                             }
                         })
                         .collect();
-                    eval_condition(expr, &info, data.len() as u64)
+                    let ctx = ScanContext {
+                        patterns: &info,
+                        data_len: data.len() as u64,
+                        pe: pe_info.as_ref(),
+                        elf: elf_info.as_ref(),
+                    };
+                    eval_condition(expr, &ctx)
                 }
             };
 

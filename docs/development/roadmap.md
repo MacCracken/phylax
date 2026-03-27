@@ -2,10 +2,7 @@
 
 ## v0.6.0
 
-### YARA Condition Extensions
-- `for..of` with positional constraints (`$ at entrypoint`, `$ in (0..100)`)
-- `#count` operator — pattern occurrence counting (`#a > 3`)
-- `@offset` operator — match position access (`@a[0] < 0x100`)
+### YARA
 - YARA module system: `import "pe"` / `import "elf"` with structured access in conditions
 - Optional `yara-x` backend feature gate for 100% YARA compatibility
 

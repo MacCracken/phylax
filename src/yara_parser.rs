@@ -62,6 +62,7 @@ enum Token {
     RegexLit(String),
     IntLit(u64),
     // Delimiters & operators
+    Dot,      // .
     LBracket, // [
     RBracket, // ]
     LBrace,
@@ -296,7 +297,7 @@ impl Lexer {
                     self.next_char();
                     return Ok(Token::DotDot);
                 }
-                return Err(YaraError::Parse("unexpected '.'".into()));
+                return Ok(Token::Dot);
             }
             '<' => {
                 self.next_char();
@@ -834,6 +835,39 @@ impl Parser {
                 let op = self.parse_cmp_op()?;
                 let value = self.parse_int_value()?;
                 Ok(ConditionExpr::FileSize { op, value })
+            }
+            // Module field access: pe.is_dll, elf.machine == 62
+            Token::Ident(ref name) if name == "pe" || name == "elf" => {
+                let module = name.clone();
+                self.advance();
+                self.expect(&Token::Dot)?;
+                let field = match self.advance().clone() {
+                    Token::Ident(f) => f,
+                    // field names that collide with keywords
+                    Token::All => "all".into(),
+                    Token::Any => "any".into(),
+                    Token::True => "true".into(),
+                    Token::False => "false".into(),
+                    other => {
+                        return Err(YaraError::Parse(format!(
+                            "expected field name after '{module}.', got {other:?}"
+                        )));
+                    }
+                };
+                // Check if followed by comparison operator
+                let comparison = match self.peek() {
+                    Token::Lt | Token::Le | Token::Gt | Token::Ge | Token::EqEq | Token::Ne => {
+                        let op = self.parse_cmp_op()?;
+                        let value = self.parse_int_value()?;
+                        Some((op, value))
+                    }
+                    _ => None,
+                };
+                Ok(ConditionExpr::ModuleField {
+                    module,
+                    field,
+                    comparison,
+                })
             }
             // "all of them", "any of them", "N of them"
             // "all of ($a, $b)", "any of ($a, $b)", "N of ($a, $b)"
@@ -1610,7 +1644,7 @@ mod tests {
 
     // ── eval_condition tests ───────────────────────────────────────────
 
-    use crate::yara::eval_condition;
+    use crate::yara::{ScanContext, eval_condition};
 
     fn hits(names: &[(&str, bool)]) -> Vec<crate::yara::PatternMatchInfo> {
         names
@@ -1624,10 +1658,19 @@ mod tests {
             .collect()
     }
 
+    fn ctx(patterns: &[crate::yara::PatternMatchInfo], data_len: u64) -> ScanContext<'_> {
+        ScanContext {
+            patterns,
+            data_len,
+            pe: None,
+            elf: None,
+        }
+    }
+
     #[test]
     fn eval_bool() {
-        assert!(eval_condition(&ConditionExpr::Bool(true), &[], 0));
-        assert!(!eval_condition(&ConditionExpr::Bool(false), &[], 0));
+        assert!(eval_condition(&ConditionExpr::Bool(true), &ctx(&[], 0)));
+        assert!(!eval_condition(&ConditionExpr::Bool(false), &ctx(&[], 0)));
     }
 
     #[test]
@@ -1635,18 +1678,15 @@ mod tests {
         let h = hits(&[("$a", true), ("$b", false)]);
         assert!(eval_condition(
             &ConditionExpr::PatternMatch("$a".into()),
-            &h,
-            0
+            &ctx(&h, 0)
         ));
         assert!(!eval_condition(
             &ConditionExpr::PatternMatch("$b".into()),
-            &h,
-            0
+            &ctx(&h, 0)
         ));
         assert!(!eval_condition(
             &ConditionExpr::PatternMatch("$c".into()),
-            &h,
-            0
+            &ctx(&h, 0)
         ));
     }
 
@@ -1655,16 +1695,22 @@ mod tests {
         let all_hit = hits(&[("$a", true), ("$b", true)]);
         let some_hit = hits(&[("$a", true), ("$b", false)]);
 
-        assert!(eval_condition(&ConditionExpr::AllOfThem, &all_hit, 0));
-        assert!(!eval_condition(&ConditionExpr::AllOfThem, &some_hit, 0));
-        assert!(eval_condition(&ConditionExpr::AnyOfThem, &some_hit, 0));
+        assert!(eval_condition(&ConditionExpr::AllOfThem, &ctx(&all_hit, 0)));
+        assert!(!eval_condition(
+            &ConditionExpr::AllOfThem,
+            &ctx(&some_hit, 0)
+        ));
+        assert!(eval_condition(
+            &ConditionExpr::AnyOfThem,
+            &ctx(&some_hit, 0)
+        ));
     }
 
     #[test]
     fn eval_n_of_them() {
         let h = hits(&[("$a", true), ("$b", true), ("$c", false)]);
-        assert!(eval_condition(&ConditionExpr::NOfThem(2), &h, 0));
-        assert!(!eval_condition(&ConditionExpr::NOfThem(3), &h, 0));
+        assert!(eval_condition(&ConditionExpr::NOfThem(2), &ctx(&h, 0)));
+        assert!(!eval_condition(&ConditionExpr::NOfThem(3), &ctx(&h, 0)));
     }
 
     #[test]
@@ -1673,8 +1719,8 @@ mod tests {
             op: CmpOp::Lt,
             value: 1024,
         };
-        assert!(eval_condition(&expr, &[], 512));
-        assert!(!eval_condition(&expr, &[], 2048));
+        assert!(eval_condition(&expr, &ctx(&[], 512)));
+        assert!(!eval_condition(&expr, &ctx(&[], 2048)));
     }
 
     #[test]
@@ -1685,29 +1731,29 @@ mod tests {
             Box::new(ConditionExpr::PatternMatch("$a".into())),
             Box::new(ConditionExpr::PatternMatch("$b".into())),
         );
-        assert!(!eval_condition(&expr_and, &h, 0));
+        assert!(!eval_condition(&expr_and, &ctx(&h, 0)));
 
         let expr_or = ConditionExpr::Or(
             Box::new(ConditionExpr::PatternMatch("$a".into())),
             Box::new(ConditionExpr::PatternMatch("$b".into())),
         );
-        assert!(eval_condition(&expr_or, &h, 0));
+        assert!(eval_condition(&expr_or, &ctx(&h, 0)));
 
         let expr_not = ConditionExpr::Not(Box::new(ConditionExpr::PatternMatch("$b".into())));
-        assert!(eval_condition(&expr_not, &h, 0));
+        assert!(eval_condition(&expr_not, &ctx(&h, 0)));
     }
 
     #[test]
     fn eval_of_subset() {
         let h = hits(&[("$a", true), ("$b", false), ("$c", true)]);
         let expr = ConditionExpr::AnyOf(vec!["$a".into(), "$b".into()]);
-        assert!(eval_condition(&expr, &h, 0));
+        assert!(eval_condition(&expr, &ctx(&h, 0)));
 
         let expr = ConditionExpr::AllOf(vec!["$a".into(), "$c".into()]);
-        assert!(eval_condition(&expr, &h, 0));
+        assert!(eval_condition(&expr, &ctx(&h, 0)));
 
         let expr = ConditionExpr::AllOf(vec!["$a".into(), "$b".into()]);
-        assert!(!eval_condition(&expr, &h, 0));
+        assert!(!eval_condition(&expr, &ctx(&h, 0)));
     }
 
     // ── Engine integration tests ───────────────────────────────────────
@@ -2083,5 +2129,176 @@ value = "TOML"
         assert_eq!(engine.scan(b"AABB__CC").len(), 1);
         // Only $a in range — 1 < 2 — no match
         assert_eq!(engine.scan(b"AA__________________BBCC").len(), 0);
+    }
+
+    // ── Module field tests ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_pe_module_field() {
+        let rules = parse_yar(
+            r#"
+            import "pe"
+            rule PeDll {
+                condition:
+                    pe.is_dll
+            }
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(
+            rules[0].condition,
+            ConditionExpr::ModuleField { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_pe_module_comparison() {
+        let rules = parse_yar(
+            r#"
+            import "pe"
+            rule PeTimestamp {
+                condition:
+                    pe.timestamp > 1600000000
+            }
+            "#,
+        )
+        .unwrap();
+        match &rules[0].condition {
+            ConditionExpr::ModuleField {
+                module,
+                field,
+                comparison,
+            } => {
+                assert_eq!(module, "pe");
+                assert_eq!(field, "timestamp");
+                assert!(comparison.is_some());
+            }
+            other => panic!("expected ModuleField, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn engine_pe_is_dll() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            import "pe"
+            rule IsDll {
+                condition:
+                    pe.is_dll
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // Build minimal PE with DLL flag
+        let mut pe_dll = vec![0u8; 256];
+        pe_dll[0] = 0x4d; // MZ
+        pe_dll[1] = 0x5a;
+        pe_dll[0x3C] = 0x80;
+        pe_dll[0x80] = 0x50; // PE
+        pe_dll[0x81] = 0x45;
+        pe_dll[0x96] = 0x00; // DLL flag
+        pe_dll[0x97] = 0x20;
+        pe_dll[0x98] = 0x0b;
+        pe_dll[0x99] = 0x01;
+        assert_eq!(engine.scan(&pe_dll).len(), 1);
+
+        // Non-DLL PE
+        let mut pe_exe = vec![0u8; 256];
+        pe_exe[0] = 0x4d;
+        pe_exe[1] = 0x5a;
+        pe_exe[0x3C] = 0x80;
+        pe_exe[0x80] = 0x50;
+        pe_exe[0x81] = 0x45;
+        pe_exe[0x98] = 0x0b;
+        pe_exe[0x99] = 0x01;
+        assert!(engine.scan(&pe_exe).is_empty());
+
+        // Not a PE at all
+        assert!(engine.scan(b"not a PE").is_empty());
+    }
+
+    #[test]
+    fn engine_pe_number_of_sections() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            import "pe"
+            rule ManySections {
+                condition:
+                    pe.number_of_sections > 2
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // PE with 3 sections
+        let mut data = vec![0u8; 512];
+        data[0] = 0x4d;
+        data[1] = 0x5a;
+        data[0x3C] = 0x80;
+        data[0x80] = 0x50;
+        data[0x81] = 0x45;
+        data[0x86] = 0x03; // 3 sections
+        data[0x94] = 0x70;
+        data[0x98] = 0x0b;
+        data[0x99] = 0x01;
+        assert_eq!(engine.scan(&data).len(), 1);
+    }
+
+    #[test]
+    fn engine_elf_module() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            import "elf"
+            rule ElfExec {
+                condition:
+                    elf.type == 2
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // Minimal ELF executable
+        let mut data = vec![0u8; 128];
+        data[0..4].copy_from_slice(&[0x7f, 0x45, 0x4c, 0x46]);
+        data[4] = 2; // 64-bit
+        data[5] = 1; // little
+        data[6] = 1;
+        data[16] = 2; // ET_EXEC
+        data[18] = 62; // x86_64
+        assert_eq!(engine.scan(&data).len(), 1);
+
+        // Shared object (type 3) — shouldn't match
+        data[16] = 3;
+        assert!(engine.scan(&data).is_empty());
+    }
+
+    #[test]
+    fn engine_pe_and_pattern_combined() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            import "pe"
+            rule DllWithMarker {
+                strings:
+                    $marker = "EVIL"
+                condition:
+                    pe.is_dll and $marker
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // DLL PE with marker
+        let mut data = vec![0u8; 300];
+        data[0] = 0x4d;
+        data[1] = 0x5a;
+        data[0x3C] = 0x80;
+        data[0x80] = 0x50;
+        data[0x81] = 0x45;
+        data[0x97] = 0x20; // DLL
+        data[0x98] = 0x0b;
+        data[0x99] = 0x01;
+        data[200..204].copy_from_slice(b"EVIL");
+        assert_eq!(engine.scan(&data).len(), 1);
+
+        // DLL without marker
+        data[200..204].copy_from_slice(b"GOOD");
+        assert!(engine.scan(&data).is_empty());
     }
 }
