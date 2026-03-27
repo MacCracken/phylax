@@ -22,3 +22,5 @@ pub mod types;
 pub mod watch;
 pub mod yara;
 pub mod yara_parser;
+#[cfg(feature = "yara-x")]
+pub mod yara_x_backend;
