@@ -2,9 +2,9 @@
 
 All notable changes to Phylax will be documented in this file.
 
-## [0.5.0] - 2026-03-26
+## [0.5.0] - 2026-03-27
 
-Major feature release: native YARA syntax, deep binary analysis, and performance overhaul.
+Major feature release: native YARA syntax, deep binary analysis, script obfuscation detection, CI/CD integration, and performance overhaul.
 
 ### YARA Rule Engine
 - **Native `.yar` syntax parser** — `load_rules_yar()` parses standard YARA rule files
@@ -18,6 +18,7 @@ Major feature release: native YARA syntax, deep binary analysis, and performance
 - **Aho-Corasick multi-pattern automaton** — single-pass scanning with adaptive threshold (AC for 8+ patterns, memmem fallback below)
 - `ConditionExpr` recursive AST with `eval_condition()` evaluator
 - `RegexBuilder` with 10 MB size/DFA limits to prevent DoS from crafted patterns
+- `phylax rules validate` — syntax-check TOML and .yar files without scanning
 
 ### Binary Analysis
 - **Per-section entropy** — `pe_section_entropy()` / `elf_section_entropy()` with per-section-type thresholds (code > 7.0, data > 7.5)
@@ -27,20 +28,40 @@ Major feature release: native YARA syntax, deep binary analysis, and performance
 - **PE imphash** — function-level import parsing (ILT/INT with ordinal support) + `compute_imphash()` (SHA-256 variant)
 - **PE TLS callback detection** — `has_tls_callbacks` field flags pre-entrypoint execution
 - **PE debug directory / PDB path** — `pdb_path` field extracts developer build path
-- **PE Rich header parsing** — `rich_entries` field with XOR-decrypted toolchain IDs
+- **PE Rich header parsing** — `rich_entries` with XOR-decrypted toolchain IDs + `rich_product_name()` lookup (VS6 through VS2022+)
 - **ELF program header parsing** — segments, interpreter path, security feature detection (RELRO, RWX, static linking, executable stack)
+
+### Script Analysis (NEW)
+- **Script language classification** — PowerShell, VBScript, JavaScript, Python, Batch, Shell (shebang + content-based)
+- **Obfuscation detection** — per-line entropy analysis, base64 block detection, language-specific patterns:
+  - PowerShell: `[char]` chains, `Invoke-Expression`/IEX, `-EncodedCommand`, `-WindowStyle Hidden`
+  - VBScript: `Chr()` concatenation, `Execute`/`ExecuteGlobal`, `WScript.Shell`
+  - JavaScript: `eval()`, `fromCharCode` chains, `document.write`+`unescape`, hex escape floods
+
+### CI/CD Integration (NEW)
+- **SARIF v2.1.0 output** — `--format sarif` for GitHub/GitLab Code Scanning integration
+- **Exit codes for pipeline gating** — `--exit-code N` + `--severity-threshold` on `phylax scan`
+- **Scan session UUID** — `session_id` on `ScanResult` and `ThreatReport` for audit trails and SIEM correlation
+- **JSON structured logging** — `--log-format json` for SIEM ingestion (Splunk, Elastic)
+
+### Finding Management (NEW)
+- **Finding fingerprints** — `ThreatFinding::fingerprint()` for stable deduplication across scans
+- **Baseline suppression** — `Baseline` struct loads from `.phylax-ignore` or previous scan JSON, filters known findings
+
+### CLI / UX
+- **Verbosity flags** — `-v` (info), `-vv` (debug), `-vvv` (trace), `-q` (quiet/error-only)
+- rayon parallel file scanning — multi-file `phylax scan` uses `par_iter`
+- Eliminated double file read in single-file scan
 
 ### Performance
 - **`memchr::memmem`** for YARA literal/hex pattern matching — 100-200x faster than naive `windows().any()`
 - **`#[inline]`** on 14 hot-path functions — 20-50% improvement on report rendering, findings generation
-- **rayon parallel file scanning** — multi-file `phylax scan` uses `par_iter` for near-linear multi-core scaling
-- **Eliminated double file read** in single-file `cmd_scan` — data loaded once, reused for display and scan
 
 ### Security Hardening
 - `HooshClient::new()` / `DaimonClient::new()` return `Result` — no more `.expect()` panics in library code
-- PE section count capped to 96 (spec max) — prevents 5 MB allocation from crafted `num_sections`
-- ELF section count capped to 1024 — prevents excessive allocation from crafted `sh_num`
+- PE section count capped to 96 (spec max), ELF section count capped to 1024
 - Symlink skip in `collect_files` — prevents directory traversal and infinite loops
+- **Quarantine hardening** — canonicalized root, 0700 permissions (Unix), UUID-only filenames, path traversal rejection on release IDs
 - `#[non_exhaustive]` on `WatchEvent` enum
 
 ### Correctness
@@ -50,12 +71,13 @@ Major feature release: native YARA syntax, deep binary analysis, and performance
 - `bench-history.sh` fixed to filter criterion `change:` lines
 
 ### Dependencies
-- Added `memchr = "2"` (already transitive via regex)
-- Added `aho-corasick = "1"` (already transitive via regex)
+- Added `memchr = "2"`, `aho-corasick = "1"` (already transitive via regex)
 - Added `rayon = "1"`
+- Enabled `tracing-subscriber` `json` feature
+- Updated `cc` 1.2.58, `mio` 1.2.0, `proptest` 1.11.0, `uuid` 1.23.0
 
 ### Quality
-- 315 tests (305 unit + 10 integration)
+- 344 tests (334 unit + 10 integration)
 - 13 proptest property-based tests
 - 16 benchmark groups with throughput measurement
 - 3 fuzz targets (YARA, analyze, entropy)

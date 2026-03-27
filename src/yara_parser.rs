@@ -44,18 +44,26 @@ enum Token {
     Of,
     Them,
     Filesize,
+    For,
+    In,
+    At,
+    DotDot, // ..
     Nocase,
     Wide,
     Ascii,
     Fullword,
     // Identifiers & literals
     Ident(String),
-    PatternId(String),
+    PatternId(String),       // $name
+    PatternCountId(String),  // #name (count of matches)
+    PatternOffsetId(String), // @name (offset of match)
     StringLit(String),
     HexBlock(String),
     RegexLit(String),
     IntLit(u64),
     // Delimiters & operators
+    LBracket, // [
+    RBracket, // ]
     LBrace,
     RBrace,
     LParen,
@@ -197,6 +205,35 @@ impl Lexer {
             return Ok(Token::PatternId(name));
         }
 
+        // Pattern count: #identifier
+        if ch == '#'
+            && self.pos + 1 < self.chars.len()
+            && self.chars[self.pos + 1].is_ascii_alphabetic()
+        {
+            self.next_char();
+            let mut name = String::from("$"); // normalize to $ prefix for lookup
+            while self
+                .peek_char()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                name.push(self.next_char().unwrap());
+            }
+            return Ok(Token::PatternCountId(name));
+        }
+
+        // Pattern offset: @identifier
+        if ch == '@' {
+            self.next_char();
+            let mut name = String::from("$"); // normalize to $ prefix for lookup
+            while self
+                .peek_char()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                name.push(self.next_char().unwrap());
+            }
+            return Ok(Token::PatternOffsetId(name));
+        }
+
         // String literal: "..."
         if ch == '"' {
             return self.lex_string_literal();
@@ -239,6 +276,14 @@ impl Lexer {
                 self.next_char();
                 return Ok(Token::RParen);
             }
+            '[' => {
+                self.next_char();
+                return Ok(Token::LBracket);
+            }
+            ']' => {
+                self.next_char();
+                return Ok(Token::RBracket);
+            }
             ':' => {
                 self.next_char();
                 return Ok(Token::Colon);
@@ -246,6 +291,14 @@ impl Lexer {
             ',' => {
                 self.next_char();
                 return Ok(Token::Comma);
+            }
+            '.' => {
+                self.next_char();
+                if self.peek_char() == Some('.') {
+                    self.next_char();
+                    return Ok(Token::DotDot);
+                }
+                return Err(YaraError::Parse("unexpected '.'".into()));
             }
             '<' => {
                 self.next_char();
@@ -415,6 +468,9 @@ impl Lexer {
             "of" => Token::Of,
             "them" => Token::Them,
             "filesize" => Token::Filesize,
+            "for" => Token::For,
+            "in" => Token::In,
+            "at" => Token::At,
             "nocase" => Token::Nocase,
             "wide" => Token::Wide,
             "ascii" => Token::Ascii,
@@ -804,6 +860,139 @@ impl Parser {
                         "unexpected integer {n} in condition (expected 'N of ...')"
                     )))
                 }
+            }
+            // #name > N — pattern count comparison
+            Token::PatternCountId(name) => {
+                let name = name.clone();
+                self.advance();
+                let op = self.parse_cmp_op()?;
+                let value = self.parse_int_value()? as usize;
+                Ok(ConditionExpr::PatternCount { name, op, value })
+            }
+            // @name[N] < offset — pattern offset comparison
+            Token::PatternOffsetId(name) => {
+                let name = name.clone();
+                self.advance();
+                // Optional index: @a[0] or just @a (defaults to index 0)
+                let index = if *self.peek() == Token::LBracket {
+                    self.advance(); // [
+                    let idx = self.parse_int_value()? as usize;
+                    self.expect(&Token::RBracket)?; // ]
+                    idx
+                } else {
+                    0
+                };
+                let op = self.parse_cmp_op()?;
+                let value = self.parse_int_value()?;
+                Ok(ConditionExpr::PatternOffset {
+                    name,
+                    index,
+                    op,
+                    value,
+                })
+            }
+            // for <quantifier> of <patterns> : ( <constraint> )
+            Token::For => {
+                self.advance();
+                let quantifier = match self.peek().clone() {
+                    Token::All => {
+                        self.advance();
+                        crate::yara::ForQuantifier::All
+                    }
+                    Token::Any => {
+                        self.advance();
+                        crate::yara::ForQuantifier::Any
+                    }
+                    Token::IntLit(n) => {
+                        let n = n as usize;
+                        self.advance();
+                        crate::yara::ForQuantifier::Count(n)
+                    }
+                    other => {
+                        return Err(YaraError::Parse(format!(
+                            "expected quantifier after 'for', got {other:?}"
+                        )));
+                    }
+                };
+
+                self.expect(&Token::Of)?;
+
+                let pat_set = match self.peek() {
+                    Token::Them => {
+                        self.advance();
+                        crate::yara::ForPatterns::Them
+                    }
+                    Token::LParen => {
+                        self.advance();
+                        let mut names = Vec::new();
+                        loop {
+                            match self.peek().clone() {
+                                Token::PatternId(name) => {
+                                    names.push(name.clone());
+                                    self.advance();
+                                    if *self.peek() == Token::Comma {
+                                        self.advance();
+                                    }
+                                }
+                                Token::RParen => {
+                                    self.advance();
+                                    break;
+                                }
+                                other => {
+                                    return Err(YaraError::Parse(format!(
+                                        "expected pattern ID in 'for..of', got {other:?}"
+                                    )));
+                                }
+                            }
+                        }
+                        crate::yara::ForPatterns::Named(names)
+                    }
+                    other => {
+                        return Err(YaraError::Parse(format!(
+                            "expected 'them' or '(' after 'of', got {other:?}"
+                        )));
+                    }
+                };
+
+                self.expect(&Token::Colon)?;
+                self.expect(&Token::LParen)?;
+
+                // Parse constraint: $ at <offset> or $ in (<lo>..<hi>)
+                // The $ here is a placeholder — we expect PatternId("$")
+                match self.peek().clone() {
+                    Token::PatternId(ref s) if s == "$" => {
+                        self.advance();
+                    }
+                    _ => {
+                        // Some rules may omit the $ — try to parse anyway
+                    }
+                }
+
+                let constraint = if *self.peek() == Token::At {
+                    self.advance();
+                    let offset = self.parse_int_value()?;
+                    crate::yara::ForConstraint::At(offset)
+                } else if *self.peek() == Token::In {
+                    self.advance();
+                    self.expect(&Token::LParen)?;
+                    let lo = self.parse_int_value()?;
+                    self.expect(&Token::DotDot)?;
+                    let hi = self.parse_int_value()?;
+                    self.expect(&Token::RParen)?;
+                    crate::yara::ForConstraint::InRange(lo, hi)
+                } else {
+                    return Err(YaraError::Parse(
+                        "expected 'at' or 'in' in for..of constraint".into(),
+                    ));
+                };
+
+                self.expect(&Token::RParen)?;
+
+                Ok(ConditionExpr::ForOf {
+                    quantifier,
+                    patterns: pat_set,
+                    constraint,
+                })
             }
             other => Err(YaraError::Parse(format!(
                 "unexpected token in condition: {other:?}"
@@ -1425,8 +1614,16 @@ mod tests {
 
     use crate::yara::eval_condition;
 
-    fn hits(names: &[(&str, bool)]) -> Vec<(String, bool)> {
-        names.iter().map(|(n, h)| (n.to_string(), *h)).collect()
+    fn hits(names: &[(&str, bool)]) -> Vec<crate::yara::PatternMatchInfo> {
+        names
+            .iter()
+            .map(|(n, h)| crate::yara::PatternMatchInfo {
+                name: n.to_string(),
+                matched: *h,
+                count: if *h { 1 } else { 0 },
+                offsets: Vec::new(),
+            })
+            .collect()
     }
 
     #[test]
@@ -1672,5 +1869,221 @@ value = "TOML"
         assert_eq!(engine.scan(b"HeLLo").len(), 1);
         assert_eq!(engine.scan(b"hello").len(), 1);
         assert!(engine.scan(b"nope").is_empty());
+    }
+
+    // ── #count operator tests ──────────────────────────────────────────
+
+    #[test]
+    fn parse_condition_pattern_count() {
+        let rules = parse_yar(
+            r#"
+            rule CountRule {
+                strings:
+                    $a = "AA"
+                condition:
+                    #a > 2
+            }
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(
+            rules[0].condition,
+            ConditionExpr::PatternCount { .. }
+        ));
+    }
+
+    #[test]
+    fn engine_yar_pattern_count() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            rule ThreeOrMore {
+                strings:
+                    $a = "XX"
+                condition:
+                    #a >= 3
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // "XX" appears 2 times — should not match
+        assert!(engine.scan(b"XX__XX").is_empty());
+        // "XX" appears 3 times — should match
+        assert_eq!(engine.scan(b"XX__XX__XX").len(), 1);
+        // "XX" appears 4 times — should match
+        assert_eq!(engine.scan(b"XXXXXXXXXXXX").len(), 1);
+    }
+
+    // ── @offset operator tests ─────────────────────────────────────────
+
+    #[test]
+    fn parse_condition_pattern_offset() {
+        let rules = parse_yar(
+            r#"
+            rule OffsetRule {
+                strings:
+                    $a = "MZ"
+                condition:
+                    @a[0] == 0
+            }
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(
+            rules[0].condition,
+            ConditionExpr::PatternOffset { .. }
+        ));
+    }
+
+    #[test]
+    fn engine_yar_pattern_offset() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            rule AtStart {
+                strings:
+                    $mz = "MZ"
+                condition:
+                    @mz[0] == 0
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // "MZ" at offset 0 — match
+        assert_eq!(engine.scan(b"MZ\x90\x00").len(), 1);
+        // "MZ" at offset 2 — no match (@mz[0] == 2, not 0)
+        assert!(engine.scan(b"\x00\x00MZ").is_empty());
+    }
+
+    #[test]
+    fn engine_yar_pattern_offset_no_index() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            rule AtStartNoIndex {
+                strings:
+                    $sig = "PK"
+                condition:
+                    @sig < 4
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        assert_eq!(engine.scan(b"PK\x03\x04").len(), 1);
+        assert!(engine.scan(b"\x00\x00\x00\x00\x00PK").is_empty());
+    }
+
+    #[test]
+    fn engine_yar_count_and_offset_combined() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            rule Combined {
+                strings:
+                    $a = "AA"
+                condition:
+                    #a >= 2 and @a[0] < 5
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // "AA" at offset 0 and 4 — count=2, first offset=0 < 5 — match
+        assert_eq!(engine.scan(b"AA__AA").len(), 1);
+        // "AA" at offset 10 and 14 — count=2, first offset=10 >= 5 — no match
+        assert!(engine.scan(b"__________AA__AA").is_empty());
+    }
+
+    // ── for..of positional constraint tests ────────────────────────────
+
+    #[test]
+    fn parse_for_any_of_at() {
+        let rules = parse_yar(
+            r#"
+            rule ForAt {
+                strings:
+                    $a = "MZ"
+                    $b = "PE"
+                condition:
+                    for any of ($a, $b) : ($ at 0)
+            }
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(rules[0].condition, ConditionExpr::ForOf { .. }));
+    }
+
+    #[test]
+    fn engine_for_any_at() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            rule ForAnyAt {
+                strings:
+                    $a = "AA"
+                    $b = "BB"
+                condition:
+                    for any of ($a, $b) : ($ at 0)
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // $a at offset 0 — match
+        assert_eq!(engine.scan(b"AA__BB").len(), 1);
+        // $b at offset 0 — match
+        assert_eq!(engine.scan(b"BB__AA").len(), 1);
+        // Neither at offset 0
+        assert!(engine.scan(b"__AABB").is_empty());
+    }
+
+    #[test]
+    fn engine_for_all_of_them_at() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            rule ForAllAt {
+                strings:
+                    $a = "X"
+                condition:
+                    for all of them : ($ at 0)
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        assert_eq!(engine.scan(b"X__").len(), 1);
+        assert!(engine.scan(b"_X_").is_empty());
+    }
+
+    #[test]
+    fn engine_for_any_in_range() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            rule ForInRange {
+                strings:
+                    $a = "SIG"
+                condition:
+                    for any of them : ($ in (0..16))
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // "SIG" at offset 4 — within 0..16 — match
+        assert_eq!(engine.scan(b"____SIG_rest").len(), 1);
+        // "SIG" at offset 20 — outside 0..16 — no match
+        assert!(engine.scan(b"____________________SIG").is_empty());
+    }
+
+    #[test]
+    fn engine_for_n_of_at() {
+        let mut engine = crate::yara::YaraEngine::new();
+        let yar = r#"
+            rule For2At {
+                strings:
+                    $a = "AA"
+                    $b = "BB"
+                    $c = "CC"
+                condition:
+                    for 2 of ($a, $b, $c) : ($ in (0..10))
+            }
+        "#;
+        engine.load_rules_yar(yar).unwrap();
+
+        // $a at 0 and $b at 2 — 2 in range — match
+        assert_eq!(engine.scan(b"AABB__CC").len(), 1);
+        // Only $a in range — 1 < 2 — no match
+        assert_eq!(engine.scan(b"AA__________________BBCC").len(), 0);
     }
 }

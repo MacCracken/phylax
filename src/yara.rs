@@ -54,6 +54,52 @@ impl YaraPattern {
             Self::Regex(re) => re.is_match(data),
         }
     }
+
+    /// Find all match offsets in `data`. Returns empty vec if no matches.
+    ///
+    /// Limited to `MAX_MATCH_OFFSETS` to prevent memory exhaustion on adversarial input.
+    pub fn find_offsets(&self, data: &[u8]) -> Vec<usize> {
+        const MAX_MATCH_OFFSETS: usize = 4096;
+        let mut offsets = Vec::new();
+        match self {
+            Self::Literal(needle) | Self::Hex(needle) => {
+                if needle.is_empty() {
+                    return offsets;
+                }
+                let finder = memchr::memmem::Finder::new(needle);
+                let mut start = 0;
+                while let Some(pos) = finder.find(&data[start..]) {
+                    offsets.push(start + pos);
+                    start += pos + 1;
+                    if offsets.len() >= MAX_MATCH_OFFSETS {
+                        break;
+                    }
+                }
+            }
+            Self::Regex(re) => {
+                for mat in re.find_iter(data) {
+                    offsets.push(mat.start());
+                    if offsets.len() >= MAX_MATCH_OFFSETS {
+                        break;
+                    }
+                }
+            }
+        }
+        offsets
+    }
+}
+
+/// Match information for a single pattern within a rule evaluation.
+#[derive(Debug, Clone)]
+pub struct PatternMatchInfo {
+    /// Pattern name (e.g. "$a").
+    pub name: String,
+    /// Whether the pattern matched at all.
+    pub matched: bool,
+    /// Number of times the pattern matched.
+    pub count: usize,
+    /// Byte offsets of each match (may be truncated for very large files).
+    pub offsets: Vec<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +144,25 @@ pub enum ConditionExpr {
     AnyOf(Vec<String>),
     /// `N of ($a, $b, ...)`.
     NOf(usize, Vec<String>),
+    /// `#a > N` — pattern occurrence count comparison.
+    PatternCount {
+        name: String,
+        op: CmpOp,
+        value: usize,
+    },
+    /// `@a[N] < offset` — Nth match position comparison.
+    PatternOffset {
+        name: String,
+        index: usize,
+        op: CmpOp,
+        value: u64,
+    },
+    /// `for <quantifier> of <patterns> : ($ at <offset>)` or `($ in (<lo>..<hi>))`.
+    ForOf {
+        quantifier: ForQuantifier,
+        patterns: ForPatterns,
+        constraint: ForConstraint,
+    },
     /// `filesize < N`, `filesize > N`, etc.
     FileSize { op: CmpOp, value: u64 },
     /// `not <expr>`.
@@ -106,6 +171,33 @@ pub enum ConditionExpr {
     And(Box<ConditionExpr>, Box<ConditionExpr>),
     /// `<expr> or <expr>`.
     Or(Box<ConditionExpr>, Box<ConditionExpr>),
+}
+
+/// Quantifier for `for..of` expressions.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ForQuantifier {
+    All,
+    Any,
+    Count(usize),
+}
+
+/// Pattern set for `for..of` expressions.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ForPatterns {
+    Them,
+    Named(Vec<String>),
+}
+
+/// Positional constraint for `for..of` expressions.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ForConstraint {
+    /// `$ at <offset>` — pattern must match at exact offset.
+    At(u64),
+    /// `$ in (<lo>..<hi>)` — pattern must match within byte range.
+    InRange(u64, u64),
 }
 
 /// Comparison operator for filesize expressions.
@@ -122,47 +214,103 @@ pub enum CmpOp {
 
 /// Evaluate a condition expression against pattern match results.
 #[must_use]
-pub fn eval_condition(
-    expr: &ConditionExpr,
-    pattern_hits: &[(String, bool)],
-    data_len: u64,
-) -> bool {
+pub fn eval_condition(expr: &ConditionExpr, patterns: &[PatternMatchInfo], data_len: u64) -> bool {
     match expr {
         ConditionExpr::Bool(b) => *b,
-        ConditionExpr::PatternMatch(name) => pattern_hits.iter().any(|(n, hit)| n == name && *hit),
-        ConditionExpr::AllOfThem => pattern_hits.iter().all(|(_, hit)| *hit),
-        ConditionExpr::AnyOfThem => pattern_hits.iter().any(|(_, hit)| *hit),
-        ConditionExpr::NOfThem(n) => pattern_hits.iter().filter(|(_, hit)| *hit).count() >= *n,
+        ConditionExpr::PatternMatch(name) => patterns.iter().any(|p| p.name == *name && p.matched),
+        ConditionExpr::AllOfThem => patterns.iter().all(|p| p.matched),
+        ConditionExpr::AnyOfThem => patterns.iter().any(|p| p.matched),
+        ConditionExpr::NOfThem(n) => patterns.iter().filter(|p| p.matched).count() >= *n,
         ConditionExpr::AllOf(names) => names
             .iter()
-            .all(|name| pattern_hits.iter().any(|(n, hit)| n == name && *hit)),
+            .all(|name| patterns.iter().any(|p| p.name == *name && p.matched)),
         ConditionExpr::AnyOf(names) => names
             .iter()
-            .any(|name| pattern_hits.iter().any(|(n, hit)| n == name && *hit)),
+            .any(|name| patterns.iter().any(|p| p.name == *name && p.matched)),
         ConditionExpr::NOf(count, names) => {
             names
                 .iter()
-                .filter(|name| pattern_hits.iter().any(|(n, hit)| n == *name && *hit))
+                .filter(|name| patterns.iter().any(|p| p.name == **name && p.matched))
                 .count()
                 >= *count
         }
-        ConditionExpr::FileSize { op, value } => match op {
-            CmpOp::Lt => data_len < *value,
-            CmpOp::Le => data_len <= *value,
-            CmpOp::Gt => data_len > *value,
-            CmpOp::Ge => data_len >= *value,
-            CmpOp::Eq => data_len == *value,
-            CmpOp::Ne => data_len != *value,
-        },
-        ConditionExpr::Not(inner) => !eval_condition(inner, pattern_hits, data_len),
+        ConditionExpr::PatternCount { name, op, value } => {
+            let count = patterns
+                .iter()
+                .find(|p| p.name == *name)
+                .map(|p| p.count)
+                .unwrap_or(0);
+            compare_usize(count, *op, *value)
+        }
+        ConditionExpr::PatternOffset {
+            name,
+            index,
+            op,
+            value,
+        } => patterns
+            .iter()
+            .find(|p| p.name == *name)
+            .and_then(|p| p.offsets.get(*index))
+            .is_some_and(|&off| compare_u64(off as u64, *op, *value)),
+        ConditionExpr::ForOf {
+            quantifier,
+            patterns: pat_set,
+            constraint,
+        } => {
+            let selected: Vec<&PatternMatchInfo> = match pat_set {
+                ForPatterns::Them => patterns.iter().collect(),
+                ForPatterns::Named(names) => patterns
+                    .iter()
+                    .filter(|p| names.contains(&p.name))
+                    .collect(),
+            };
+            let matching = selected.iter().filter(|p| {
+                p.offsets.iter().any(|&off| match constraint {
+                    ForConstraint::At(at) => off as u64 == *at,
+                    ForConstraint::InRange(lo, hi) => {
+                        let o = off as u64;
+                        o >= *lo && o < *hi
+                    }
+                })
+            });
+            match quantifier {
+                ForQuantifier::All => matching.count() == selected.len() && !selected.is_empty(),
+                ForQuantifier::Any => matching.count() > 0,
+                ForQuantifier::Count(n) => matching.count() >= *n,
+            }
+        }
+        ConditionExpr::FileSize { op, value } => compare_u64(data_len, *op, *value),
+        ConditionExpr::Not(inner) => !eval_condition(inner, patterns, data_len),
         ConditionExpr::And(lhs, rhs) => {
-            eval_condition(lhs, pattern_hits, data_len)
-                && eval_condition(rhs, pattern_hits, data_len)
+            eval_condition(lhs, patterns, data_len) && eval_condition(rhs, patterns, data_len)
         }
         ConditionExpr::Or(lhs, rhs) => {
-            eval_condition(lhs, pattern_hits, data_len)
-                || eval_condition(rhs, pattern_hits, data_len)
+            eval_condition(lhs, patterns, data_len) || eval_condition(rhs, patterns, data_len)
         }
+    }
+}
+
+#[inline]
+fn compare_usize(lhs: usize, op: CmpOp, rhs: usize) -> bool {
+    match op {
+        CmpOp::Lt => lhs < rhs,
+        CmpOp::Le => lhs <= rhs,
+        CmpOp::Gt => lhs > rhs,
+        CmpOp::Ge => lhs >= rhs,
+        CmpOp::Eq => lhs == rhs,
+        CmpOp::Ne => lhs != rhs,
+    }
+}
+
+#[inline]
+fn compare_u64(lhs: u64, op: CmpOp, rhs: u64) -> bool {
+    match op {
+        CmpOp::Lt => lhs < rhs,
+        CmpOp::Le => lhs <= rhs,
+        CmpOp::Gt => lhs > rhs,
+        CmpOp::Ge => lhs >= rhs,
+        CmpOp::Eq => lhs == rhs,
+        CmpOp::Ne => lhs != rhs,
     }
 }
 
@@ -642,13 +790,31 @@ impl YaraEngine {
                 RuleCondition::Any => match_count > 0,
                 RuleCondition::AtLeast(n) => match_count >= *n,
                 RuleCondition::Expression(expr) => {
-                    let hits: Vec<(String, bool)> = rule
+                    // Build full match info with counts + offsets for expression evaluation
+                    let info: Vec<PatternMatchInfo> = rule
                         .patterns
                         .iter()
                         .enumerate()
-                        .map(|(pi, (name, _))| (name.clone(), pattern_hits[pi]))
+                        .map(|(pi, (name, pat))| {
+                            if pattern_hits[pi] {
+                                let offsets = pat.find_offsets(scan_data);
+                                PatternMatchInfo {
+                                    name: name.clone(),
+                                    matched: true,
+                                    count: offsets.len(),
+                                    offsets,
+                                }
+                            } else {
+                                PatternMatchInfo {
+                                    name: name.clone(),
+                                    matched: false,
+                                    count: 0,
+                                    offsets: Vec::new(),
+                                }
+                            }
+                        })
                         .collect();
-                    eval_condition(expr, &hits, data.len() as u64)
+                    eval_condition(expr, &info, data.len() as u64)
                 }
             };
 

@@ -2,12 +2,6 @@
 
 ## v0.6.0
 
-### Detection
-- Script language classification (PowerShell, VBA, JavaScript, Python, Batch)
-- Script obfuscation indicators (high per-line entropy, `eval(atob(...))`, `[char]` casting chains, base64 blocks)
-- Packer/compiler identification lookup table from Rich header tool IDs
-- Finding fingerprint + baseline suppression (`--baseline scan.json`, `.phylax-ignore`)
-
 ### YARA Condition Extensions
 - `for..of` with positional constraints (`$ at entrypoint`, `$ in (0..100)`)
 - `#count` operator — pattern occurrence counting (`#a > 3`)
@@ -21,10 +15,9 @@
 - PE Authenticode / certificate extraction and validation
 
 ### UX / CLI
-- Rule management: `rules validate`, `rules fetch <source>`
 - Config file support (`phylax.toml`, `$XDG_CONFIG_HOME/phylax/config.toml`)
 - Progress indicator for multi-file scans (`indicatif`, feature-gated)
-- `-v`/`-vv`/`-q` verbosity flags mapped to tracing levels
+- `phylax rules fetch <source>` — download community rulesets
 
 ### Integration
 - STIX/TAXII threat intel import (`phylax intel import --stix <file>`)
@@ -34,7 +27,6 @@
 ### Performance & Hardening
 - Memory-mapped I/O for files > 4 MB (`memmap2`)
 - `O_NOFOLLOW` + `fstat` hardening in scan path (Linux-specific)
-- Quarantine path traversal hardening (canonicalize + verify under root)
 - Per-scan allocation limits (cap total memory per scan)
 - Daemon rate limiting and max concurrent scans
 
