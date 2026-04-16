@@ -131,22 +131,37 @@ Last 3 criterion runs, best estimate shown.
 
 ## Cyrius Port (v0.7.5 — 2026-04-16)
 
-_Benchmarks pending — run `cyrius bench tests/phylax.bcyr` to populate._
+First run — 2026-04-16.
 
-| Benchmark | Cyrius | vs Rust |
-|-----------|--------|---------|
-| entropy_1k | — | — |
-| entropy_1m | — | — |
-| chi_squared | — | — |
-| file_detection | — | — |
-| sha256_4k | — | — |
-| memmem_4k | — | — |
-| hex_encode_256 | — | — |
-| extract_ascii | — | — |
-| ssdeep_4k | — | — |
-| tlsh_1k | — | — |
-| queue_enqueue | — | — |
-| queue_dequeue | — | — |
+| Benchmark | Cyrius | Rust (closest) | Ratio |
+|-----------|--------|---------------|-------|
+| entropy_1k | 17 µs | 1.71 µs (shannon/1024) | ~10x |
+| entropy_1m | 6.31 ms | 309 µs (shannon/1048576) | ~20x |
+| chi_squared | 27 µs | — (not benchmarked in Rust) | — |
+| file_detection | 1 µs | 808 ps (detect_type_elf) | ~1200x |
+| sha256_4k | 259 µs | 1.08 µs (hash/1024) | ~240x |
+| memmem_4k | 12 µs | — (not directly comparable) | — |
+| hex_encode_256 | 4 µs | — (not benchmarked in Rust) | — |
+| extract_ascii | 36 µs | 1.56 µs (ascii/1024) | ~23x |
+| ssdeep_4k | 111 µs | — (not benchmarked in Rust) | — |
+| tlsh_1k | 358 µs | — (not benchmarked in Rust) | — |
+| queue_enqueue | 12.77 ms (1000 ops) | 64.63 µs (1000 ops) | ~200x |
+| queue_dequeue | 23.39 ms (1000 ops) | 64.32 µs (1000 ops) | ~364x |
+
+### Analysis
+
+**Expected slower areas** (Cyrius is direct-to-assembly, no LLVM optimizations):
+- SHA-256: Rust uses `sha2` with x86 assembly intrinsics; Cyrius sigil is pure Cyrius
+- Queue: Rust uses `BinaryHeap` (optimized stdlib); Cyrius uses sorted vec insert (O(n) vs O(log n))
+- File detection: Rust uses array comparison; Cyrius uses byte-by-byte `load8`
+- Entropy: No SIMD vectorization in Cyrius; Rust compiler auto-vectorizes the frequency loop
+
+**Optimization opportunities for v0.8.0**:
+- Queue: switch from sorted insert to binary heap
+- Entropy: unroll frequency counting loop
+- SHA-256: use sigil's potential assembly path
+- File detection: batch first-4-byte comparison into single u32 compare
+- memmem: add Boyer-Moore or horspool for longer needles
 
 ---
 

@@ -227,6 +227,26 @@ fn finding_is_critical(f) {
     return load64(f + 16) == SEVERITY_CRITICAL;
 }
 
+fn finding_fingerprint(f) {
+    # Build "rule_name|target_display|severity"
+    var s = load64(f + 24);  # rule_name (Str)
+    s = str_cat(s, str_from("|"));
+    # target display
+    var target = load64(f);
+    var tkind = load64(target);
+    if (tkind == SCAN_TARGET_FILE) {
+        s = str_cat(s, str_cat(str_from("file:"), str_from(load64(target + 8))));
+    } elif (tkind == SCAN_TARGET_MEMORY) {
+        s = str_cat(s, str_from("memory"));
+    } else {
+        s = str_cat(s, str_from(load64(target + 8)));
+    }
+    s = str_cat(s, str_from("|"));
+    s = str_cat(s, severity_name(load64(f + 16)));
+    # SHA-256 hash
+    return sha256_hex(str_data(s), str_len(s));
+}
+
 # ScanResult
 struct ScanResult {
     target;           # ScanTarget ptr
@@ -402,6 +422,84 @@ fn baseline_len(b) {
     return vec_len(load64(b)) + vec_len(load64(b + 8));
 }
 
+fn baseline_from_ignore_file(content) {
+    # Parse .phylax-ignore: one entry per line
+    # 64-char hex = fingerprint, anything else = rule name
+    # Lines starting with # are comments, empty lines skipped
+    var b = alloc(16);
+    store64(b, vec_new());      # fingerprints vec
+    store64(b + 8, vec_new());  # rule_names vec
+
+    var data = str_data(content);
+    var len = str_len(content);
+    var line_start = 0;
+
+    for (var i = 0; i <= len; i = i + 1) {
+        var at_end = (i == len);
+        if (at_end == 0) { at_end = (load8(data + i) == 10); }
+        if (at_end) {
+            var ll = i - line_start;
+            if (ll > 0) {
+                var line = str_trim(str_from_raw(data + line_start, ll));
+                var llen = str_len(line);
+                if (llen > 0) {
+                    var first = load8(str_data(line));
+                    if (first != 35) {  # not '#'
+                        if (llen == 64) {
+                            # Check if all hex digits
+                            var all_hex = 1;
+                            for (var j = 0; j < 64; j = j + 1) {
+                                var c = load8(str_data(line) + j);
+                                var is_hex = 0;
+                                if (c >= 48 && c <= 57) { is_hex = 1; }
+                                if (c >= 97 && c <= 102) { is_hex = 1; }
+                                if (c >= 65 && c <= 70) { is_hex = 1; }
+                                if (is_hex == 0) { all_hex = 0; j = 64; }
+                            }
+                            if (all_hex) { vec_push(load64(b), line); }
+                            else { vec_push(load64(b + 8), line); }
+                        } else {
+                            vec_push(load64(b + 8), line);
+                        }
+                    }
+                }
+            }
+            line_start = i + 1;
+        }
+    }
+    return b;
+}
+
+fn baseline_is_suppressed(b, finding) {
+    var fp = finding_fingerprint(finding);
+    var rule = load64(finding + 24);
+
+    # Check fingerprints
+    var fps = load64(b);
+    for (var i = 0; i < vec_len(fps); i = i + 1) {
+        if (str_eq(vec_get(fps, i), fp)) { return 1; }
+    }
+
+    # Check rule names
+    var rules = load64(b + 8);
+    for (var i = 0; i < vec_len(rules); i = i + 1) {
+        if (str_eq(vec_get(rules, i), rule)) { return 1; }
+    }
+
+    return 0;
+}
+
+fn baseline_filter(b, findings) {
+    var out = vec_new();
+    for (var i = 0; i < vec_len(findings); i = i + 1) {
+        var f = vec_get(findings, i);
+        if (baseline_is_suppressed(b, f) == 0) {
+            vec_push(out, f);
+        }
+    }
+    return out;
+}
+
 # ================================================================
 # Error handling
 # ================================================================
@@ -474,12 +572,81 @@ fn phylax_read_file(path) {
     return str_new(buf, n);
 }
 
-# http_post shim — stdlib only provides http_get
-# For now, stub — return 0 (not available)
-# Full implementation would use sock_connect + manual HTTP request
+# http_post — POST request using raw TCP sockets
+# url: C string "http://host:port/path"
+# body: Str with the request body
+# content_type: C string like "application/json"
+# Returns: response struct (status at +0, body Str at +8, body_len at +16) or error
 fn http_post(url, body, content_type) {
-    sakshi_warn("http_post not yet implemented", 35);
-    return 0;
+    var parsed = _http_parse_url(url);
+    if (parsed == 0) {
+        var bad = alloc(24);
+        store64(bad, 0);
+        return bad;
+    }
+    var host = load64(parsed);
+    var port = load64(parsed + 8);
+    var path = load64(parsed + 16);
+
+    # Build POST request headers
+    var req = alloc(4096);
+    var pos = 0;
+
+    # "POST /path HTTP/1.0\r\n"
+    memcpy(req, "POST ", 5); pos = 5;
+    var plen = strlen(path);
+    memcpy(req + pos, path, plen); pos = pos + plen;
+    memcpy(req + pos, " HTTP/1.0\r\n", 11); pos = pos + 11;
+
+    # "Host: host\r\n"
+    memcpy(req + pos, "Host: ", 6); pos = pos + 6;
+    var hlen = strlen(host);
+    memcpy(req + pos, host, hlen); pos = pos + hlen;
+    memcpy(req + pos, "\r\n", 2); pos = pos + 2;
+
+    # "Content-Type: ...\r\n"
+    memcpy(req + pos, "Content-Type: ", 14); pos = pos + 14;
+    var ctlen = strlen(content_type);
+    memcpy(req + pos, content_type, ctlen); pos = pos + ctlen;
+    memcpy(req + pos, "\r\n", 2); pos = pos + 2;
+
+    # "Content-Length: N\r\n"
+    var body_data = str_data(body);
+    var body_len = str_len(body);
+    var cl_str = str_from_int(body_len);
+    memcpy(req + pos, "Content-Length: ", 16); pos = pos + 16;
+    memcpy(req + pos, str_data(cl_str), str_len(cl_str)); pos = pos + str_len(cl_str);
+    memcpy(req + pos, "\r\n", 2); pos = pos + 2;
+
+    # "Connection: close\r\n\r\n"
+    memcpy(req + pos, "Connection: close\r\n\r\n", 21); pos = pos + 21;
+    store8(req + pos, 0);
+
+    # Connect
+    var fd = tcp_socket();
+    if (fd < 0) { var err = alloc(24); store64(err, 0); return err; }
+    var r = sock_connect(fd, host, port);
+    if (r < 0) { syscall(3, fd); var err = alloc(24); store64(err, 0); return err; }
+
+    # Send headers
+    sock_send(fd, req, pos);
+    # Send body
+    if (body_len > 0) {
+        sock_send(fd, body_data, body_len);
+    }
+
+    # Read response
+    var rbuf = alloc(65536);
+    var total = 0;
+    var rgo = 1;
+    while (rgo == 1) {
+        var n = sock_recv(fd, rbuf + total, 65536 - total);
+        if (n <= 0) { rgo = 0; }
+        else { total = total + n; if (total >= 65536) { rgo = 0; } }
+    }
+    syscall(3, fd);
+
+    return _http_parse_response(rbuf, total);
 }
 
 # str_to_int — parse a decimal integer string to i64
@@ -2692,6 +2859,25 @@ fn parse_rich_header(data, data_len, pe_offset) {
         pos = pos + 8;
     }
     return entries;
+}
+
+fn rich_product_name(product_id) {
+    if (product_id == 0) { return str_from("[padding]"); }
+    if (product_id == 1) { return str_from("Import"); }
+    if (product_id >= 2 && product_id <= 6) { return str_from("VS6.0 (1998)"); }
+    if (product_id >= 7 && product_id <= 9) { return str_from("VS2002 (7.0)"); }
+    if (product_id >= 10 && product_id <= 13) { return str_from("VS2003 (7.1)"); }
+    if (product_id >= 14 && product_id <= 39) { return str_from("VS2005 (8.0)"); }
+    if (product_id >= 40 && product_id <= 83) { return str_from("VS2008 (9.0)"); }
+    if (product_id >= 84 && product_id <= 146) { return str_from("VS2010 (10.0)"); }
+    if (product_id >= 147 && product_id <= 169) { return str_from("VS2012 (11.0)"); }
+    if (product_id >= 170 && product_id <= 199) { return str_from("VS2013 (12.0)"); }
+    if (product_id >= 200 && product_id <= 219) { return str_from("VS2015 (14.0)"); }
+    if (product_id >= 220 && product_id <= 260) { return str_from("VS2017 (14.1)"); }
+    if (product_id >= 261 && product_id <= 270) { return str_from("VS2019 (14.2)"); }
+    if (product_id >= 271 && product_id <= 280) { return str_from("VS2022 (14.3)"); }
+    if (product_id >= 281 && product_id <= 300) { return str_from("VS2022 (14.4+)"); }
+    return str_from("Unknown");
 }
 
 # ================================================================
@@ -7046,12 +7232,12 @@ fn cmd_status() {
     str_println(str_cat(str_from("Phylax Threat Detection Engine v"), VERSION));
     str_println(str_from(""));
     str_println(str_from("Status: active"));
-    str_println(str_from("Timestamp: (runtime)"));
+    str_println(str_cat(str_from("Timestamp: epoch "), str_from_int(clock_epoch_secs())));
     str_println(str_from(""));
 
     # Show default rule count
     var engine = yara_engine_new();
-    # yara_engine_load_builtin_rules(engine);  # TODO: fix runtime crash
+    yara_engine_load_builtin_rules(engine);
     var nrules = vec_len(load64(engine));
     str_println(str_cat(str_from("Default rules loaded: "), str_from_int(nrules)));
 

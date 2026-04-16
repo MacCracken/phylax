@@ -80,6 +80,43 @@ Full port from Rust to Cyrius. 14,133 lines of Rust → 7,098 lines of Cyrius (5
 - 12 benchmark groups covering entropy, chi-squared, file detection, SHA-256, memmem, hex encode, string extraction, SSDEEP, TLSH, queue operations
 - Fuzz harness skeleton
 
+### Post-Port Fixes (2026-04-16)
+
+**Syntax & Semantics**
+- Fixed all struct initialization: `StructName {}` → `alloc(N)` + `store64()` (38 structs, 48 init sites)
+- Fixed all struct field access: `.field` → `load64(ptr + offset)` (hundreds of sites)
+- Fixed `!variable` bitwise NOT → `variable == 0` (6 sites — memmem, strings, ssdeep, elf, yara, script)
+- Fixed `|` → `||` and `&` → `&&` in boolean contexts (26 operator fixes)
+- Fixed `load64(...) = val` → `store64(..., val)` (12 lvalue assignment sites)
+- Fixed `match` reserved keyword collision → renamed to `found`/`hit`
+- Fixed `return;` → `return 0;` (13 bare returns)
+- Fixed ternary `? :` → if/else
+
+**Stdlib API Alignment**
+- `args_count()` → `argc()`, `args_get(n)` → `argv(n)`
+- `chrono_now()` → `clock_epoch_secs()`, `chrono_format()` → epoch display
+- `json_stringify()` → `json_build()`
+- `f64_from_int()` → `f64_from()`, `f64_to_int()` → `f64_to()`
+- `sigil_sha256()` → `sha256_hex()`
+- `fmt_int()` → `str_from_int()` (24 sites)
+- `file_read_all(path)` → 3-arg API with `phylax_read_file()` wrapper
+- TOML parser rewritten for flat section-based `toml_parse()` API
+- Added `str_lower()`, `str_from_raw()`, `str_to_int()`, `print_int()`, `http_post()` shims
+
+**C-string vs Str Type Fixes**
+- `println(str_...)` → `str_println(str_...)` (73 sites)
+- `str_eq(argv(...), str_from("..."))` → `streq(argv(...), "...") == 1` (26 CLI sites)
+- `strlen()` for C-string length vs `str_len()` for Str (arg parsing)
+- `VERSION` and `AGENT_NAME` lazily initialized after `alloc_init()`
+
+**Float Constant Corrections**
+- Fixed bit patterns for F64_256, F64_512, F64_4096, F64_7_5, F64_7_0, F64_0_9, F64_15
+
+**Runtime Fixes**
+- Heap allocation limit: 50MB → 1MB (fits Cyrius 21MB heap)
+- Null check on `phylax_read_file` return before `str_len()`
+- Report renderer: integer fields wrapped in `str_from_int()` for `str_cat()`
+
 ## [0.5.0] - 2026-03-27
 
 Major feature release: native YARA syntax, deep binary analysis, script obfuscation detection, CI/CD integration, and performance overhaul.

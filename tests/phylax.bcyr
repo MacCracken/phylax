@@ -99,19 +99,22 @@ fn bench_queue_dequeue() {
 fn main() {
     phylax_init();
 
-    bench("entropy_1k", &bench_entropy_1k, 10000);
-    bench("entropy_1m", &bench_entropy_1m, 100);
-    bench("chi_squared", &bench_chi_squared, 10000);
-    bench("file_detection", &bench_file_detection, 100000);
-    bench("sha256_4k", &bench_sha256, 5000);
-    bench("memmem_4k", &bench_memmem, 50000);
-    bench("hex_encode_256", &bench_hex_encode, 50000);
-    bench("extract_ascii", &bench_extract_ascii, 10000);
-    bench("ssdeep_4k", &bench_ssdeep, 1000);
-    bench("tlsh_1k", &bench_tlsh, 5000);
-    bench("queue_enqueue", &bench_queue_enqueue, 100);
-    bench("queue_dequeue", &bench_queue_dequeue, 100);
+    var benches = vec_new();
 
+    var b1 = bench_new("entropy_1k"); bench_run(b1, &bench_entropy_1k, 10000); vec_push(benches, b1);
+    var b2 = bench_new("entropy_1m"); bench_run(b2, &bench_entropy_1m, 100); vec_push(benches, b2);
+    var b3 = bench_new("chi_squared"); bench_run(b3, &bench_chi_squared, 10000); vec_push(benches, b3);
+    var b4 = bench_new("file_detection"); bench_run(b4, &bench_file_detection, 100000); vec_push(benches, b4);
+    var b5 = bench_new("sha256_4k"); bench_run(b5, &bench_sha256, 5000); vec_push(benches, b5);
+    var b6 = bench_new("memmem_4k"); bench_run(b6, &bench_memmem, 50000); vec_push(benches, b6);
+    var b7 = bench_new("hex_encode_256"); bench_run(b7, &bench_hex_encode, 50000); vec_push(benches, b7);
+    var b8 = bench_new("extract_ascii"); bench_run(b8, &bench_extract_ascii, 10000); vec_push(benches, b8);
+    var b9 = bench_new("ssdeep_4k"); bench_run(b9, &bench_ssdeep, 1000); vec_push(benches, b9);
+    var b10 = bench_new("tlsh_1k"); bench_run(b10, &bench_tlsh, 5000); vec_push(benches, b10);
+    var b11 = bench_new("queue_enqueue"); bench_run(b11, &bench_queue_enqueue, 100); vec_push(benches, b11);
+    var b12 = bench_new("queue_dequeue"); bench_run(b12, &bench_queue_dequeue, 100); vec_push(benches, b12);
+
+    bench_report_all(benches);
     return 0;
 }
 
