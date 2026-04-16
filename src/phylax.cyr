@@ -17,6 +17,13 @@ fn _init_version() {
 # ================================================================
 
 var SYS_RENAME = 82;
+var SYS_UNLINK = 87;
+var SYS_SOCKET = 41;
+var SYS_BIND = 49;
+var SYS_LISTEN = 50;
+var SYS_ACCEPT = 43;
+var AF_UNIX = 1;
+var SOCK_STREAM = 1;
 var SYS_INOTIFY_INIT = 253;
 var SYS_INOTIFY_ADD_WATCH = 254;
 var SYS_INOTIFY_RM_WATCH = 255;
@@ -7061,7 +7068,9 @@ fn collect_files(paths, max_size) {
 
     for (var i = 0; i < npaths; i = i + 1) {
         var p = vec_get(paths, i);
-        collect_files_recurse(files, p, max_size);
+        # Convert cstr (from argv) to Str for stdlib dir_list/path_join
+        var sp = str_from_buf(p, strlen(p));
+        collect_files_recurse(files, sp, max_size);
     }
 
     return files;
@@ -7115,14 +7124,16 @@ fn collect_files_recurse(files, path, max_size) {
 # 4. Severity escalation
 # Returns a ScanResult.
 fn run_scan(path, rules_path) {
-    var target = scan_target_file(path);
+    # Convert Str path to cstr for syscalls (phylax_read_file, scan_target_file)
+    var cpath = str_to_cstr(path);
+    var target = scan_target_file(cpath);
     var result = scan_result_new(target);
     var start_time = clock_epoch_secs();
 
     # Read file data
-    var data = phylax_read_file(path);
+    var data = phylax_read_file(cpath);
     if (data == 0) {
-        var msg = str_cat(str_from("scan: cannot read "), str_from(path));
+        var msg = str_cat(str_from("scan: cannot read "), path);
         sakshi_warn(str_data(msg), str_len(msg));
         store64(result + 16, 0);
         return result;
@@ -7136,7 +7147,7 @@ fn run_scan(path, rules_path) {
 
     # Skip oversized files
     if (data_len > MAX_SCAN_FILE_SIZE) {
-        var msg = str_cat(str_from("scan: skipping oversized file "), str_from(path));
+        var msg = str_cat(str_from("scan: skipping oversized file "), path);
         sakshi_warn(str_data(msg), str_len(msg));
         store64(result + 16, 0);
         return result;
@@ -7844,6 +7855,7 @@ fn arg_collect_positional(start_idx) {
                     if (streq(arg, "--format") == 1) { skip_next = 1; }
                     if (streq(arg, "--block-size") == 1) { skip_next = 1; }
                     if (streq(arg, "--hoosh-url") == 1) { skip_next = 1; }
+                    if (streq(arg, "--socket") == 1) { skip_next = 1; }
                     if (streq(arg, "--extensions") == 1) { skip_next = 1; }
                     if (streq(arg, "--severity-threshold") == 1) { skip_next = 1; }
                     if (streq(arg, "--exit-code") == 1) { skip_next = 1; }
@@ -7856,6 +7868,84 @@ fn arg_collect_positional(start_idx) {
     }
 
     return out;
+}
+
+
+# ================================================================
+# CLI — Daemon mode (Unix socket listener)
+# ================================================================
+
+fn cmd_daemon(socket_path, rules_path) {
+    str_println(str_cat(str_from("Phylax daemon v"), VERSION));
+    str_println(str_cat(str_from("Listening on: "), str_from(socket_path)));
+
+    # Remove existing socket file
+    syscall(SYS_UNLINK, socket_path);
+
+    # Create socket
+    var fd = syscall(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        str_println(str_from("Error: cannot create socket"));
+        return 1;
+    }
+
+    # Build sockaddr_un (110 bytes: family u16 + path 108 bytes)
+    var addr = alloc(112);
+    store16(addr, AF_UNIX);
+    var plen = strlen(socket_path);
+    if (plen > 107) { plen = 107; }
+    memcpy(addr + 2, socket_path, plen);
+    store8(addr + 2 + plen, 0);
+
+    # Bind
+    var brc = syscall(SYS_BIND, fd, addr, 2 + plen + 1);
+    if (brc < 0) {
+        str_println(str_from("Error: cannot bind socket"));
+        syscall(3, fd);
+        return 1;
+    }
+
+    # Listen
+    syscall(SYS_LISTEN, fd, 5);
+
+    str_println(str_from("Ready. Send file paths (one per connection) for scanning."));
+
+    # Accept loop
+    var running = 1;
+    while (running == 1) {
+        var client = syscall(SYS_ACCEPT, fd, 0, 0);
+        if (client < 0) { running = 0; }
+        else {
+            # Read request (file path, max 4096 bytes)
+            var buf = alloc(4096);
+            var n = syscall(0, client, buf, 4095);  # SYS_READ
+            if (n > 0) {
+                # Trim newline
+                if (load8(buf + n - 1) == 10) { n = n - 1; }
+                store8(buf + n, 0);
+
+                # Convert cstr to Str for run_scan
+                var spath = str_from_buf(buf, n);
+
+                # Scan the file
+                var result = run_scan(spath, rules_path);
+
+                # Build JSON response
+                var nf = vec_len(load64(result + 8));
+                var resp = str_cat(str_from("{\"findings\":"), str_from_int(nf));
+                resp = str_cat(resp, str_from(",\"status\":\"ok\"}"));
+                resp = str_cat(resp, str_from("\n"));
+
+                # Send response
+                syscall(1, client, str_data(resp), str_len(resp));
+            }
+            syscall(3, client);  # close client
+        }
+    }
+
+    syscall(3, fd);  # close server socket
+    syscall(SYS_UNLINK, socket_path);  # cleanup socket file
+    return 0;
 }
 
 
@@ -7874,6 +7964,7 @@ fn print_usage() {
     str_println(str_from("  report    Generate a threat report (json, markdown, sarif)"));
     str_println(str_from("  watch     Watch directories for file changes and scan"));
     str_println(str_from("  rules     List or validate YARA rules"));
+    str_println(str_from("  daemon    Run as daemon listening on a Unix socket"));
     str_println(str_from("  status    Show engine status and capabilities"));
     str_println(str_from("  help      Show this help message"));
     str_println(str_from(""));
@@ -7892,6 +7983,10 @@ fn print_usage() {
     str_println(str_from("  --extensions <exts>  Comma-separated file extensions to watch"));
     str_println(str_from("  --rules <file>       Load custom YARA rules from file"));
     str_println(str_from(""));
+    str_println(str_from("DAEMON OPTIONS:"));
+    str_println(str_from("  --socket <path>      Unix socket path (default: /tmp/phylax.sock)"));
+    str_println(str_from("  --rules <file>       Load custom YARA rules from file"));
+    str_println(str_from(""));
     str_println(str_from("RULES SUBCOMMANDS:"));
     str_println(str_from("  rules list [file]     List loaded rules"));
     str_println(str_from("  rules validate <files...>  Validate rule files"));
@@ -7903,6 +7998,7 @@ fn print_usage() {
     str_println(str_from("  phylax watch /opt/uploads --recursive"));
     str_println(str_from("  phylax rules list"));
     str_println(str_from("  phylax rules validate rules/*.yar"));
+    str_println(str_from("  phylax daemon --socket /tmp/phylax.sock"));
     str_println(str_from("  phylax status"));
 }
 
@@ -8131,6 +8227,14 @@ fn main() {
 
         str_println(str_cat(str_from("Unknown rules subcommand: "), str_from(subcmd)));
         return 1;
+    }
+
+    # ---- daemon ----
+    if (streq(cmd, "daemon") == 1) {
+        var sock = arg_find_option("--socket");
+        if (sock == 0) { sock = "/tmp/phylax.sock"; }
+        var rules = arg_find_option("--rules");
+        return cmd_daemon(sock, rules);
     }
 
     # ---- status ----

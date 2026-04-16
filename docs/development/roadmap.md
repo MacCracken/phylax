@@ -3,54 +3,59 @@
 ## Completed
 
 ### v0.7.5 — Cyrius Port (2026-04-16)
+- Full port from Rust (14,133 lines) to Cyrius
+- 86 tests, 804KB binary, all 22 modules ported
 
-- Full port from Rust (14,133 lines) to Cyrius (7,323 lines)
-- 86 tests passing across 16 test groups
-- 804KB static binary, zero external runtime dependencies
-- All 22 Rust modules ported: types, error, analyze, strings, script, ssdeep, tlsh, pe, elf, yara, yara_parser, queue, quarantine, report, hoosh, daimon, ai, bote_tools, watch, main
-- Dependencies: 28 stdlib modules + sakshi 1.0.0 + sigil 2.1.2 + bote 2.5.1 + majra 2.2.0
-- Toolchain: Cyrius 5.1.7
-- CLI working: scan, status, help, report, watch, rules list/validate
-- 7 built-in YARA detection rules
-- Bote MCP tool registration (5 tools, 2 handlers)
+### v0.8.0 — Feature Parity (2026-04-16)
+- YARA module conditions (pe.*/elf.*)
+- Config file (phylax.toml)
+- CI pipeline gating (--severity-threshold, --exit-code)
+- Timestamp formatting, queue binary heap, file detection u32
+
+### v0.8.1 — mmap I/O (2026-04-16)
+- Memory-mapped file access, 100MB limit (was 1MB)
+
+### v0.8.2 — Parallel Scanning (2026-04-16)
+- 4-thread worker pool for multi-file scans
+
+### v0.8.3 — Archive Scanning (2026-04-16)
+- ZIP stored entry scanning with recursive detection
+- GZIP detection (deflate decompression pending)
+- Bomb protection (depth 3, 1024 entries, 100MB expand)
+
+### v0.9.0 — Hardening & Daemon (2026-04-16)
+- O_NOFOLLOW + fstat scan hardening
+- Per-scan allocation limits (200MB)
+- Unix domain socket daemon mode
+- Directory recursion fix (Str path plumbing)
+- Rules fetch from URL
+- Progress indicator for multi-file scans
 
 ## Backlog
 
-### v0.8.0 — Feature Parity & Hardening
+### v0.9.1 — TAR Support
+- TAR header parsing (512-byte blocks)
+- Scan embedded files in TAR archives
 
-**YARA**
-- YARA module system: `pe.is_dll`, `elf.machine` in condition expressions (evaluator exists, needs PE/ELF data wiring)
-- `phylax rules fetch <source>` — download community rulesets
+### v0.9.2 — Threat Intel
+- STIX/TAXII JSON indicator import
+- Convert indicators to YARA rules
+- MalwareBazaar SHA-256 hash feed
 
-**Analysis**
-- Archive recursive scanning (ZIP/GZIP/TAR) with bomb protection
-- mmap I/O via `SYS_MMAP` for files > 1 MB (removes current heap limit)
-- Parallel file scanning via `thread_create`
-
-**Integration**
-- HTTP POST implementation (raw socket) — enables hoosh LLM triage and daimon registration
-- STIX/TAXII threat intel import (`phylax intel import --stix <file>`)
-- MalwareBazaar SHA-256 hash feed (`phylax intel update`)
-
-**UX / CLI**
-- Config file support (`phylax.toml` / `$XDG_CONFIG_HOME/phylax/config.toml`)
-- Progress indicator for multi-file scans
-- `--severity-threshold` and `--exit-code` for CI/CD pipeline gating
-
-**Hardening**
-- `O_NOFOLLOW` + `fstat` in scan path
-- Per-scan allocation limits
-- Daemon mode with rate limiting
+### v0.9.3 — Deflate Decompression
+- GZIP/ZIP deflate decompression for compressed entry scanning
+- Inflate algorithm implementation in Cyrius
 
 ## v1.0 Criteria
 
-- All v0.8.0 items complete
-- Full YARA module system (pe, elf, math modules)
+- All v0.9.x items complete
+- Heap management: mmap_anon for large allocs (eliminates heap exhaustion)
+- cc5 register spill fix for exit code propagation
 - 95%+ test coverage
-- Benchmark parity with Rust (within 3x for core operations)
+- Benchmark parity within 5x for core operations
 - Security audit complete
-- Documentation: architecture, API reference, integration guide
 - Stable CLI interface (no breaking changes after 1.0)
+- Documentation: architecture, API reference, integration guide
 
 ## Non-goals
 

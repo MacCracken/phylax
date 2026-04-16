@@ -2,6 +2,45 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.9.0] - 2026-04-16
+
+Hardening, daemon mode, directory scanning, and developer UX.
+
+### Security Hardening
+- **O_NOFOLLOW** on file open — rejects symlinks to prevent traversal attacks
+- **fstat** after open — verifies target is a regular file (not device, socket, etc.)
+- **Per-scan allocation limits** — 200MB cap prevents OOM from crafted files
+- `G_SCAN_ALLOC_TOTAL` tracking resets per-file in multi-scan
+
+### Daemon Mode
+- **`phylax daemon`** — Unix domain socket listener for scan-as-a-service
+- `--socket <path>` (default: `/tmp/phylax.sock`) — configurable socket path
+- `--rules <file>` — custom YARA rules for daemon scans
+- Protocol: send file path (newline-terminated), receive JSON `{"findings":N,"status":"ok"}`
+- Single-threaded accept loop with per-connection handling
+
+### Directory Recursion Fix
+- **Str path plumbing** — `collect_files` wraps argv cstrs into Str via `str_from_buf`
+- `run_scan` converts Str paths back to cstr for syscalls via `str_to_cstr`
+- `dir_list` and `path_join` now receive proper Str arguments
+- Hidden files (`.` prefix) still skipped
+
+### Rules Fetch
+- **`phylax rules fetch <url> [output]`** — download YARA rules from HTTP URL
+- Auto-validates downloaded rules after saving
+- Default output: `rules.yar`
+
+### UX
+- **Progress indicator** `[N/total]` for multi-file scans
+- Updated help text with daemon command and options
+
+### Known Limitations
+- Multi-file directory scan hits heap exhaustion at ~6 files (bump allocator is finite)
+- Daemon mode is single-threaded (one scan at a time)
+
+### Quality
+- 86 tests passing, 840KB binary, 8,249 lines
+
 ## [0.8.3] - 2026-04-16
 
 Archive scanning for ZIP and GZIP files.
