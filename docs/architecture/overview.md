@@ -21,7 +21,6 @@ tests/
 ├── phylax.bcyr      Benchmarks (12 groups)
 └── phylax.fcyr      Fuzz harness
 
-rust-old/src/        Original Rust source (22 files, 14,133 lines — reference only)
 ```
 
 ## Module Map (within phylax.cyr)

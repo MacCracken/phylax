@@ -8,7 +8,7 @@
 - **Type**: Flat binary (single src/main.cyr)
 - **License**: GPL-3.0-only
 - **Version**: SemVer 0.D.M pre-1.0
-- **Ported from**: 14,133 lines of Rust (preserved in rust-old/)
+- **Ported from**: 14,133 lines of Rust (original source removed at 0.98.0)
 - **Genesis repo**: [agnosticos](https://github.com/MacCracken/agnosticos)
 - **Philosophy**: [AGNOS Philosophy & Intention](https://github.com/MacCracken/agnosticos/blob/main/docs/philosophy.md)
 - **Standards**: [First-Party Standards](https://github.com/MacCracken/agnosticos/blob/main/docs/development/applications/first-party-standards.md)
@@ -74,7 +74,6 @@ daimon (scan integration), aegis (quarantine), t-ron (output scanning complement
 
 ```
 src/main.cyr          — Complete engine (7098 lines, flat binary)
-rust-old/src/         — Original Rust source (14,133 lines, preserved for reference)
 tests/phylax.tcyr     — Test suite
 tests/phylax.bcyr     — Benchmarks
 tests/phylax.fcyr     — Fuzz harness

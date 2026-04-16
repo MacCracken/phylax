@@ -130,7 +130,6 @@ Zero external runtime dependencies. No libc, no allocator, no async runtime.
 
 ### Rust source
 
-The original Rust implementation (14,133 lines, 231 tests) is preserved in `rust-old/` for reference.
 
 ## License
 

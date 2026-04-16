@@ -54,7 +54,6 @@ cyrius test tests/phylax.tcyr        # run tests
 
 ```
 src/main.cyr           — Complete engine (single flat binary)
-rust-old/src/          — Original Rust source (preserved for reference)
 tests/phylax.tcyr      — Test suite (16 test groups)
 tests/phylax.bcyr      — Benchmarks (12 groups)
 tests/phylax.fcyr      — Fuzz harness

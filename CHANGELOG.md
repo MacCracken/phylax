@@ -266,7 +266,7 @@ Full port from Rust to Cyrius. 14,133 lines of Rust → 7,098 lines of Cyrius (5
 - **Manifest change**: `Cargo.toml` → `cyrius.cyml`. Dependencies are now Cyrius stdlib modules + sakshi + sigil.
 - **Async removed**: All async/tokio code replaced with synchronous equivalents. Hoosh and daimon clients use blocking HTTP.
 - **Feature gates removed**: `bote` and `yara-x` optional features dropped. YARA-X backend not ported (native engine is sufficient).
-- Original Rust source preserved in `rust-old/` for reference.
+- Original Rust source removed at v0.98.0 (port complete, audit passed)
 
 ### Ported (all 22 Rust modules → single src/main.cyr)
 
