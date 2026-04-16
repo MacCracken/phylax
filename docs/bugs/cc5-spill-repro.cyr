@@ -1,0 +1,86 @@
+# cc5 register spill reproduction case
+# Build: cyrius build docs/bugs/cc5-spill-repro.cyr /tmp/spill-test
+# Run:   /tmp/spill-test; echo "exit: $?"
+# Expected: exit 42
+# Actual:   exit 0 (bug) — needs enough locals + call depth
+
+fn make_str(prefix, n) {
+    var s = str_from(prefix);
+    s = str_cat(s, str_from_int(n));
+    return s;
+}
+
+fn process_item(data, idx) {
+    var a = str_from("processing ");
+    a = str_cat(a, str_from_int(idx));
+    var b = str_len(a);
+    var c = str_cat(a, str_from(" done"));
+    return b;
+}
+
+fn big_function() {
+    # 15+ locals to exhaust callee-saved registers
+    var config_a = 100;
+    var config_b = 200;
+    var config_c = str_from("test");
+    var config_d = vec_new();
+    var config_e = map_new();
+    var config_f = 0;
+    var config_g = 0;
+    var config_h = str_from("padding");
+    var total = 0;
+    var highest = 0;
+    var items = vec_new();
+    var results = vec_new();
+    var errors = 0;
+    var skipped = 0;
+    var processed = 0;
+
+    # Loop with heavy function call pressure
+    for (var i = 0; i < 5; i = i + 1) {
+        var label = make_str("item_", i);
+        var work = process_item(label, i);
+        vec_push(items, label);
+
+        var val = process_item(str_from("extra"), i + 10);
+        vec_push(results, val);
+
+        total = total + 1;
+        processed = processed + 1;
+
+        if (work > highest) {
+            highest = work;
+        }
+
+        # More calls to increase spill pressure
+        var msg = str_cat(str_from("["), str_from_int(i + 1));
+        msg = str_cat(msg, str_from("/5] "));
+        msg = str_cat(msg, label);
+        str_println(msg);
+    }
+
+    # Summary — these locals should retain their values
+    println("---");
+    println("total:"); print_num(total); println("");
+    println("processed:"); print_num(processed); println("");
+    println("highest:"); print_num(highest); println("");
+    println("items:"); print_num(vec_len(items)); println("");
+    println("results:"); print_num(vec_len(results)); println("");
+
+    if (total > 0) {
+        if (highest > 0) {
+            return 42;
+        }
+    }
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    var result = big_function();
+    println("result:"); print_num(result); println("");
+    return result;
+}
+
+var r = main();
+syscall(60, r);

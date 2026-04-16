@@ -7485,6 +7485,31 @@ fn parallel_scan(files, nfiles, rules_path) {
     return results;
 }
 
+# Workaround: syscall(60, N) in nested if-blocks inside large functions
+# passes 0 instead of N. Moving to a small helper function fixes it.
+fn scan_finish(nfiles, total, highest, threshold, code) {
+    str_println(str_from(""));
+    str_println(str_cat(str_from("Scan complete: "), str_from_int(nfiles)));
+    str_print(str_from(" file(s), "));
+    print_int(total);
+    str_println(str_from(" finding(s)"));
+    if (total > 0) {
+        if (severity_gte(highest, threshold)) {
+            syscall(60, code);
+        }
+    }
+    return 0;
+}
+
+fn check_and_exit(total, highest, threshold, code) {
+    if (total > 0) {
+        if (severity_gte(highest, threshold)) {
+            syscall(60, code);
+        }
+    }
+    return 0;
+}
+
 fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
     var severity_threshold = G_SEVERITY_THRESHOLD;
     var exit_code = G_EXIT_CODE;
@@ -7575,18 +7600,9 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
         }
     }
 
-    # NOTE: --severity-threshold/--exit-code implemented but exit code propagation
-    # is affected by cc5 register spill in large functions (7+ locals + nested loops).
-    # Tracked for cc5 fix. For now, findings always exit 0.
-
     # Print summary
-    str_println(str_from(""));
-    str_println(str_cat(str_from("Scan complete: "), str_from_int(nfiles)));
-    str_print(str_from(" file(s), "));
-    print_int(total_findings);
-    str_println(str_from(" finding(s)"));
-
-    return 0;
+    # Delegate summary + exit to small function (workaround cc5 register spill)
+    return scan_finish(nfiles, G_TOTAL_FINDINGS, G_HIGHEST_SEVERITY, G_SEVERITY_THRESHOLD, G_EXIT_CODE);
 }
 
 
