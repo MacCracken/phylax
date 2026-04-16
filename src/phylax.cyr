@@ -9,7 +9,7 @@
 var VERSION = 0;
 
 fn _init_version() {
-    VERSION = str_from("0.8.3");
+    VERSION = str_from("0.9.0");
 }
 
 # ================================================================
@@ -26,6 +26,15 @@ var IN_CREATE = 256;
 var IN_MODIFY = 2;
 var IN_CLOSE_WRITE = 8;
 var WATCH_MASK = 266;  # IN_CREATE | IN_CLOSE_WRITE | IN_MODIFY
+
+# File open flags for hardened scanning
+var O_RDONLY = 0;
+var O_NOFOLLOW = 131072;  # 0x20000 — reject symlinks
+var SYS_FSTAT = 5;
+
+# Per-scan allocation tracking
+var G_SCAN_ALLOC_TOTAL = 0;
+var G_SCAN_ALLOC_LIMIT = 209715200;  # 200 MB per scan
 
 # ================================================================
 # Enum constants — ScanTarget kind
@@ -588,10 +597,21 @@ fn phylax_read_file(path) {
     var size = phylax_file_size(path);
     if (size <= 0) { return 0; }
     if (size > PHYLAX_MAX_FILE_SIZE) { return 0; }
+
+    # Per-scan allocation check
+    G_SCAN_ALLOC_TOTAL = G_SCAN_ALLOC_TOTAL + size;
+    if (G_SCAN_ALLOC_TOTAL > G_SCAN_ALLOC_LIMIT) { return 0; }
+
     if (size > PHYLAX_MMAP_THRESHOLD) {
-        # mmap path — zero-copy, no heap pressure
-        var fd = file_open(path, 0, 0);
+        # mmap path with O_NOFOLLOW — reject symlinks, zero-copy
+        var fd = syscall(2, path, O_RDONLY | O_NOFOLLOW, 0);  # SYS_OPEN with O_NOFOLLOW
         if (fd < 0) { return 0; }
+        # fstat to verify it's a regular file (mode & 0170000 == 0100000)
+        var statbuf[144];
+        var frc = syscall(SYS_FSTAT, fd, &statbuf);
+        if (frc < 0) { syscall(3, fd); return 0; }
+        var mode = load64(&statbuf + 24);  # st_mode at offset 24
+        if ((mode & 0170000) != 0100000) { syscall(3, fd); return 0; }  # not regular file
         var addr = mmap_file_ro(fd, size);
         file_close(fd);
         if (addr == 0) { return 0; }
@@ -7291,6 +7311,14 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
         results = parallel_scan(files, nfiles, rules_path);
     } else {
         for (var i = 0; i < nfiles; i = i + 1) {
+            # Progress indicator
+            if (nfiles > 1) {
+                str_print(str_cat(str_from("["), str_from_int(i + 1)));
+                str_print(str_cat(str_from("/"), str_from_int(nfiles)));
+                str_print(str_from("] "));
+            }
+            # Reset per-scan allocation counter
+            G_SCAN_ALLOC_TOTAL = 0;
             var path = vec_get(files, i);
             var result = run_scan(path, rules_path);
             vec_push(results, result);
@@ -7663,6 +7691,75 @@ fn cmd_rules_validate(files) {
 
 
 # ================================================================
+# CLI — Subcommand: rules fetch
+# ================================================================
+
+fn cmd_rules_fetch(url, output_path) {
+    if (url == 0) {
+        str_println(str_from("Usage: phylax rules fetch <url> [output_file]"));
+        str_println(str_from(""));
+        str_println(str_from("Downloads YARA rules from a URL."));
+        str_println(str_from("Default output: rules.yar"));
+        return 1;
+    }
+
+    if (output_path == 0) { output_path = "rules.yar"; }
+
+    str_println(str_cat(str_from("Fetching rules from: "), str_from(url)));
+
+    var resp = http_get(url);
+    if (resp == 0) {
+        str_println(str_from("Error: failed to fetch rules"));
+        return 1;
+    }
+
+    var status = http_status(resp);
+    if (status != 200) {
+        str_println(str_cat(str_from("Error: HTTP status "), str_from_int(status)));
+        return 1;
+    }
+
+    var body = http_body(resp);
+    var body_len = http_body_len(resp);
+    if (body_len == 0) {
+        str_println(str_from("Error: empty response"));
+        return 1;
+    }
+
+    # Write to file
+    var fd = syscall(2, output_path, 577, 420);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
+    if (fd < 0) {
+        str_println(str_cat(str_from("Error: cannot write to "), str_from(output_path)));
+        return 1;
+    }
+    syscall(1, fd, body, body_len);
+    syscall(3, fd);
+
+    str_println(str_cat(str_from("Saved "), str_from_int(body_len)));
+    str_println(str_cat(str_from(" bytes to "), str_from(output_path)));
+
+    # Validate the downloaded rules
+    var engine = yara_engine_new();
+    var content = str_new(body, body_len);
+    var ext_yar = 0;
+    var plen = strlen(output_path);
+    if (plen > 4) {
+        if (load8(output_path + plen - 4) == 46) { ext_yar = 1; }  # '.'
+    }
+    # Try to parse as .yar or TOML
+    str_println(str_from("Validating..."));
+    var nrules = yara_engine_load_rules_yar(engine, content);
+    if (nrules > 0) {
+        str_println(str_cat(str_from("OK: "), str_cat(str_from_int(nrules), str_from(" rule(s) loaded"))));
+    } else {
+        str_println(str_from("Warning: could not parse rules — file saved but may need manual review"));
+    }
+
+    return 0;
+}
+
+
+# ================================================================
 # CLI — Subcommand: status
 # ================================================================
 
@@ -8001,7 +8098,7 @@ fn main() {
     # ---- rules ----
     if (streq(cmd, "rules") == 1) {
         if (argc < 3) {
-            str_println(str_from("Usage: phylax rules <list|validate> [files...]"));
+            str_println(str_from("Usage: phylax rules <list|validate|fetch> [args...]"));
             return 1;
         }
 
@@ -8024,7 +8121,15 @@ fn main() {
             return cmd_rules_validate(files);
         }
 
-        str_println(str_cat(str_from("Unknown rules subcommand: "), subcmd));
+        if (streq(subcmd, "fetch") == 1) {
+            var url = 0;
+            var output = 0;
+            if (argc > 3) { url = argv(3); }
+            if (argc > 4) { output = argv(4); }
+            return cmd_rules_fetch(url, output);
+        }
+
+        str_println(str_cat(str_from("Unknown rules subcommand: "), str_from(subcmd)));
         return 1;
     }
 
