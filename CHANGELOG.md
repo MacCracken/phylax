@@ -2,6 +2,77 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.7.5] - 2026-04-16
+
+Full port from Rust to Cyrius. 14,133 lines of Rust → 7,098 lines of Cyrius (50% reduction). Zero external runtime dependencies — compiles to a single static binary.
+
+### Breaking
+
+- **Language change**: Rust → Cyrius 5.1.3. Build with `cyrius build` instead of `cargo build`.
+- **Manifest change**: `Cargo.toml` → `cyrius.cyml`. Dependencies are now Cyrius stdlib modules + sakshi + sigil.
+- **Async removed**: All async/tokio code replaced with synchronous equivalents. Hoosh and daimon clients use blocking HTTP.
+- **Feature gates removed**: `bote` and `yara-x` optional features dropped. YARA-X backend not ported (native engine is sufficient).
+- Original Rust source preserved in `rust-old/` for reference.
+
+### Ported (all 22 Rust modules → single src/main.cyr)
+
+**Core** (types, error, analyze, strings)
+- All enum types as integer constants with name/rank helper functions
+- 39 struct definitions with field accessors
+- Shannon entropy, chi-squared, file type detection (9 formats), polyglot detection
+- ASCII + UTF-16 LE string extraction
+- SHA-256 via sigil dependency
+- Severity escalation (entropy+polyglot, executable, multiple signals)
+- Baseline suppression (fingerprint + rule name matching)
+
+**Binary Parsing** (pe, elf)
+- PE parser: DOS/COFF/Optional headers, sections (96 cap), imports (256 cap) with ILT/ordinal support, exports (1024 cap), TLS callback detection, PDB path, Rich header XOR decryption, resources, Authenticode certificates, imphash
+- ELF parser: 32/64-bit, little/big-endian, sections (1024 cap), segments, DT_NEEDED, symbols (4096 cap), interpreter path, security features (RELRO, RWX, static linking, executable stack)
+
+**Script Analysis** (script)
+- 6-language classification (PowerShell, VBScript, JavaScript, Python, Batch, Shell)
+- Obfuscation detection with per-line entropy + language-specific patterns
+
+**Similarity Hashing** (ssdeep, tlsh)
+- SSDEEP: rolling hash, FNV-1, context-triggered piecewise hashing, Levenshtein edit distance comparison
+- TLSH: Pearson hash table, sliding window bucket filling, quartile encoding, distance function
+
+**YARA Engine** (yara, yara_parser)
+- Pattern matching: literal bytes, hex bytes, string patterns with nocase support
+- TOML rule loader with severity, condition (all/any/at_least), constraints
+- Native .yar parser: full lexer (33 token types) + recursive-descent parser
+- Conditions: and/or/not, all/any/N of them, filesize comparisons, parenthesized expressions
+- 7 built-in detection rules (PE, ELF, UPX, NOP sled, suspicious APIs, ransomware indicators, embedded PE)
+
+**Infrastructure** (queue, quarantine, watch, report)
+- Priority scan queue (vec-backed sorted insert, capacity limit)
+- Quarantine with JSON index persistence, path traversal rejection, SYS_RENAME
+- Directory watcher via inotify syscalls
+- Report generation: JSON, Markdown (pipe escaping), SARIF v2.1.0
+
+**Integration** (hoosh, daimon, ai)
+- Hoosh LLM triage: synchronous HTTP POST, JSON/text response parsing
+- Daimon agent lifecycle: register, heartbeat, deregister with ID validation
+- Agent capabilities (11 items)
+
+**CLI** (main)
+- Subcommands: scan, report, watch, rules list, rules validate, status
+- Recursive file collection with symlink skip
+- Full scan pipeline: read → analyze → YARA → escalate → report
+
+### Dependencies (Cyrius)
+- **stdlib** (25 modules): string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, json, toml, regex, fs, net, tagged, fnptr, callback, thread, bench, bounds, math, process, chrono, base64, csv
+- **sakshi** 1.0.0 — structured logging (replaces tracing/tracing-subscriber)
+- **sigil** 2.1.2 — SHA-256 (replaces sha2)
+
+### Removed (Rust-only dependencies no longer needed)
+- aho-corasick, regex, memchr, serde, serde_json, tokio, reqwest, notify, clap, anyhow, thiserror, rayon, uuid, chrono (Rust), sha2, criterion, proptest, tempfile, yara-x (optional), bote (optional)
+
+### Quality
+- 16 test groups (526 lines) covering severity, errors, entropy, chi-squared, file detection, SHA-256, strings, PE parser, ELF parser, YARA, queue, SSDEEP, TLSH, memmem, hex encode, report
+- 12 benchmark groups covering entropy, chi-squared, file detection, SHA-256, memmem, hex encode, string extraction, SSDEEP, TLSH, queue operations
+- Fuzz harness skeleton
+
 ## [0.5.0] - 2026-03-27
 
 Major feature release: native YARA syntax, deep binary analysis, script obfuscation detection, CI/CD integration, and performance overhaul.

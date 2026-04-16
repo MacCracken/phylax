@@ -6,7 +6,7 @@
 # Constants — Version
 # ================================================================
 
-var VERSION = str_from("0.5.0");
+var VERSION = str_from("0.7.5");
 
 # ================================================================
 # Enum constants — ScanTarget kind
