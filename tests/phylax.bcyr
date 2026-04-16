@@ -1,0 +1,117 @@
+# phylax benchmarks
+# Ported from 16 Rust benchmark groups
+
+fn bench_entropy_1k() {
+    var data = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) { store8(data + i, i & 0xff); }
+    shannon_entropy(data, 1024);
+    return 0;
+}
+
+fn bench_entropy_1m() {
+    var data = alloc(1048576);
+    for (var i = 0; i < 1048576; i = i + 1) { store8(data + i, i & 0xff); }
+    shannon_entropy(data, 1048576);
+    return 0;
+}
+
+fn bench_chi_squared() {
+    var data = alloc(4096);
+    for (var i = 0; i < 4096; i = i + 1) { store8(data + i, i & 0xff); }
+    chi_squared(data, 4096);
+    return 0;
+}
+
+fn bench_file_detection() {
+    var data = alloc(16);
+    store8(data, 0x7f); store8(data + 1, 0x45); store8(data + 2, 0x4c); store8(data + 3, 0x46);
+    detect_file_type(data, 16);
+    return 0;
+}
+
+fn bench_sha256() {
+    var data = alloc(4096);
+    for (var i = 0; i < 4096; i = i + 1) { store8(data + i, i & 0xff); }
+    file_sha256(data, 4096);
+    return 0;
+}
+
+fn bench_memmem() {
+    var hay = alloc(4096);
+    for (var i = 0; i < 4096; i = i + 1) { store8(hay + i, i & 0xff); }
+    var needle = alloc(4);
+    store8(needle, 0xfe); store8(needle + 1, 0xff); store8(needle + 2, 0x00); store8(needle + 3, 0x01);
+    memmem(hay, 4096, needle, 4);
+    return 0;
+}
+
+fn bench_hex_encode() {
+    var data = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) { store8(data + i, i); }
+    hex_encode(data, 256);
+    return 0;
+}
+
+fn bench_extract_ascii() {
+    var data = alloc(4096);
+    for (var i = 0; i < 4096; i = i + 1) { store8(data + i, 0x41 + (i % 26)); }
+    # Insert some nulls to create string boundaries
+    for (var i = 0; i < 4096; i = i + 64) { store8(data + i, 0); }
+    extract_ascii(data, 4096, 4);
+    return 0;
+}
+
+fn bench_ssdeep() {
+    var data = alloc(4096);
+    for (var i = 0; i < 4096; i = i + 1) { store8(data + i, (i * 7 + 3) & 0xff); }
+    ssdeep_hash(data, 4096);
+    return 0;
+}
+
+fn bench_tlsh() {
+    var data = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) { store8(data + i, (i * 13 + 7) & 0xff); }
+    tlsh_hash(data, 1024);
+    return 0;
+}
+
+fn bench_queue_enqueue() {
+    var q = scan_queue_new(1000);
+    for (var i = 0; i < 1000; i = i + 1) {
+        scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, i % 4);
+    }
+    return 0;
+}
+
+fn bench_queue_dequeue() {
+    var q = scan_queue_new(1000);
+    for (var i = 0; i < 1000; i = i + 1) {
+        scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, i % 4);
+    }
+    for (var i = 0; i < 1000; i = i + 1) {
+        scan_queue_dequeue(q);
+    }
+    return 0;
+}
+
+fn main() {
+    phylax_init();
+
+    bench("entropy_1k", &bench_entropy_1k, 10000);
+    bench("entropy_1m", &bench_entropy_1m, 100);
+    bench("chi_squared", &bench_chi_squared, 10000);
+    bench("file_detection", &bench_file_detection, 100000);
+    bench("sha256_4k", &bench_sha256, 5000);
+    bench("memmem_4k", &bench_memmem, 50000);
+    bench("hex_encode_256", &bench_hex_encode, 50000);
+    bench("extract_ascii", &bench_extract_ascii, 10000);
+    bench("ssdeep_4k", &bench_ssdeep, 1000);
+    bench("tlsh_1k", &bench_tlsh, 5000);
+    bench("queue_enqueue", &bench_queue_enqueue, 100);
+    bench("queue_dequeue", &bench_queue_dequeue, 100);
+
+    return 0;
+}
+
+var r = main();
+syscall(60, r);

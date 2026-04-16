@@ -1,0 +1,30 @@
+[package]
+name = "phylax"
+version = "0.5.0"
+description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF parsing, binary classification"
+license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/phylax"
+language = "cyrius"
+cyrius = "5.1.3"
+
+[build]
+entry = "src/main.cyr"
+output = "phylax"
+
+[deps]
+stdlib = [
+    "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args",
+    "assert", "hashmap", "json", "toml", "regex", "fs", "net",
+    "tagged", "fnptr", "callback", "thread", "bench", "bounds",
+    "math", "process", "chrono", "base64", "csv"
+]
+
+[deps.sakshi]
+git = "https://github.com/MacCracken/sakshi.git"
+tag = "1.0.0"
+modules = ["sakshi.cyr", "sakshi_full.cyr"]
+
+[deps.sigil]
+git = "https://github.com/MacCracken/sigil.git"
+tag = "2.1.2"
+modules = ["sigil.cyr"]

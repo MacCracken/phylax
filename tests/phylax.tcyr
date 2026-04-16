@@ -1,0 +1,526 @@
+# phylax test suite
+# Ported from 235+ Rust tests
+
+# ================================================================
+# Severity and Category tests
+# ================================================================
+
+fn test_severity() {
+    test_group("severity");
+
+    # Ordering
+    assert(severity_gt(SEVERITY_CRITICAL, SEVERITY_HIGH), "critical > high");
+    assert(severity_gt(SEVERITY_HIGH, SEVERITY_MEDIUM), "high > medium");
+    assert(severity_gt(SEVERITY_MEDIUM, SEVERITY_LOW), "medium > low");
+    assert(severity_gt(SEVERITY_LOW, SEVERITY_INFO), "low > info");
+
+    # Rank values
+    assert_eq(severity_rank(SEVERITY_CRITICAL), 4, "critical rank");
+    assert_eq(severity_rank(SEVERITY_INFO), 0, "info rank");
+
+    # Names
+    assert(str_eq(severity_name(SEVERITY_CRITICAL), str_from("CRITICAL")), "critical name");
+    assert(str_eq(severity_name(SEVERITY_HIGH), str_from("HIGH")), "high name");
+    assert(str_eq(severity_name(SEVERITY_MEDIUM), str_from("MEDIUM")), "medium name");
+    assert(str_eq(severity_name(SEVERITY_LOW), str_from("LOW")), "low name");
+    assert(str_eq(severity_name(SEVERITY_INFO), str_from("INFO")), "info name");
+
+    # Category names
+    assert(str_eq(category_name(CATEGORY_MALWARE), str_from("Malware")), "malware name");
+    assert(str_eq(category_name(CATEGORY_SUSPICIOUS), str_from("Suspicious")), "suspicious name");
+    assert(str_eq(category_name(CATEGORY_CUSTOM_RULE), str_from("Custom Rule")), "custom rule name");
+}
+
+# ================================================================
+# Error code tests
+# ================================================================
+
+fn test_errors() {
+    test_group("errors");
+
+    assert_eq(ERR_IO, 1, "ERR_IO value");
+    assert_eq(ERR_FILE_TOO_LARGE, 2, "ERR_FILE_TOO_LARGE value");
+    assert_eq(ERR_TIMEOUT, 3, "ERR_TIMEOUT value");
+
+    assert(str_eq(err_name(ERR_IO), str_from("IO error")), "IO error name");
+    assert(str_eq(err_name(ERR_RULE_PARSE), str_from("rule parse error")), "rule parse error name");
+}
+
+# ================================================================
+# Entropy tests
+# ================================================================
+
+fn test_entropy() {
+    test_group("entropy");
+
+    # Empty data
+    var empty = alloc(1);
+    var e = shannon_entropy(empty, 0);
+    assert_eq(f64_to_int(e), 0, "entropy of empty = 0");
+
+    # All zeros — entropy should be 0
+    var zeros = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) {
+        store8(zeros + i, 0);
+    }
+    var e0 = shannon_entropy(zeros, 1024);
+    assert_eq(f64_to_int(e0), 0, "entropy of zeros = 0");
+
+    # Two equally distributed values — entropy ~1.0
+    var two_vals = alloc(1024);
+    for (var i = 0; i < 512; i = i + 1) {
+        store8(two_vals + i, 0);
+    }
+    for (var i = 512; i < 1024; i = i + 1) {
+        store8(two_vals + i, 1);
+    }
+    var e1 = shannon_entropy(two_vals, 1024);
+    # e1 should be approximately 1.0
+    var e1_int = f64_to_int(f64_mul(e1, f64_from_int(100)));
+    assert(e1_int >= 95, "entropy of two values ~1.0");
+    assert(e1_int <= 105, "entropy of two values ~1.0 upper");
+
+    # Suspicious entropy threshold
+    assert_eq(is_suspicious_entropy(f64_from_int(5)), 0, "5.0 not suspicious");
+    assert(is_suspicious_entropy(f64_from_int(8)), "8.0 is suspicious");
+}
+
+# ================================================================
+# Chi-squared tests
+# ================================================================
+
+fn test_chi_squared() {
+    test_group("chi_squared");
+
+    # Empty data
+    var empty = alloc(1);
+    var chi_empty = chi_squared(empty, 0);
+    assert_eq(f64_to_int(chi_empty), 0, "chi2 empty = 0");
+
+    # Uniform distribution — chi2 should be near 0
+    var uniform = alloc(25600);
+    for (var rep = 0; rep < 100; rep = rep + 1) {
+        for (var b = 0; b < 256; b = b + 1) {
+            store8(uniform + rep * 256 + b, b);
+        }
+    }
+    var chi_uniform = chi_squared(uniform, 25600);
+    assert(f64_lt(chi_uniform, f64_from_int(1)), "uniform chi2 < 1");
+
+    # All same value — chi2 very high
+    var same = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) {
+        store8(same + i, 0);
+    }
+    var chi_same = chi_squared(same, 1024);
+    assert(f64_gt(chi_same, f64_from_int(100000)), "single-value chi2 very high");
+
+    # Randomness classification
+    assert_eq(classify_randomness(f64_from_int(200)), RANDOMNESS_ENCRYPTED, "200 = encrypted");
+    assert_eq(classify_randomness(f64_from_int(1000)), RANDOMNESS_COMPRESSED, "1000 = compressed");
+    assert_eq(classify_randomness(f64_from_int(10000)), RANDOMNESS_NORMAL, "10000 = normal");
+}
+
+# ================================================================
+# File type detection tests
+# ================================================================
+
+fn test_file_detection() {
+    test_group("file_detection");
+
+    # ELF magic
+    var elf = alloc(8);
+    store8(elf, 0x7f); store8(elf + 1, 0x45); store8(elf + 2, 0x4c); store8(elf + 3, 0x46);
+    store8(elf + 4, 0x02); store8(elf + 5, 0x01); store8(elf + 6, 0x01); store8(elf + 7, 0x00);
+    assert_eq(detect_file_type(elf, 8), FILE_TYPE_ELF, "detect ELF");
+
+    # PE magic (MZ)
+    var pe = alloc(4);
+    store8(pe, 0x4d); store8(pe + 1, 0x5a); store8(pe + 2, 0x90); store8(pe + 3, 0x00);
+    assert_eq(detect_file_type(pe, 4), FILE_TYPE_PE, "detect PE");
+
+    # PDF magic
+    var pdf = alloc(8);
+    store8(pdf, 0x25); store8(pdf + 1, 0x50); store8(pdf + 2, 0x44); store8(pdf + 3, 0x46);
+    assert_eq(detect_file_type(pdf, 8), FILE_TYPE_PDF, "detect PDF");
+
+    # ZIP magic
+    var zip = alloc(8);
+    store8(zip, 0x50); store8(zip + 1, 0x4b); store8(zip + 2, 0x03); store8(zip + 3, 0x04);
+    assert_eq(detect_file_type(zip, 8), FILE_TYPE_ZIP, "detect ZIP");
+
+    # GZIP magic
+    var gz = alloc(4);
+    store8(gz, 0x1f); store8(gz + 1, 0x8b);
+    assert_eq(detect_file_type(gz, 4), FILE_TYPE_GZIP, "detect GZIP");
+
+    # PNG magic
+    var png = alloc(4);
+    store8(png, 0x89); store8(png + 1, 0x50); store8(png + 2, 0x4e); store8(png + 3, 0x47);
+    assert_eq(detect_file_type(png, 4), FILE_TYPE_PNG, "detect PNG");
+
+    # JPEG magic
+    var jpeg = alloc(4);
+    store8(jpeg, 0xff); store8(jpeg + 1, 0xd8); store8(jpeg + 2, 0xff);
+    assert_eq(detect_file_type(jpeg, 4), FILE_TYPE_JPEG, "detect JPEG");
+
+    # Script magic (#!)
+    var script = alloc(12);
+    store8(script, 0x23); store8(script + 1, 0x21);
+    assert_eq(detect_file_type(script, 12), FILE_TYPE_SCRIPT, "detect Script");
+
+    # Unknown
+    var unk = alloc(4);
+    store8(unk, 0x00); store8(unk + 1, 0x00);
+    assert_eq(detect_file_type(unk, 4), FILE_TYPE_UNKNOWN, "detect Unknown");
+
+    # Too short
+    var tiny = alloc(1);
+    store8(tiny, 0x42);
+    assert_eq(detect_file_type(tiny, 1), FILE_TYPE_UNKNOWN, "too short = unknown");
+}
+
+# ================================================================
+# SHA-256 tests
+# ================================================================
+
+fn test_sha256() {
+    test_group("sha256");
+
+    # SHA-256 of empty string is known
+    var empty_hash = file_sha256(alloc(1), 0);
+    assert(str_eq(empty_hash, str_from("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")), "sha256 empty");
+
+    # Deterministic
+    var data = str_from("hello");
+    var h1 = file_sha256(str_data(data), str_len(data));
+    var h2 = file_sha256(str_data(data), str_len(data));
+    assert(str_eq(h1, h2), "sha256 deterministic");
+}
+
+# ================================================================
+# String extraction tests
+# ================================================================
+
+fn test_strings() {
+    test_group("strings");
+
+    # ASCII extraction
+    var data = alloc(24);
+    store8(data, 0); store8(data + 1, 0);
+    # "hello world" at offset 2
+    var hello = "hello world";
+    for (var i = 0; i < 11; i = i + 1) {
+        store8(data + 2 + i, load8(hello + i));
+    }
+    store8(data + 13, 0); store8(data + 14, 0);
+    # "test" at offset 17
+    store8(data + 15, 1); store8(data + 16, 2);
+    store8(data + 17, 0x74); store8(data + 18, 0x65);
+    store8(data + 19, 0x73); store8(data + 20, 0x74);
+    store8(data + 21, 0);
+
+    var strings = extract_ascii(data, 22, 4);
+    assert_eq(vec_len(strings), 2, "extracted 2 ascii strings");
+
+    # is_printable_ascii
+    assert(is_printable_ascii(0x41), "A is printable");
+    assert(is_printable_ascii(0x20), "space is printable");
+    assert(is_printable_ascii(0x7e), "~ is printable");
+    assert(is_printable_ascii(0x09), "tab is printable");
+    assert_eq(is_printable_ascii(0x00), 0, "null not printable");
+    assert_eq(is_printable_ascii(0x7f), 0, "DEL not printable");
+}
+
+# ================================================================
+# PE parser tests
+# ================================================================
+
+fn test_pe_parser() {
+    test_group("pe_parser");
+
+    # Not a PE
+    var elf_data = alloc(4);
+    store8(elf_data, 0x7f); store8(elf_data + 1, 0x45);
+    var pe = parse_pe(elf_data, 4);
+    assert_eq(pe, 0, "ELF data is not PE");
+
+    # Empty data
+    assert_eq(parse_pe(alloc(1), 0), 0, "empty is not PE");
+
+    # Too short MZ
+    var mz_short = alloc(2);
+    store8(mz_short, 0x4d); store8(mz_short + 1, 0x5a);
+    assert_eq(parse_pe(mz_short, 2), 0, "MZ too short");
+
+    # Minimal valid PE header
+    var data = alloc(512);
+    for (var i = 0; i < 512; i = i + 1) { store8(data + i, 0); }
+    # DOS header
+    store8(data, 0x4d); store8(data + 1, 0x5a);
+    # e_lfanew at 0x3C = 0x80
+    store8(data + 0x3C, 0x80);
+    # PE signature at 0x80
+    store8(data + 0x80, 0x50); store8(data + 0x81, 0x45);
+    # COFF: machine = i386 (0x014c)
+    store8(data + 0x84, 0x4c); store8(data + 0x85, 0x01);
+    # num_sections = 1
+    store8(data + 0x86, 0x01);
+    # optional header size = 0x70
+    store8(data + 0x94, 0x70);
+    # PE32 magic
+    store8(data + 0x98, 0x0b); store8(data + 0x99, 0x01);
+
+    var info = parse_pe(data, 512);
+    assert(info != 0, "minimal PE parsed");
+}
+
+# ================================================================
+# ELF parser tests
+# ================================================================
+
+fn test_elf_parser() {
+    test_group("elf_parser");
+
+    # Not an ELF
+    var pe_data = alloc(4);
+    store8(pe_data, 0x4d); store8(pe_data + 1, 0x5a);
+    assert_eq(parse_elf(pe_data, 4), 0, "PE data is not ELF");
+
+    # Empty
+    assert_eq(parse_elf(alloc(1), 0), 0, "empty is not ELF");
+
+    # Minimal 64-bit ELF
+    var data = alloc(128);
+    for (var i = 0; i < 128; i = i + 1) { store8(data + i, 0); }
+    # ELF magic
+    store8(data, 0x7f); store8(data + 1, 0x45); store8(data + 2, 0x4c); store8(data + 3, 0x46);
+    # Class: 64-bit
+    store8(data + 4, 2);
+    # Endian: little
+    store8(data + 5, 1);
+    # Version
+    store8(data + 6, 1);
+    # Type: executable (2)
+    store8(data + 16, 2);
+    # Machine: x86_64 (62)
+    store8(data + 18, 62);
+
+    var info = parse_elf(data, 128);
+    assert(info != 0, "minimal ELF parsed");
+}
+
+# ================================================================
+# YARA engine tests
+# ================================================================
+
+fn test_yara() {
+    test_group("yara");
+
+    # Engine creation
+    var engine = yara_engine_new();
+    assert(engine != 0, "engine created");
+
+    # Hex pattern
+    var hex_bytes = alloc(4);
+    store8(hex_bytes, 0x7f); store8(hex_bytes + 1, 0x45);
+    store8(hex_bytes + 2, 0x4c); store8(hex_bytes + 3, 0x46);
+
+    var pat = yara_pattern_from_bytes(hex_bytes, 4);
+    assert(pat != 0, "pattern created");
+
+    # Pattern matching
+    var elf_data = alloc(8);
+    store8(elf_data, 0x7f); store8(elf_data + 1, 0x45);
+    store8(elf_data + 2, 0x4c); store8(elf_data + 3, 0x46);
+    store8(elf_data + 4, 0x02); store8(elf_data + 5, 0x01);
+
+    assert(yara_pattern_matches(pat, elf_data, 6), "pattern matches ELF");
+
+    # Non-matching data
+    var mz_data = alloc(4);
+    store8(mz_data, 0x4d); store8(mz_data + 1, 0x5a);
+    assert_eq(yara_pattern_matches(pat, mz_data, 4), 0, "pattern does not match PE");
+}
+
+# ================================================================
+# Priority queue tests
+# ================================================================
+
+fn test_queue() {
+    test_group("queue");
+
+    var q = scan_queue_new(10);
+    assert(scan_queue_is_empty(q), "new queue is empty");
+    assert_eq(scan_queue_len(q), 0, "new queue len = 0");
+
+    # Enqueue
+    var id1 = scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+    assert(id1 >= 0, "enqueue returns id");
+    assert_eq(scan_queue_len(q), 1, "len after enqueue = 1");
+
+    # Dequeue
+    var req = scan_queue_dequeue(q);
+    assert(req != 0, "dequeue returns request");
+    assert(scan_queue_is_empty(q), "empty after dequeue");
+
+    # Priority order
+    scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, PRIORITY_LOW);
+    scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, PRIORITY_CRITICAL);
+    scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+
+    var first = scan_queue_dequeue(q);
+    assert(first != 0, "dequeue critical");
+
+    # Capacity limit
+    var small_q = scan_queue_new(2);
+    scan_queue_enqueue(small_q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+    scan_queue_enqueue(small_q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+    var overflow = scan_queue_enqueue(small_q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+    assert_eq(overflow, 0 - 1, "enqueue returns -1 when full");
+}
+
+# ================================================================
+# SSDEEP tests
+# ================================================================
+
+fn test_ssdeep() {
+    test_group("ssdeep");
+
+    # Empty returns 0
+    var empty_hash = ssdeep_hash(alloc(1), 0);
+    assert_eq(empty_hash, 0, "empty ssdeep = none");
+
+    # Single byte produces hash
+    var one = alloc(1);
+    store8(one, 0x42);
+    var h = ssdeep_hash(one, 1);
+    assert(h != 0, "single byte produces hash");
+
+    # Deterministic
+    var data = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) {
+        store8(data + i, i & 0xff);
+    }
+    var h1 = ssdeep_hash(data, 1024);
+    var h2 = ssdeep_hash(data, 1024);
+    assert(h1 != 0, "ssdeep hash produced");
+    assert(h2 != 0, "ssdeep hash produced 2");
+}
+
+# ================================================================
+# TLSH tests
+# ================================================================
+
+fn test_tlsh() {
+    test_group("tlsh");
+
+    # Too short
+    var short = alloc(10);
+    assert_eq(tlsh_hash(short, 10), 0, "short data = no tlsh");
+    assert_eq(tlsh_hash(alloc(49), 49), 0, "49 bytes = no tlsh");
+
+    # Minimum length with varied data
+    var data = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) {
+        store8(data + i, i);
+    }
+    var h = tlsh_hash(data, 256);
+    assert(h != 0, "256 varied bytes produces hash");
+
+    # Deterministic
+    var h2 = tlsh_hash(data, 256);
+    assert(h != 0, "tlsh deterministic 1");
+    assert(h2 != 0, "tlsh deterministic 2");
+
+    # Identical distance = 0
+    if (h != 0) {
+        var dist = tlsh_distance(h, h);
+        assert_eq(dist, 0, "identical tlsh distance = 0");
+    }
+}
+
+# ================================================================
+# Memmem utility tests
+# ================================================================
+
+fn test_memmem() {
+    test_group("memmem");
+
+    var hay = str_from("hello world hello");
+    var needle = str_from("world");
+    var pos = memmem(str_data(hay), str_len(hay), str_data(needle), str_len(needle));
+    assert_eq(pos, 6, "memmem finds world at 6");
+
+    var miss = str_from("xyz");
+    var pos2 = memmem(str_data(hay), str_len(hay), str_data(miss), str_len(miss));
+    assert_eq(pos2, 0 - 1, "memmem returns -1 for miss");
+
+    # Empty needle
+    var pos3 = memmem(str_data(hay), str_len(hay), str_data(hay), 0);
+    assert_eq(pos3, 0 - 1, "empty needle = -1");
+}
+
+# ================================================================
+# Hex encode/decode tests
+# ================================================================
+
+fn test_hex() {
+    test_group("hex");
+
+    var data = alloc(3);
+    store8(data, 0x4d); store8(data + 1, 0x5a); store8(data + 2, 0xff);
+    var hex = hex_encode(data, 3);
+    assert(str_eq(hex, str_from("4d5aff")), "hex_encode basic");
+
+    # Empty
+    var hex_empty = hex_encode(data, 0);
+    assert_eq(str_len(hex_empty), 0, "hex_encode empty");
+}
+
+# ================================================================
+# Report tests
+# ================================================================
+
+fn test_report() {
+    test_group("report");
+
+    # Empty report
+    var results = vec_new();
+    var report = report_from_results(12345, results);
+    assert(report != 0, "empty report created");
+
+    # Markdown render
+    var md = report_render_markdown(report);
+    assert(str_len(md) > 0, "markdown not empty");
+}
+
+# ================================================================
+# Main test runner
+# ================================================================
+
+fn main() {
+    phylax_init();
+
+    test_severity();
+    test_errors();
+    test_entropy();
+    test_chi_squared();
+    test_file_detection();
+    test_sha256();
+    test_strings();
+    test_pe_parser();
+    test_elf_parser();
+    test_yara();
+    test_queue();
+    test_ssdeep();
+    test_tlsh();
+    test_memmem();
+    test_hex();
+    test_report();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);
