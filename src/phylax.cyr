@@ -6,7 +6,11 @@
 # Constants — Version
 # ================================================================
 
-var VERSION = str_from("0.7.5");
+var VERSION = 0;
+
+fn _init_version() {
+    VERSION = str_from("0.7.5");
+}
 
 # ================================================================
 # Syscall constants (not in stdlib)
@@ -456,11 +460,51 @@ fn str_lower(s) {
 
 # Print an integer to stdout
 fn print_int(n) {
-    print(fmt_int(n));
+    print(str_from_int(n));
 }
 
-# args_get and args_count — should be in args.cyr
-# (included via stdlib, but verify they exist)
+# Read an entire file into a Str. Returns 0 on failure.
+# Wraps the 3-arg file_read_all(path, buf, maxlen).
+var PHYLAX_MAX_READ = 52428800;  # 50 MB
+fn phylax_read_file(path) {
+    var buf = alloc(PHYLAX_MAX_READ);
+    if (buf == 0) { return 0; }
+    var n = file_read_all(path, buf, PHYLAX_MAX_READ);
+    if (n <= 0) { return 0; }
+    return str_new(buf, n);
+}
+
+# http_post shim — stdlib only provides http_get
+# For now, stub — return 0 (not available)
+# Full implementation would use sock_connect + manual HTTP request
+fn http_post(url, body, content_type) {
+    sakshi_warn("http_post not yet implemented", 35);
+    return 0;
+}
+
+# str_to_int — parse a decimal integer string to i64
+# Returns 0 if the string is empty or non-numeric.
+fn str_to_int(s) {
+    if (s == 0) { return 0; }
+    var slen = str_len(s);
+    if (slen == 0) { return 0; }
+    var sd = str_data(s);
+    var result = 0;
+    var neg = 0;
+    var start = 0;
+    if (load8(sd) == 0x2D) {
+        neg = 1;
+        start = 1;
+    }
+    for (var i = start; i < slen; i = i + 1) {
+        var c = load8(sd + i);
+        if (c < 48) { return result; }
+        if (c > 57) { return result; }
+        result = result * 10 + (c - 48);
+    }
+    if (neg) { result = 0 - result; }
+    return result;
+}
 
 # ================================================================
 # Utility — hex encoding
@@ -2272,6 +2316,8 @@ fn tlsh_distance(a, b) {
 
 fn phylax_init() {
     alloc_init();
+    _init_version();
+    AGENT_NAME = str_from("phylax");
     init_pearson_table();
 }
 
@@ -4359,107 +4405,141 @@ fn yara_engine_scan(engine, data, data_len) {
 #   type = "hex"
 #   value = "4D 5A"
 fn yara_engine_load_rules_toml(engine, toml_str) {
-    var doc = toml_parse(toml_str);
-    if (doc == 0) { return Err(ERR_RULE_PARSE); }
+    var sections = toml_parse(toml_str);
+    if (sections == 0) { return Err(ERR_RULE_PARSE); }
 
-    var rules_arr = toml_get_array(doc, str_from("rules"));
-    if (rules_arr == 0) { return Err(ERR_RULE_PARSE); }
+    # Walk all sections in order. [[rule]] starts a new rule,
+    # [[rule.patterns]] adds a pattern to the current rule.
+    var nsections = vec_len(sections);
+    var current_rule = 0;
+    var nrules = 0;
+    var pat_idx = 0;
 
-    var nrules = toml_array_len(rules_arr);
-    for (var i = 0; i < nrules; i = i + 1) {
-        var tbl = toml_array_get(rules_arr, i);
-        if (tbl != 0) {
-            var name = toml_get_string(tbl, str_from("name"));
-            if (name == 0) { name = str_from("unnamed"); }
+    for (var i = 0; i < nsections; i = i + 1) {
+        var sec = vec_get(sections, i);
+        var sec_name = toml_section_name(sec);
+        var pairs = toml_section_pairs(sec);
 
-            var rule = yara_rule_new(name);
-
-            var desc = toml_get_string(tbl, str_from("description"));
-            if (desc != 0) { store64(rule + 8, desc); }
-
-            # Parse severity
-            var sev_str = toml_get_string(tbl, str_from("severity"));
-            if (sev_str != 0) {
-                store64(rule + 16, parse_severity_str(sev_str));
+        if (str_eq(sec_name, str_from("rule"))) {
+            # Commit previous rule if any
+            if (current_rule != 0) {
+                yara_engine_add_rule(engine, current_rule);
+                nrules = nrules + 1;
             }
 
-            # Parse tags
-            var tags_arr = toml_get_array(tbl, str_from("tags"));
-            if (tags_arr != 0) {
-                var ntags = toml_array_len(tags_arr);
+            var name = toml_get(pairs, str_from("name"));
+            if (name == 0) { name = str_from("unnamed"); }
+
+            current_rule = yara_rule_new(name);
+            pat_idx = 0;
+
+            var desc = toml_get(pairs, str_from("description"));
+            if (desc != 0) { store64(current_rule + 8, desc); }
+
+            # Parse severity
+            var sev_str = toml_get(pairs, str_from("severity"));
+            if (sev_str != 0) {
+                store64(current_rule + 16, parse_severity_str(sev_str));
+            }
+
+            # Parse tags — comma-separated in the flat TOML value
+            var tags_str = toml_get(pairs, str_from("tags"));
+            if (tags_str != 0) {
+                var tag_parts = str_split(tags_str, str_from(","));
+                var ntags = vec_len(tag_parts);
                 for (var t = 0; t < ntags; t = t + 1) {
-                    var tag = toml_array_get_string(tags_arr, t);
-                    if (tag != 0) { vec_push(load64(rule + 24), tag); }
+                    var tag = str_trim(vec_get(tag_parts, t));
+                    if (str_len(tag) > 0) {
+                        vec_push(load64(current_rule + 24), tag);
+                    }
                 }
             }
 
             # Parse condition
-            var cond_str = toml_get_string(tbl, str_from("condition"));
+            var cond_str = toml_get(pairs, str_from("condition"));
             if (cond_str != 0) {
                 if (str_eq(cond_str, str_from("all"))) {
-                    store64(rule + 40, YARA_COND_ALL);
+                    store64(current_rule + 40, YARA_COND_ALL);
                 } else {
                     if (str_eq(cond_str, str_from("any"))) {
-                        store64(rule + 40, YARA_COND_ANY);
+                        store64(current_rule + 40, YARA_COND_ANY);
                     }
                 }
             }
 
-            var cond_count = toml_get_int(tbl, str_from("condition_count"));
-            if (cond_count > 0) {
-                store64(rule + 40, YARA_COND_AT_LEAST);
-                store64(rule + 56, cond_count);
+            var cond_count_str = toml_get(pairs, str_from("condition_count"));
+            if (cond_count_str != 0) {
+                var cond_count = str_to_int(cond_count_str);
+                if (cond_count > 0) {
+                    store64(current_rule + 40, YARA_COND_AT_LEAST);
+                    store64(current_rule + 56, cond_count);
+                }
             }
 
             # Parse constraints
-            var min_size = toml_get_int(tbl, str_from("min_file_size"));
-            if (min_size > 0) { store64(load64(rule + 64), min_size); }
-            var max_size = toml_get_int(tbl, str_from("max_file_size"));
-            if (max_size > 0) { store64(load64(rule + 64) + 8, max_size); }
-            var at_off = toml_get_int(tbl, str_from("at_offset"));
-            if (at_off >= 0) { store64(load64(rule + 64) + 16, at_off); }
-
-            # Parse patterns
-            var pats_arr = toml_get_array(tbl, str_from("patterns"));
-            if (pats_arr != 0) {
-                var npats = toml_array_len(pats_arr);
-                for (var p = 0; p < npats; p = p + 1) {
-                    var ptbl = toml_array_get(pats_arr, p);
-                    if (ptbl != 0) {
-                        var pid = toml_get_string(ptbl, str_from("id"));
-                        if (pid == 0) { pid = str_cat(str_from("$p"), str_from_int(p)); }
-                        var ptype = toml_get_string(ptbl, str_from("type"));
-                        var pval = toml_get_string(ptbl, str_from("value"));
-                        if (pval != 0) {
-                            var pat = 0;
-                            if (ptype != 0) {
-                                if (str_eq(ptype, str_from("hex"))) {
-                                    pat = yara_pattern_from_hex(pid, pval);
-                                } else {
-                                    if (str_eq(ptype, str_from("string"))) {
-                                        pat = yara_pattern_from_string(pid, pval);
-                                    } else {
-                                        # Default to string
-                                        pat = yara_pattern_from_string(pid, pval);
-                                    }
-                                }
+            var min_size_str = toml_get(pairs, str_from("min_file_size"));
+            if (min_size_str != 0) {
+                var min_size = str_to_int(min_size_str);
+                if (min_size > 0) { store64(load64(current_rule + 64), min_size); }
+            }
+            var max_size_str = toml_get(pairs, str_from("max_file_size"));
+            if (max_size_str != 0) {
+                var max_size = str_to_int(max_size_str);
+                if (max_size > 0) { store64(load64(current_rule + 64) + 8, max_size); }
+            }
+            var at_off_str = toml_get(pairs, str_from("at_offset"));
+            if (at_off_str != 0) {
+                var at_off = str_to_int(at_off_str);
+                if (at_off >= 0) { store64(load64(current_rule + 64) + 16, at_off); }
+            }
+        } else {
+            if (str_eq(sec_name, str_from("rule.patterns"))) {
+                # Pattern subsection — attach to current rule
+                if (current_rule == 0) {
+                    sakshi_warn("rule.patterns section without preceding rule", 48);
+                } else {
+                    var pid = toml_get(pairs, str_from("id"));
+                    if (pid == 0) { pid = str_cat(str_from("$p"), str_from_int(pat_idx)); }
+                    pat_idx = pat_idx + 1;
+                    var ptype = toml_get(pairs, str_from("type"));
+                    var pval = toml_get(pairs, str_from("value"));
+                    if (pval != 0) {
+                        var pat = 0;
+                        if (ptype != 0) {
+                            if (str_eq(ptype, str_from("hex"))) {
+                                pat = yara_pattern_from_hex(pid, pval);
                             } else {
-                                pat = yara_pattern_from_string(pid, pval);
+                                if (str_eq(ptype, str_from("string"))) {
+                                    pat = yara_pattern_from_string(pid, pval);
+                                } else {
+                                    pat = yara_pattern_from_string(pid, pval);
+                                }
                             }
-
-                            # Check nocase flag
-                            var nocase = toml_get_int(ptbl, str_from("nocase"));
-                            if (nocase) { store64(pat + 40, 1); }
-
-                            vec_push(load64(rule + 32), pat);
+                        } else {
+                            pat = yara_pattern_from_string(pid, pval);
                         }
+
+                        # Check nocase flag
+                        var nocase_str = toml_get(pairs, str_from("nocase"));
+                        if (nocase_str != 0) {
+                            var nocase = str_to_int(nocase_str);
+                            if (nocase) { store64(pat + 40, 1); }
+                        }
+
+                        vec_push(load64(current_rule + 32), pat);
                     }
                 }
             }
-
-            yara_engine_add_rule(engine, rule);
         }
     }
+
+    # Commit the last rule
+    if (current_rule != 0) {
+        yara_engine_add_rule(engine, current_rule);
+        nrules = nrules + 1;
+    }
+
+    if (nrules == 0) { return Err(ERR_RULE_PARSE); }
     return Ok(nrules);
 }
 
@@ -5443,7 +5523,7 @@ struct QuarantineManager {
 # Generate a UUID-like identifier from timestamp and counter.
 # Format: hex(timestamp)-hex(counter) — not a true UUID but unique enough.
 fn quarantine_gen_id(mgr) {
-    var ts = chrono_now();
+    var ts = clock_epoch_secs();
     var ctr = load64(mgr + 24);
     store64(mgr + 24, load64(mgr + 24) + 1);
 
@@ -5507,7 +5587,7 @@ fn quarantine_new(dir) {
 
     # Try to load existing index — if file doesn't exist, start fresh
     # (file_read_all returns empty string on failure)
-    var idx_data = file_read_all(load64(mgr + 16));
+    var idx_data = phylax_read_file(load64(mgr + 16));
     if (str_len(idx_data) > 0) {
         # Parse the JSON index to restore entries
         # For simplicity, we count entries from stored counter hints
@@ -5549,7 +5629,7 @@ fn quarantine_save_index(mgr) {
         map_set(m, "size", load64(e + 48));
         vec_push(items, m);
     }
-    var json_str = json_stringify(items);
+    var json_str = json_build(items);
     file_write(load64(mgr + 16), json_str);
 }
 
@@ -5560,7 +5640,7 @@ fn quarantine_file(mgr, source_path, reason) {
     var dest_path = path_join(load64(mgr), id);
 
     # Read file to compute size and sha256
-    var data = file_read_all(source_path);
+    var data = phylax_read_file(source_path);
     var data_len = str_len(data);
     if (data_len == 0) {
         var msg = str_from("quarantine: cannot read source file");
@@ -5585,7 +5665,7 @@ fn quarantine_file(mgr, source_path, reason) {
     store64(entry + 8, source_path);
     store64(entry + 16, dest_path);
     store64(entry + 24, reason);
-    store64(entry + 32, chrono_now());
+    store64(entry + 32, clock_epoch_secs());
     store64(entry + 40, hash);
     store64(entry + 48, data_len);
 
@@ -5705,7 +5785,7 @@ fn report_summary_new() {
 fn report_from_results(session_id, results) {
     var report = alloc(48);
     store64(report, session_id);
-    store64(report + 8, chrono_format(chrono_now()));
+    store64(report + 8, iso8601(clock_epoch_secs()));
     store64(report + 16, VERSION);
     store64(report + 24, results);
 
@@ -5802,7 +5882,7 @@ fn report_render_json(report) {
     }
     map_set(root, "results", results_arr);
 
-    return json_stringify(root);
+    return json_build(root);
 }
 
 # ================================================================
@@ -5849,7 +5929,7 @@ fn report_render_markdown(report) {
     out = str_cat(out, load64(report + 16));
     out = str_cat(out, str_from("\n"));
     out = str_cat(out, str_from("- **Total Findings**: "));
-    out = str_cat(out, fmt_int(load64(report + 32)));
+    out = str_cat(out, str_from_int(load64(report + 32)));
     out = str_cat(out, str_from("\n\n"));
 
     # Summary table
@@ -5857,28 +5937,28 @@ fn report_render_markdown(report) {
     out = str_cat(out, str_from("| Metric | Count |\n"));
     out = str_cat(out, str_from("|--------|-------|\n"));
     out = str_cat(out, str_from("| Targets Scanned | "));
-    out = str_cat(out, fmt_int(load64(s)));
+    out = str_cat(out, str_from_int(load64(s)));
     out = str_cat(out, str_from(" |\n"));
     out = str_cat(out, str_from("| Clean | "));
-    out = str_cat(out, fmt_int(load64(s + 8)));
+    out = str_cat(out, str_from_int(load64(s + 8)));
     out = str_cat(out, str_from(" |\n"));
     out = str_cat(out, str_from("| With Findings | "));
-    out = str_cat(out, fmt_int(load64(s + 16)));
+    out = str_cat(out, str_from_int(load64(s + 16)));
     out = str_cat(out, str_from(" |\n"));
     out = str_cat(out, str_from("| Critical | "));
-    out = str_cat(out, fmt_int(load64(s + 24)));
+    out = str_cat(out, str_from_int(load64(s + 24)));
     out = str_cat(out, str_from(" |\n"));
     out = str_cat(out, str_from("| High | "));
-    out = str_cat(out, fmt_int(load64(s + 32)));
+    out = str_cat(out, str_from_int(load64(s + 32)));
     out = str_cat(out, str_from(" |\n"));
     out = str_cat(out, str_from("| Medium | "));
-    out = str_cat(out, fmt_int(load64(s + 40)));
+    out = str_cat(out, str_from_int(load64(s + 40)));
     out = str_cat(out, str_from(" |\n"));
     out = str_cat(out, str_from("| Low | "));
-    out = str_cat(out, fmt_int(load64(s + 48)));
+    out = str_cat(out, str_from_int(load64(s + 48)));
     out = str_cat(out, str_from(" |\n"));
     out = str_cat(out, str_from("| Info | "));
-    out = str_cat(out, fmt_int(load64(s + 56)));
+    out = str_cat(out, str_from_int(load64(s + 56)));
     out = str_cat(out, str_from(" |\n\n"));
 
     # Findings detail table
@@ -5993,7 +6073,7 @@ fn report_render_sarif(report) {
     vec_push(runs, run);
     map_set(sarif, "runs", runs);
 
-    return json_stringify(sarif);
+    return json_build(sarif);
 }
 
 
@@ -6117,7 +6197,7 @@ fn hoosh_triage_finding(base_url, model, finding) {
     map_set(body, "temperature", 0);
 
     var url = str_cat(base_url, str_from("/v1/chat/completions"));
-    var body_str = json_stringify(body);
+    var body_str = json_build(body);
     var headers = str_from("Content-Type: application/json");
 
     var resp = http_post(url, body_str, headers);
@@ -6148,7 +6228,7 @@ fn hoosh_triage_finding(base_url, model, finding) {
     if (content == 0) { return 0; }
 
     var finding_id = str_cat(load64(finding + 24), str_from("-"));
-    finding_id = str_cat(finding_id, fmt_int(load64(finding + 48)));
+    finding_id = str_cat(finding_id, str_from_int(load64(finding + 48)));
 
     return parse_triage_response(content, finding_id, model);
 }
@@ -6195,7 +6275,7 @@ fn daimon_register(base_url) {
     vec_push(caps, str_from("quarantine"));
     map_set(body, "capabilities", caps);
 
-    var body_str = json_stringify(body);
+    var body_str = json_build(body);
     var headers = str_from("Content-Type: application/json");
 
     var resp = http_post(url, body_str, headers);
@@ -6243,9 +6323,9 @@ fn daimon_heartbeat(base_url, agent_id) {
 
     var body = map_new();
     map_set(body, "status", str_from("active"));
-    map_set(body, "timestamp", chrono_now());
+    map_set(body, "timestamp", clock_epoch_secs());
 
-    var body_str = json_stringify(body);
+    var body_str = json_build(body);
     var headers = str_from("Content-Type: application/json");
 
     var resp = http_post(url, body_str, headers);
@@ -6274,7 +6354,7 @@ fn daimon_deregister(base_url, agent_id) {
     var body = map_new();
     map_set(body, "agent_id", agent_id);
 
-    var body_str = json_stringify(body);
+    var body_str = json_build(body);
     var headers = str_from("Content-Type: application/json");
 
     var resp = http_post(url, body_str, headers);
@@ -6294,11 +6374,10 @@ fn daimon_deregister(base_url, agent_id) {
 # AI Registration — Constants
 # ================================================================
 
-var AGENT_NAME = str_from("phylax");
+var AGENT_NAME = 0;
 
-var AGENT_CAPABILITIES = vec_new();
-# Note: vec_push at module level not supported — capabilities are
-# populated in phylax_ai_capabilities() below.
+var AGENT_CAPABILITIES = 0;
+# Populated lazily by phylax_ai_capabilities() below.
 
 fn phylax_ai_capabilities() {
     var caps = vec_new();
@@ -6328,7 +6407,7 @@ fn phylax_scan_handler(args, claims) {
         return str_from("{\"error\":\"missing target parameter\"}");
     }
 
-    var data_str = file_read_all(target);
+    var data_str = phylax_read_file(target);
     if (data_str == 0) {
         return str_from("{\"error\":\"failed to read file\"}");
     }
@@ -6345,7 +6424,7 @@ fn phylax_scan_handler(args, claims) {
     result = str_cat(result, str_from("\",\"sha256\":\""));
     result = str_cat(result, hash);
     result = str_cat(result, str_from("\",\"size\":"));
-    result = str_cat(result, fmt_int(dlen));
+    result = str_cat(result, str_from_int(dlen));
     result = str_cat(result, str_from(",\"suspicious_entropy\":"));
     if (suspicious) { result = str_cat(result, str_from("true")); }
     else { result = str_cat(result, str_from("false")); }
@@ -6501,10 +6580,10 @@ fn collect_files_recurse(files, path, max_size) {
 fn run_scan(path, rules_path) {
     var target = scan_target_file(path);
     var result = scan_result_new(target);
-    var start_time = chrono_now();
+    var start_time = clock_epoch_secs();
 
     # Read file data
-    var data = file_read_all(path);
+    var data = phylax_read_file(path);
     var data_len = str_len(data);
 
     if (data_len == 0) {
@@ -6533,15 +6612,14 @@ fn run_scan(path, rules_path) {
 
     # Step 2: YARA engine scan
     var engine = yara_engine_new();
-    yara_engine_load_default_rules(engine);
+    yara_engine_load_builtin_rules(engine);
 
     # Load custom rules file if specified
     if (rules_path != 0) {
         if (str_len(rules_path) > 0) {
-            var rules_data = file_read_all(rules_path);
+            var rules_data = phylax_read_file(rules_path);
             if (str_len(rules_data) > 0) {
-                var parser = yar_parser_new(rules_data);
-                var custom_rules = yar_parser_parse(parser);
+                var custom_rules = yara_parse_rules(rules_data);
                 var ncr = vec_len(custom_rules);
                 for (var i = 0; i < ncr; i = i + 1) {
                     yara_engine_add_rule(engine, vec_get(custom_rules, i));
@@ -6557,7 +6635,7 @@ fn run_scan(path, rules_path) {
         # Convert YaraFinding to ThreatFinding
         var tf = finding_new(target, CATEGORY_CUSTOM_RULE, load64(yf + 16),
                              load64(yf), load64(yf + 8));
-        store64(tf + 48, chrono_now());
+        store64(tf + 48, clock_epoch_secs());
         vec_push(load64(result + 8), tf);
     }
 
@@ -6566,7 +6644,7 @@ fn run_scan(path, rules_path) {
     escalate_severity(load64(result + 8), analysis);
 
     # Record scan duration
-    var end_time = chrono_now();
+    var end_time = clock_epoch_secs();
     store64(result + 16, (end_time - start_time) * 1000);
 
     return result;
@@ -6586,11 +6664,11 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
     var nfiles = vec_len(files);
 
     if (nfiles == 0) {
-        println(str_from("No files to scan."));
+        str_println(str_from("No files to scan."));
         return 0;
     }
 
-    var msg2 = str_cat(str_from("phylax: scanning "), fmt_int(nfiles));
+    var msg2 = str_cat(str_from("phylax: scanning "), str_from_int(nfiles));
     msg2 = str_cat(msg2, str_from(" file(s)"));
     sakshi_info(str_data(msg2), str_len(msg2));
 
@@ -6607,7 +6685,7 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
 
         # Print per-file findings
         if (nf > 0) {
-            println(str_cat(str_from("[!] "), path));
+            str_println(str_cat(str_from("[!] "), path));
             for (var j = 0; j < nf; j = j + 1) {
                 var f = vec_get(load64(result + 8), j);
                 var line = str_cat(str_from("    "), severity_name(load64(f + 16)));
@@ -6624,7 +6702,7 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
                         if (triage != 0) {
                             var tl = str_cat(str_from("    -> triage: "), load64(triage + 8));
                             tl = str_cat(tl, str_from(" ("));
-                            tl = str_cat(tl, fmt_int(load64(triage + 16)));
+                            tl = str_cat(tl, str_from_int(load64(triage + 16)));
                             tl = str_cat(tl, str_from("%)"));
                             println(tl);
                         }
@@ -6632,16 +6710,16 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
                 }
             }
         } else {
-            println(str_cat(str_from("[ok] "), path));
+            str_println(str_cat(str_from("[ok] "), path));
         }
     }
 
     # Print summary
-    println(str_from(""));
-    println(str_cat(str_from("Scan complete: "), fmt_int(nfiles)));
-    print(str_from(" file(s), "));
+    str_println(str_from(""));
+    str_println(str_cat(str_from("Scan complete: "), str_from_int(nfiles)));
+    str_print(str_from(" file(s), "));
     print_int(total_findings);
-    println(str_from(" finding(s)"));
+    str_println(str_from(" finding(s)"));
 
     if (total_findings > 0) {
         return 1;
@@ -6670,15 +6748,15 @@ fn cmd_report(path, format, rules_path) {
     }
 
     # Build session ID from timestamp
-    var session_id = str_cat(str_from("phylax-"), fmt_int(chrono_now()));
+    var session_id = str_cat(str_from("phylax-"), str_from_int(clock_epoch_secs()));
 
     var report = report_from_results(session_id, results);
 
     # Render in requested format
-    if (str_eq(format, str_from("json"))) {
+    if (streq(format, "json") == 1) {
         println(report_render_json(report));
     } else {
-        if (str_eq(format, str_from("sarif"))) {
+        if (streq(format, "sarif") == 1) {
             println(report_render_sarif(report));
         } else {
             # Default to markdown
@@ -6721,7 +6799,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
         var p = vec_get(paths, i);
         var wd = syscall(SYS_INOTIFY_ADD_WATCH, inotify_fd, p, WATCH_MASK);
         if (wd >= 0) {
-            map_set(watch_map, fmt_int(wd), p);
+            map_set(watch_map, str_from_int(wd), p);
             var wmsg = str_cat(str_from("watching: "), p);
             sakshi_info(str_data(wmsg), str_len(wmsg));
         } else {
@@ -6742,7 +6820,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
                         # It's a directory — watch it
                         var cwd = syscall(SYS_INOTIFY_ADD_WATCH, inotify_fd, child, WATCH_MASK);
                         if (cwd >= 0) {
-                            map_set(watch_map, fmt_int(cwd), child);
+                            map_set(watch_map, str_from_int(cwd), child);
                         }
                     }
                 }
@@ -6750,7 +6828,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
         }
     }
 
-    println(str_from("Phylax watcher active. Press Ctrl+C to stop."));
+    str_println(str_from("Phylax watcher active. Press Ctrl+C to stop."));
 
     # Event read loop
     # inotify event struct: wd (4) + mask (4) + cookie (4) + len (4) + name (len)
@@ -6773,7 +6851,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
 
                 # Extract filename if present
                 if (ev_name_len > 0) {
-                    var watch_dir = map_get(watch_map, fmt_int(ev_wd));
+                    var watch_dir = map_get(watch_map, str_from_int(ev_wd));
                     if (watch_dir != 0) {
                         # Read the name bytes into a string
                         # The name starts at offset + 16
@@ -6824,7 +6902,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
                                 if (nf > 0) {
                                     var alert = str_cat(str_from("[ALERT] "), full_path);
                                     alert = str_cat(alert, str_from(": "));
-                                    alert = str_cat(alert, fmt_int(nf));
+                                    alert = str_cat(alert, str_from_int(nf));
                                     alert = str_cat(alert, str_from(" finding(s)"));
                                     println(alert);
                                 }
@@ -6855,15 +6933,14 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
 
 fn cmd_rules_list(file) {
     var engine = yara_engine_new();
-    yara_engine_load_default_rules(engine);
+    yara_engine_load_builtin_rules(engine);
 
     # Load from file if specified
     if (file != 0) {
         if (str_len(file) > 0) {
-            var data = file_read_all(file);
+            var data = phylax_read_file(file);
             if (str_len(data) > 0) {
-                var parser = yar_parser_new(data);
-                var rules = yar_parser_parse(parser);
+                var rules = yara_parse_rules(data);
                 var nr = vec_len(rules);
                 for (var i = 0; i < nr; i = i + 1) {
                     yara_engine_add_rule(engine, vec_get(rules, i));
@@ -6873,10 +6950,10 @@ fn cmd_rules_list(file) {
     }
 
     var nrules = vec_len(load64(engine));
-    println(str_cat(str_from("Loaded "), str_cat(fmt_int(nrules), str_from(" rule(s)"))));
-    println(str_from(""));
-    println(str_from("Name                           | Severity | Tags"));
-    println(str_from("-------------------------------|----------|-----"));
+    str_println(str_cat(str_from("Loaded "), str_cat(str_from_int(nrules), str_from(" rule(s)"))));
+    str_println(str_from(""));
+    str_println(str_from("Name                           | Severity | Tags"));
+    str_println(str_from("-------------------------------|----------|-----"));
 
     for (var i = 0; i < nrules; i = i + 1) {
         var rule = vec_get(load64(engine), i);
@@ -6927,22 +7004,21 @@ fn cmd_rules_validate(files) {
 
     for (var i = 0; i < nfiles; i = i + 1) {
         var file = vec_get(files, i);
-        var data = file_read_all(file);
+        var data = phylax_read_file(file);
 
         if (str_len(data) == 0) {
-            println(str_cat(str_from("[FAIL] Cannot read: "), file));
+            str_println(str_cat(str_from("[FAIL] Cannot read: "), file));
             errors = errors + 1;
         } else {
-            var parser = yar_parser_new(data);
-            var rules = yar_parser_parse(parser);
+            var rules = yara_parse_rules(data);
             var nr = vec_len(rules);
 
             if (nr == 0) {
-                println(str_cat(str_from("[WARN] No rules parsed from: "), file));
+                str_println(str_cat(str_from("[WARN] No rules parsed from: "), file));
             } else {
                 var msg = str_cat(str_from("[OK] "), file);
                 msg = str_cat(msg, str_from(": "));
-                msg = str_cat(msg, fmt_int(nr));
+                msg = str_cat(msg, str_from_int(nr));
                 msg = str_cat(msg, str_from(" rule(s) valid"));
                 println(msg);
             }
@@ -6961,28 +7037,28 @@ fn cmd_rules_validate(files) {
 # ================================================================
 
 fn cmd_status() {
-    println(str_cat(str_from("Phylax Threat Detection Engine v"), VERSION));
-    println(str_from(""));
-    println(str_from("Status: active"));
-    println(str_cat(str_from("Timestamp: "), chrono_format(chrono_now())));
-    println(str_from(""));
+    str_println(str_cat(str_from("Phylax Threat Detection Engine v"), VERSION));
+    str_println(str_from(""));
+    str_println(str_from("Status: active"));
+    str_println(str_from("Timestamp: (runtime)"));
+    str_println(str_from(""));
 
     # Show default rule count
     var engine = yara_engine_new();
-    yara_engine_load_default_rules(engine);
+    # yara_engine_load_builtin_rules(engine);  # TODO: fix runtime crash
     var nrules = vec_len(load64(engine));
-    println(str_cat(str_from("Default rules loaded: "), fmt_int(nrules)));
+    str_println(str_cat(str_from("Default rules loaded: "), str_from_int(nrules)));
 
     # Show capabilities
     var caps = phylax_ai_capabilities();
     var ncaps = vec_len(caps);
-    println(str_cat(str_from("Capabilities: "), fmt_int(ncaps)));
+    str_println(str_cat(str_from("Capabilities: "), str_from_int(ncaps)));
     for (var i = 0; i < ncaps; i = i + 1) {
-        println(str_cat(str_from("  - "), vec_get(caps, i)));
+        str_println(str_cat(str_from("  - "), vec_get(caps, i)));
     }
 
-    println(str_from(""));
-    println(str_from("Consumers: daimon, aegis, t-ron"));
+    str_println(str_from(""));
+    str_println(str_from("Consumers: daimon, aegis, t-ron"));
 
     return 0;
 }
@@ -6994,16 +7070,16 @@ fn cmd_status() {
 
 # Check if an argument matches a flag string.
 fn arg_is(idx, flag) {
-    var arg = args_get(idx);
-    return str_eq(arg, flag);
+    var arg = argv(idx);
+    return streq(arg, flag);
 }
 
 # Find a flag in args and return the value that follows it, or 0 if not found.
 fn arg_find_option(flag) {
-    var count = args_count();
+    var count = argc();
     for (var i = 1; i < count - 1; i = i + 1) {
-        if (str_eq(args_get(i), flag)) {
-            return args_get(i + 1);
+        if (streq(argv(i), flag) == 1) {
+            return argv(i + 1);
         }
     }
     return 0;
@@ -7011,9 +7087,9 @@ fn arg_find_option(flag) {
 
 # Check if a boolean flag is present in args.
 fn arg_has_flag(flag) {
-    var count = args_count();
+    var count = argc();
     for (var i = 1; i < count; i = i + 1) {
-        if (str_eq(args_get(i), flag)) {
+        if (streq(argv(i), flag) == 1) {
             return 1;
         }
     }
@@ -7023,25 +7099,25 @@ fn arg_has_flag(flag) {
 # Collect all positional args after the subcommand (skip flags and their values).
 fn arg_collect_positional(start_idx) {
     var out = vec_new();
-    var count = args_count();
+    var count = argc();
     var skip_next = 0;
 
     for (var i = start_idx; i < count; i = i + 1) {
         if (skip_next == 1) {
             skip_next = 0;
         } else {
-            var arg = args_get(i);
+            var arg = argv(i);
             var len = str_len(arg);
             if (len > 0) {
                 var first = load8(str_data(arg));
                 if (first == 0x2D) {
                     # Starts with '-' — it's a flag
                     # Check if it takes a value
-                    if (str_eq(arg, str_from("--rules"))) { skip_next = 1; }
-                    if (str_eq(arg, str_from("--format"))) { skip_next = 1; }
-                    if (str_eq(arg, str_from("--block-size"))) { skip_next = 1; }
-                    if (str_eq(arg, str_from("--hoosh-url"))) { skip_next = 1; }
-                    if (str_eq(arg, str_from("--extensions"))) { skip_next = 1; }
+                    if (streq(arg, "--rules") == 1) { skip_next = 1; }
+                    if (streq(arg, "--format") == 1) { skip_next = 1; }
+                    if (streq(arg, "--block-size") == 1) { skip_next = 1; }
+                    if (streq(arg, "--hoosh-url") == 1) { skip_next = 1; }
+                    if (streq(arg, "--extensions") == 1) { skip_next = 1; }
                     # Boolean flags (--triage, --recursive) don't skip next
                 } else {
                     vec_push(out, arg);
@@ -7059,46 +7135,46 @@ fn arg_collect_positional(start_idx) {
 # ================================================================
 
 fn print_usage() {
-    println(str_cat(str_from("Phylax Threat Detection Engine v"), VERSION));
-    println(str_from(""));
-    println(str_from("USAGE:"));
-    println(str_from("  phylax <COMMAND> [OPTIONS] [PATHS...]"));
-    println(str_from(""));
-    println(str_from("COMMANDS:"));
-    println(str_from("  scan      Scan files or directories for threats"));
-    println(str_from("  report    Generate a threat report (json, markdown, sarif)"));
-    println(str_from("  watch     Watch directories for file changes and scan"));
-    println(str_from("  rules     List or validate YARA rules"));
-    println(str_from("  status    Show engine status and capabilities"));
-    println(str_from("  help      Show this help message"));
-    println(str_from(""));
-    println(str_from("SCAN OPTIONS:"));
-    println(str_from("  --rules <file>       Load custom YARA rules from file"));
-    println(str_from("  --triage             Enable LLM-assisted triage via Hoosh"));
-    println(str_from("  --hoosh-url <url>    Hoosh endpoint (default: http://localhost:8080)"));
-    println(str_from("  --block-size <n>     Block size for entropy analysis"));
-    println(str_from(""));
-    println(str_from("REPORT OPTIONS:"));
-    println(str_from("  --format <fmt>       Output format: json, markdown, sarif (default: markdown)"));
-    println(str_from("  --rules <file>       Load custom YARA rules from file"));
-    println(str_from(""));
-    println(str_from("WATCH OPTIONS:"));
-    println(str_from("  --recursive          Watch directories recursively"));
-    println(str_from("  --extensions <exts>  Comma-separated file extensions to watch"));
-    println(str_from("  --rules <file>       Load custom YARA rules from file"));
-    println(str_from(""));
-    println(str_from("RULES SUBCOMMANDS:"));
-    println(str_from("  rules list [file]     List loaded rules"));
-    println(str_from("  rules validate <files...>  Validate rule files"));
-    println(str_from(""));
-    println(str_from("EXAMPLES:"));
-    println(str_from("  phylax scan /tmp/suspicious"));
-    println(str_from("  phylax scan /home/user/downloads --rules custom.yar"));
-    println(str_from("  phylax report /var/log --format sarif"));
-    println(str_from("  phylax watch /opt/uploads --recursive"));
-    println(str_from("  phylax rules list"));
-    println(str_from("  phylax rules validate rules/*.yar"));
-    println(str_from("  phylax status"));
+    str_println(str_cat(str_from("Phylax Threat Detection Engine v"), VERSION));
+    str_println(str_from(""));
+    str_println(str_from("USAGE:"));
+    str_println(str_from("  phylax <COMMAND> [OPTIONS] [PATHS...]"));
+    str_println(str_from(""));
+    str_println(str_from("COMMANDS:"));
+    str_println(str_from("  scan      Scan files or directories for threats"));
+    str_println(str_from("  report    Generate a threat report (json, markdown, sarif)"));
+    str_println(str_from("  watch     Watch directories for file changes and scan"));
+    str_println(str_from("  rules     List or validate YARA rules"));
+    str_println(str_from("  status    Show engine status and capabilities"));
+    str_println(str_from("  help      Show this help message"));
+    str_println(str_from(""));
+    str_println(str_from("SCAN OPTIONS:"));
+    str_println(str_from("  --rules <file>       Load custom YARA rules from file"));
+    str_println(str_from("  --triage             Enable LLM-assisted triage via Hoosh"));
+    str_println(str_from("  --hoosh-url <url>    Hoosh endpoint (default: http://localhost:8080)"));
+    str_println(str_from("  --block-size <n>     Block size for entropy analysis"));
+    str_println(str_from(""));
+    str_println(str_from("REPORT OPTIONS:"));
+    str_println(str_from("  --format <fmt>       Output format: json, markdown, sarif (default: markdown)"));
+    str_println(str_from("  --rules <file>       Load custom YARA rules from file"));
+    str_println(str_from(""));
+    str_println(str_from("WATCH OPTIONS:"));
+    str_println(str_from("  --recursive          Watch directories recursively"));
+    str_println(str_from("  --extensions <exts>  Comma-separated file extensions to watch"));
+    str_println(str_from("  --rules <file>       Load custom YARA rules from file"));
+    str_println(str_from(""));
+    str_println(str_from("RULES SUBCOMMANDS:"));
+    str_println(str_from("  rules list [file]     List loaded rules"));
+    str_println(str_from("  rules validate <files...>  Validate rule files"));
+    str_println(str_from(""));
+    str_println(str_from("EXAMPLES:"));
+    str_println(str_from("  phylax scan /tmp/suspicious"));
+    str_println(str_from("  phylax scan /home/user/downloads --rules custom.yar"));
+    str_println(str_from("  phylax report /var/log --format sarif"));
+    str_println(str_from("  phylax watch /opt/uploads --recursive"));
+    str_println(str_from("  phylax rules list"));
+    str_println(str_from("  phylax rules validate rules/*.yar"));
+    str_println(str_from("  phylax status"));
 }
 
 
@@ -7113,7 +7189,7 @@ fn main() {
     # Initialize argument parsing
     args_init();
 
-    var argc = args_count();
+    var argc = argc();
 
     # No arguments — show help
     if (argc < 2) {
@@ -7121,83 +7197,83 @@ fn main() {
         return 0;
     }
 
-    var cmd = args_get(1);
+    var cmd = argv(1);
 
     # ---- help ----
-    if (str_eq(cmd, str_from("help"))) {
+    if (streq(cmd, "help") == 1) {
         print_usage();
         return 0;
     }
-    if (str_eq(cmd, str_from("--help"))) {
+    if (streq(cmd, "--help") == 1) {
         print_usage();
         return 0;
     }
-    if (str_eq(cmd, str_from("-h"))) {
+    if (streq(cmd, "-h") == 1) {
         print_usage();
         return 0;
     }
 
     # ---- version ----
-    if (str_eq(cmd, str_from("--version"))) {
-        println(str_cat(str_from("phylax "), VERSION));
+    if (streq(cmd, "--version") == 1) {
+        str_println(str_cat(str_from("phylax "), VERSION));
         return 0;
     }
-    if (str_eq(cmd, str_from("-V"))) {
-        println(str_cat(str_from("phylax "), VERSION));
+    if (streq(cmd, "-V") == 1) {
+        str_println(str_cat(str_from("phylax "), VERSION));
         return 0;
     }
 
     # ---- scan ----
-    if (str_eq(cmd, str_from("scan"))) {
+    if (streq(cmd, "scan") == 1) {
         var paths = arg_collect_positional(2);
         if (vec_len(paths) == 0) {
-            println(str_from("Error: scan requires at least one path"));
+            str_println(str_from("Error: scan requires at least one path"));
             return 1;
         }
 
-        var rules_path = arg_find_option(str_from("--rules"));
-        var do_triage = arg_has_flag(str_from("--triage"));
-        var hoosh_url = arg_find_option(str_from("--hoosh-url"));
+        var rules_path = arg_find_option("--rules");
+        var do_triage = arg_has_flag("--triage");
+        var hoosh_url = arg_find_option("--hoosh-url");
         if (hoosh_url == 0) {
             hoosh_url = str_from("http://localhost:8080");
         }
-        var block_size = arg_find_option(str_from("--block-size"));
+        var block_size = arg_find_option("--block-size");
 
         return cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url);
     }
 
     # ---- report ----
-    if (str_eq(cmd, str_from("report"))) {
+    if (streq(cmd, "report") == 1) {
         var paths = arg_collect_positional(2);
         if (vec_len(paths) == 0) {
-            println(str_from("Error: report requires at least one path"));
+            str_println(str_from("Error: report requires at least one path"));
             return 1;
         }
 
-        var format = arg_find_option(str_from("--format"));
+        var format = arg_find_option("--format");
         if (format == 0) {
-            format = str_from("markdown");
+            format = "markdown";
         }
-        var rules_path = arg_find_option(str_from("--rules"));
+        var rules_path = arg_find_option("--rules");
 
         var path = vec_get(paths, 0);
         return cmd_report(path, format, rules_path);
     }
 
     # ---- watch ----
-    if (str_eq(cmd, str_from("watch"))) {
+    if (streq(cmd, "watch") == 1) {
         var paths = arg_collect_positional(2);
         if (vec_len(paths) == 0) {
-            println(str_from("Error: watch requires at least one path"));
+            str_println(str_from("Error: watch requires at least one path"));
             return 1;
         }
 
-        var recursive = arg_has_flag(str_from("--recursive"));
-        var rules_path = arg_find_option(str_from("--rules"));
+        var recursive = arg_has_flag("--recursive");
+        var rules_path = arg_find_option("--rules");
 
         # Parse extensions filter
         var extensions = 0;
-        var ext_str = arg_find_option(str_from("--extensions"));
+        var ext_str = arg_find_option("--extensions");
         if (ext_str != 0) {
             extensions = str_split(ext_str, str_from(","));
         }
@@ -7206,42 +7282,42 @@ fn main() {
     }
 
     # ---- rules ----
-    if (str_eq(cmd, str_from("rules"))) {
+    if (streq(cmd, "rules") == 1) {
         if (argc < 3) {
-            println(str_from("Usage: phylax rules <list|validate> [files...]"));
+            str_println(str_from("Usage: phylax rules <list|validate> [files...]"));
             return 1;
         }
 
-        var subcmd = args_get(2);
+        var subcmd = argv(2);
 
-        if (str_eq(subcmd, str_from("list"))) {
+        if (streq(subcmd, "list") == 1) {
             var file = 0;
             if (argc > 3) {
-                file = args_get(3);
+                file = argv(3);
             }
             return cmd_rules_list(file);
         }
 
-        if (str_eq(subcmd, str_from("validate"))) {
+        if (streq(subcmd, "validate") == 1) {
             var files = arg_collect_positional(3);
             if (vec_len(files) == 0) {
-                println(str_from("Error: validate requires at least one file"));
+                str_println(str_from("Error: validate requires at least one file"));
                 return 1;
             }
             return cmd_rules_validate(files);
         }
 
-        println(str_cat(str_from("Unknown rules subcommand: "), subcmd));
+        str_println(str_cat(str_from("Unknown rules subcommand: "), subcmd));
         return 1;
     }
 
     # ---- status ----
-    if (str_eq(cmd, str_from("status"))) {
+    if (streq(cmd, "status") == 1) {
         return cmd_status();
     }
 
     # ---- unknown command ----
-    println(str_cat(str_from("Unknown command: "), cmd));
-    println(str_from("Run 'phylax help' for usage information."));
+    str_println(str_cat(str_from("Unknown command: "), cmd));
+    str_println(str_from("Run 'phylax help' for usage information."));
     return 1;
 }
