@@ -2,6 +2,42 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.8.2] - 2026-04-16
+
+Parallel file scanning for multi-file operations.
+
+### Parallel Scanning
+- **Thread pool** for multi-file scans — 4 worker threads via `thread_create`
+- `parallel_scan_worker` processes file batches independently, results collected via mutex
+- Automatically engages when scanning 4+ files; single-file scans remain sequential
+- Added `str_to_cstr` helper for Str → null-terminated cstr conversion
+- `PARALLEL_THREADS` and `PARALLEL_THRESHOLD` configurable constants
+
+### Known Limitations
+- Directory recursion with parallel scan needs cstr/Str unification (tracked for v0.9)
+- `args.cyr` cmdline buffer on stack limits argv lifetime — affects path conversion
+
+### Quality
+- 86 tests passing
+- 828KB static binary
+
+## [0.8.1] - 2026-04-16
+
+Memory-mapped I/O for large file scanning.
+
+### mmap I/O
+- **`mmap_file_ro`** for files > 64KB — zero-copy file access via `SYS_MMAP`, no heap pressure
+- **`phylax_file_size`** — stat-based file size detection before read
+- Small files (< 64KB) still use alloc+read for simplicity
+- **100MB hard limit** (up from 1MB) — configurable via `PHYLAX_MAX_FILE_SIZE`
+- Successfully scans 5MB+ files that previously crashed on heap exhaustion
+- Added `mmap.cyr` stdlib dependency
+
+### Quality
+- 86 tests passing
+- 828KB static binary
+- Tested: 5-byte file (alloc path), 512KB file (mmap path), 5MB file (mmap path), 2MB PE-like file
+
 ## [0.8.0] - 2026-04-16
 
 Feature parity release: YARA module conditions, CI pipeline gating, config file, timestamp formatting, and performance optimizations.

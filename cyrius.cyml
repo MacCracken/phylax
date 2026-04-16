@@ -1,6 +1,6 @@
 [package]
 name = "phylax"
-version = "0.8.0"
+version = "0.8.3"
 description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF parsing, binary classification"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
@@ -17,7 +17,7 @@ stdlib = [
     "assert", "hashmap", "json", "toml", "regex", "fs", "net",
     "tagged", "fnptr", "callback", "thread", "bench", "bounds",
     "math", "process", "chrono", "base64", "csv",
-    "freelist", "bigint", "http"
+    "freelist", "bigint", "http", "mmap"
 ]
 
 [deps.sakshi]

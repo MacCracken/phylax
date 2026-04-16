@@ -9,7 +9,7 @@
 var VERSION = 0;
 
 fn _init_version() {
-    VERSION = str_from("0.8.0");
+    VERSION = str_from("0.8.3");
 }
 
 # ================================================================
@@ -562,12 +562,47 @@ fn print_int(n) {
 }
 
 # Read an entire file into a Str. Returns 0 on failure.
-# Wraps the 3-arg file_read_all(path, buf, maxlen).
-var PHYLAX_MAX_READ = 1048576;  # 1 MB (conservative for Cyrius heap)
+# Uses mmap for files > 64KB (zero-copy), alloc+read for small files.
+var PHYLAX_MAX_FILE_SIZE = 104857600;  # 100 MB hard limit
+var PHYLAX_MMAP_THRESHOLD = 65536;     # 64 KB — mmap above this
+
+# Convert a Str to a null-terminated cstr for syscalls
+fn str_to_cstr(s) {
+    var slen = str_len(s);
+    var buf = alloc(slen + 1);
+    memcpy(buf, str_data(s), slen);
+    store8(buf + slen, 0);
+    return buf;
+}
+
+fn phylax_file_size(path) {
+    # stat(path, &statbuf) — st_size is at offset 48 on x86_64
+    # path is a cstr (null-terminated)
+    var statbuf[144];  # struct stat is 144 bytes on x86_64
+    var rc = syscall(4, path, &statbuf);  # SYS_STAT = 4
+    if (rc < 0) { return -1; }
+    return load64(&statbuf + 48);
+}
+
 fn phylax_read_file(path) {
-    var buf = alloc(PHYLAX_MAX_READ);
+    var size = phylax_file_size(path);
+    if (size <= 0) { return 0; }
+    if (size > PHYLAX_MAX_FILE_SIZE) { return 0; }
+    if (size > PHYLAX_MMAP_THRESHOLD) {
+        # mmap path — zero-copy, no heap pressure
+        var fd = file_open(path, 0, 0);
+        if (fd < 0) { return 0; }
+        var addr = mmap_file_ro(fd, size);
+        file_close(fd);
+        if (addr == 0) { return 0; }
+        # Return a Str pointing directly into the mmap region
+        return str_new(addr, size);
+    }
+
+    # Small file — alloc + read (stays on heap)
+    var buf = alloc(size + 1);
     if (buf == 0) { return 0; }
-    var n = file_read_all(path, buf, PHYLAX_MAX_READ);
+    var n = file_read_all(path, buf, size);
     if (n <= 0) { return 0; }
     return str_new(buf, n);
 }
@@ -2497,6 +2532,102 @@ fn phylax_init() {
     _init_version();
     AGENT_NAME = str_from("phylax");
     init_pearson_table();
+}
+
+# ================================================================
+# Archive Scanning — Constants
+# ================================================================
+
+var ARCHIVE_MAX_DEPTH = 3;           # max recursion depth
+var ARCHIVE_MAX_ENTRIES = 1024;      # max entries per archive
+var ARCHIVE_MAX_EXPAND = 104857600;  # 100 MB max total expanded size
+
+# ================================================================
+# Archive Scanning — ZIP (local file headers, stored entries only)
+# ================================================================
+
+fn zip_scan_entries(data, data_len, rules_path, max_depth) {
+    var findings = vec_new();
+    if (max_depth <= 0) { return findings; }
+
+    var offset = 0;
+    var entry_count = 0;
+
+    while (offset + 30 < data_len && entry_count < ARCHIVE_MAX_ENTRIES) {
+        # Check for local file header signature PK\x03\x04
+        if (read_u32_le(data, offset) != 0x04034B50) { break; }
+
+        var method = read_u16_le(data, offset + 8);
+        var comp_size = read_u32_le(data, offset + 18);
+        var uncomp_size = read_u32_le(data, offset + 22);
+        var name_len = read_u16_le(data, offset + 26);
+        var extra_len = read_u16_le(data, offset + 28);
+
+        var data_offset = offset + 30 + name_len + extra_len;
+
+        if (method == 0 && uncomp_size > 0 && data_offset + uncomp_size <= data_len) {
+            # Stored (uncompressed) — scan the embedded file
+            if (uncomp_size <= ARCHIVE_MAX_EXPAND) {
+                var entry_data = data + data_offset;
+                var entry_findings = analyze_findings(entry_data, uncomp_size,
+                    scan_target_new(SCAN_TARGET_FILE, str_from("embedded")));
+                # Also run YARA on embedded content
+                var engine = yara_engine_new();
+                yara_engine_load_builtin_rules(engine);
+                var yf = yara_engine_scan(engine, entry_data, uncomp_size);
+                # Merge analysis findings
+                var nef = vec_len(entry_findings);
+                for (var i = 0; i < nef; i = i + 1) {
+                    vec_push(findings, vec_get(entry_findings, i));
+                }
+                # Merge YARA findings
+                var nyf = vec_len(yf);
+                for (var i = 0; i < nyf; i = i + 1) {
+                    vec_push(findings, vec_get(yf, i));
+                }
+                # Recursive: check if embedded file is also an archive
+                var etype = detect_file_type(entry_data, uncomp_size);
+                if (etype == FILETYPE_ZIP) {
+                    var sub = zip_scan_entries(entry_data, uncomp_size, rules_path, max_depth - 1);
+                    var nsub = vec_len(sub);
+                    for (var i = 0; i < nsub; i = i + 1) {
+                        vec_push(findings, vec_get(sub, i));
+                    }
+                }
+            }
+        }
+
+        # Move to next entry
+        offset = data_offset + comp_size;
+        entry_count = entry_count + 1;
+    }
+    return findings;
+}
+
+# ================================================================
+# Archive Scanning — GZIP (header detection, decompression pending)
+# ================================================================
+
+fn gzip_scan(data, data_len, rules_path) {
+    var findings = vec_new();
+    # GZIP magic check
+    if (data_len < 10) { return findings; }
+    if (load8(data) != 0x1F || load8(data + 1) != 0x8B) { return findings; }
+
+    var method = load8(data + 2);
+    if (method != 8) {
+        # Not deflate — non-standard gzip, note but cannot decompress
+    }
+
+    # Add informational finding about compressed archive
+    var f = finding_new(
+        scan_target_new(SCAN_TARGET_FILE, str_from("archive")),
+        CATEGORY_SUSPICIOUS, SEVERITY_INFO,
+        str_from("compressed_archive"),
+        str_from("File is a GZIP compressed archive (embedded content not scanned — deflate decompression pending)")
+    );
+    vec_push(findings, f);
+    return findings;
 }
 
 # ================================================================
@@ -7033,6 +7164,23 @@ fn run_scan(path, rules_path) {
     var analysis = analyze(data_ptr, data_len);
     escalate_severity(load64(result + 8), analysis);
 
+    # Step 4: Archive scanning (ZIP stored entries, GZIP detection)
+    var ftype = detect_file_type(data_ptr, data_len);
+    if (ftype == FILETYPE_ZIP) {
+        var archive_findings = zip_scan_entries(data_ptr, data_len, rules_path, ARCHIVE_MAX_DEPTH);
+        var narch = vec_len(archive_findings);
+        for (var i = 0; i < narch; i = i + 1) {
+            vec_push(load64(result + 8), vec_get(archive_findings, i));
+        }
+    }
+    if (ftype == FILETYPE_GZIP) {
+        var gz_findings = gzip_scan(data_ptr, data_len, rules_path);
+        var ngz = vec_len(gz_findings);
+        for (var i = 0; i < ngz; i = i + 1) {
+            vec_push(load64(result + 8), vec_get(gz_findings, i));
+        }
+    }
+
     # Record scan duration
     var end_time = clock_epoch_secs();
     store64(result + 16, (end_time - start_time) * 1000);
@@ -7050,6 +7198,68 @@ var G_SEVERITY_THRESHOLD = 0;
 var G_EXIT_CODE = 1;
 var G_TOTAL_FINDINGS = 0;
 var G_HIGHEST_SEVERITY = 0;
+
+# ================================================================
+# Parallel scan worker
+# ================================================================
+
+# Worker argument struct: files_vec at +0, start_idx at +8, end_idx at +16,
+# rules_path at +24, results_vec at +32, results_mutex at +40
+fn parallel_scan_worker(arg) {
+    var files     = load64(arg);
+    var start     = load64(arg + 8);
+    var end_idx   = load64(arg + 16);
+    var rpath     = load64(arg + 24);
+    var results   = load64(arg + 32);
+    var mtx       = load64(arg + 40);
+
+    for (var i = start; i < end_idx; i = i + 1) {
+        var path = vec_get(files, i);
+        var result = run_scan(path, rpath);
+        mutex_lock(mtx);
+        vec_push(results, result);
+        mutex_unlock(mtx);
+    }
+    return 0;
+}
+
+# Number of parallel scan threads (limited by heap — each thread needs stack)
+var PARALLEL_THREADS = 4;
+var PARALLEL_THRESHOLD = 4;  # only parallelize if >= this many files
+
+fn parallel_scan(files, nfiles, rules_path) {
+    var results = vec_new();
+    var mtx = mutex_new();
+    var nthreads = PARALLEL_THREADS;
+    if (nthreads > nfiles) { nthreads = nfiles; }
+
+    var batch = nfiles / nthreads;
+    var threads = vec_new();
+
+    for (var t = 0; t < nthreads; t = t + 1) {
+        var start = t * batch;
+        var end_idx = start + batch;
+        if (t == nthreads - 1) { end_idx = nfiles; }  # last thread gets remainder
+
+        var arg = alloc(48);
+        store64(arg, files);
+        store64(arg + 8, start);
+        store64(arg + 16, end_idx);
+        store64(arg + 24, rules_path);
+        store64(arg + 32, results);
+        store64(arg + 40, mtx);
+
+        var tid = thread_create(&parallel_scan_worker, arg);
+        vec_push(threads, tid);
+    }
+
+    # Join all threads
+    for (var t = 0; t < nthreads; t = t + 1) {
+        thread_join(vec_get(threads, t));
+    }
+
+    return results;
+}
 
 fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
     var severity_threshold = G_SEVERITY_THRESHOLD;
@@ -7070,16 +7280,28 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
     msg2 = str_cat(msg2, str_from(" file(s)"));
     sakshi_info(str_data(msg2), str_len(msg2));
 
-    var results = vec_new();
     G_TOTAL_FINDINGS = 0;
     G_HIGHEST_SEVERITY = SEVERITY_INFO;
     var total_findings = 0;
     var highest_severity = SEVERITY_INFO;
 
-    for (var i = 0; i < nfiles; i = i + 1) {
-        var path = vec_get(files, i);
-        var result = run_scan(path, rules_path);
-        vec_push(results, result);
+    # Parallel scan for multiple files, sequential for few
+    var results = vec_new();
+    if (nfiles >= PARALLEL_THRESHOLD) {
+        results = parallel_scan(files, nfiles, rules_path);
+    } else {
+        for (var i = 0; i < nfiles; i = i + 1) {
+            var path = vec_get(files, i);
+            var result = run_scan(path, rules_path);
+            vec_push(results, result);
+        }
+    }
+
+    # Process results (always sequential for stable output)
+    var nresults = vec_len(results);
+    for (var i = 0; i < nresults; i = i + 1) {
+        var result = vec_get(results, i);
+        var rpath = load64(load64(result) + 8);  # target.data (file path cstr)
 
         var nf = vec_len(load64(result + 8));
         total_findings = total_findings + nf;
@@ -7087,7 +7309,7 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
 
         # Print per-file findings
         if (nf > 0) {
-            str_println(str_cat(str_from("[!] "), str_from(path)));
+            str_println(str_cat(str_from("[!] "), str_from(rpath)));
             for (var j = 0; j < nf; j = j + 1) {
                 var f = vec_get(load64(result + 8), j);
                 var sev = load64(f + 16);
@@ -7117,7 +7339,7 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
                 }
             }
         } else {
-            str_println(str_cat(str_from("[ok] "), str_from(path)));
+            str_println(str_cat(str_from("[ok] "), str_from(rpath)));
         }
     }
 
