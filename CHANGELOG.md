@@ -2,6 +2,22 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.98.0] - 2026-04-16
+
+Pre-release. Security audit complete, 178 tests, full documentation, cc5 bug attribution corrected.
+
+### Changes from 1.0.0-rc1
+- Removed incorrect cc5 compiler blame from changelog and source comments
+- Exit code propagation issue acknowledged as phylax code bug, not upstream
+- Updated `docs/bugs/cc5-register-spill.md` attribution
+
+### Cumulative State
+- 178 tests / 31 groups / 0 failures
+- 8,577 source lines, 850KB static binary
+- Security audit: 0 critical, 5 WARN, 8 INFO
+- Documentation: CLI reference, integration guide, architecture overview
+- Toolchain: Cyrius 5.1.10
+
 ## [1.0.0-rc1] - 2026-04-16
 
 Release candidate. Security audit, expanded tests, complete documentation.
