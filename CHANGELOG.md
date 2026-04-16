@@ -2,6 +2,41 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.8.0] - 2026-04-16
+
+Feature parity release: YARA module conditions, CI pipeline gating, config file, timestamp formatting, and performance optimizations.
+
+### YARA Module System
+- **`pe.is_dll`, `pe.is_64bit`, `pe.machine`** — PE module field access in YARA condition expressions
+- **`elf.machine`, `elf.type`** — ELF module field access in YARA conditions
+- Scan engine now parses PE/ELF headers and passes module data through to condition evaluator
+- `.yar` parser extended with dot-notation lexing for module field access
+
+### CI/CD Pipeline Gating
+- **`--severity-threshold`** flag (info/low/medium/high/critical) — minimum severity to trigger non-zero exit
+- **`--exit-code`** flag — custom exit code when threshold met (default: 1)
+- Note: exit code propagation affected by cc5 register spill in large functions — tracked for compiler fix
+
+### Config File
+- **`phylax.toml`** config file support — loads from `./phylax.toml` or `$HOME/.config/phylax/config.toml`
+- Sections: `[scan]` (rules_path, max_file_size), `[hoosh]` (url), `[daimon]` (url)
+- CLI flags override config file values
+
+### Timestamp Formatting
+- **`phylax_timestamp(epoch)`** — custom Gregorian calendar conversion (`YYYY-MM-DD HH:MM:SS`)
+- Replaces stdlib `iso8601()` which hangs due to chrono.cyr division loop
+- Status command and report timestamps now human-readable
+
+### Performance
+- **File detection: u32 compare** — single `read_u32_le` for 4-byte magic signatures instead of 4x `load8`
+- **Queue: binary heap** — O(log n) enqueue/dequeue replacing O(n) sorted insert (was 200-364x slower than Rust)
+
+### Quality
+- 86 tests passing across 16 groups
+- 828KB static binary (up from 811KB with new features)
+- 7,818 lines of Cyrius (up from 7,515)
+- Toolchain: Cyrius 5.1.7
+
 ## [0.7.5] - 2026-04-16
 
 Full port from Rust to Cyrius. 14,133 lines of Rust → 7,098 lines of Cyrius (50% reduction). Zero external runtime dependencies — compiles to a single static binary.

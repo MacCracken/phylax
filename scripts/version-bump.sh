@@ -19,19 +19,19 @@ echo "  Updated VERSION"
 sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" "$REPO_ROOT/cyrius.cyml"
 echo "  Updated cyrius.cyml"
 
-sed -i "s/var VERSION = str_from(\".*\");/var VERSION = str_from(\"${NEW_VERSION}\");/" "$REPO_ROOT/src/main.cyr"
-echo "  Updated src/main.cyr"
+sed -i "s/VERSION = str_from(\".*\");/VERSION = str_from(\"${NEW_VERSION}\");/" "$REPO_ROOT/src/phylax.cyr"
+echo "  Updated src/phylax.cyr"
 
 # Verify
 FILE_VERSION=$(cat "$REPO_ROOT/VERSION" | tr -d '[:space:]')
 CYML_VERSION=$(grep '^version = ' "$REPO_ROOT/cyrius.cyml" | head -1 | sed 's/version = "\(.*\)"/\1/')
-SRC_VERSION=$(grep 'var VERSION = str_from' "$REPO_ROOT/src/main.cyr" | sed 's/.*str_from("\(.*\)").*/\1/')
+SRC_VERSION=$(grep 'VERSION = str_from' "$REPO_ROOT/src/phylax.cyr" | sed 's/.*str_from("\(.*\)").*/\1/')
 
 if [ "$FILE_VERSION" != "$NEW_VERSION" ] || [ "$CYML_VERSION" != "$NEW_VERSION" ] || [ "$SRC_VERSION" != "$NEW_VERSION" ]; then
     echo "ERROR: Version mismatch after bump"
     echo "  VERSION:     $FILE_VERSION"
     echo "  cyrius.cyml: $CYML_VERSION"
-    echo "  main.cyr:    $SRC_VERSION"
+    echo "  phylax.cyr:  $SRC_VERSION"
     exit 1
 fi
 
@@ -39,7 +39,7 @@ echo ""
 echo "Version bumped to ${NEW_VERSION}"
 echo ""
 echo "Next steps:"
-echo "  git add VERSION cyrius.cyml src/main.cyr"
+echo "  git add VERSION cyrius.cyml src/phylax.cyr"
 echo "  git commit -m \"bump to ${NEW_VERSION}\""
 echo "  git tag ${NEW_VERSION}"
 echo "  git push && git push --tags"
