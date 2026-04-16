@@ -2,6 +2,30 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.9.1] - 2026-04-16
+
+TAR archive scanning and STIX threat intelligence import.
+
+### TAR Archive Scanning
+- **TAR format detection** — ustar magic at offset 257 + heuristic header validation
+- **`tar_scan_entries`** — walks 512-byte header blocks, parses octal sizes, scans regular file entries
+- **Recursive archive detection** — nested ZIP/TAR/GZIP inside TAR scanned up to depth limit
+- Added `FILETYPE_TAR = 10` constant and detection in `detect_file_type`
+- Added `parse_octal` helper for ASCII octal string parsing
+- Wired into `run_scan` pipeline alongside ZIP/GZIP
+
+### STIX/TAXII Threat Intel Import
+- **`phylax intel import <stix_file>`** — reads STIX 2.1 JSON bundles
+- Extracts SHA-256 hash indicators (64-char hex strings with boundary validation)
+- Generates YARA rules with meta fields (description, severity, sha256)
+- Outputs to `phylax-intel.yar` for use with `--rules`
+- CLI dispatch with `intel import` subcommand
+
+### Quality
+- 86 tests passing, 849KB binary, 8,535 lines
+- TAR tested with ustar archive containing ELF payload (2 findings)
+- STIX tested with bundle containing SHA-256 indicator (1 rule generated)
+
 ## [0.9.0] - 2026-04-16
 
 Hardening, daemon mode, directory scanning, and developer UX.

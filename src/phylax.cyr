@@ -9,7 +9,7 @@
 var VERSION = 0;
 
 fn _init_version() {
-    VERSION = str_from("0.9.0");
+    VERSION = str_from("0.9.1");
 }
 
 # ================================================================
@@ -133,6 +133,7 @@ var FILETYPE_PNG     = 6;
 var FILETYPE_JPEG    = 7;
 var FILETYPE_SCRIPT  = 8;
 var FILETYPE_UNKNOWN = 9;
+var FILETYPE_TAR     = 10;
 
 fn filetype_name(ft) {
     if (ft == FILETYPE_ELF)     { return str_from("ELF"); }
@@ -144,6 +145,7 @@ fn filetype_name(ft) {
     if (ft == FILETYPE_PNG)     { return str_from("PNG"); }
     if (ft == FILETYPE_JPEG)    { return str_from("JPEG"); }
     if (ft == FILETYPE_SCRIPT)  { return str_from("Script"); }
+    if (ft == FILETYPE_TAR)     { return str_from("TAR"); }
     return str_from("Unknown");
 }
 
@@ -1075,7 +1077,59 @@ fn detect_file_type(data, len) {
         }
     }
 
+    # TAR: check for "ustar" magic at offset 257
+    if (len >= 263) {
+        if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
+            load8(data + 259) == 116 && load8(data + 260) == 97 &&
+            load8(data + 261) == 114) {
+            return FILETYPE_TAR;
+        }
+    }
+
     return FILETYPE_UNKNOWN;
+}
+
+# Detect TAR archive — returns 1 if data looks like a TAR file
+fn detect_tar(data, data_len) {
+    if (data_len < 512) { return 0; }
+
+    # Method 1: check for "ustar" magic at offset 257
+    if (data_len >= 263) {
+        if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
+            load8(data + 259) == 116 && load8(data + 260) == 97 &&
+            load8(data + 261) == 114) {
+            return 1;
+        }
+    }
+
+    # Method 2: heuristic — check if first entry looks valid
+    # Filename should start with a printable ASCII char and size should be parseable octal
+    var first_byte = load8(data);
+    if (first_byte >= 32 && first_byte < 127) {
+        # Check if size field (offset 124, 12 bytes) looks like octal ASCII
+        var valid_octal = 1;
+        for (var i = 0; i < 11; i = i + 1) {
+            var c = load8(data + 124 + i);
+            if (c == 0 || c == 32) {
+                var _skip = 0;  # null or space — acceptable
+            } elif (c >= 48 && c <= 55) {
+                var _skip2 = 0;  # octal digit 0-7
+            } else {
+                valid_octal = 0;
+                i = 11;
+            }
+        }
+        if (valid_octal == 1) {
+            # Check typeflag at offset 156 — should be 0, '0', '5', or other valid flags
+            var tf = load8(data + 156);
+            if (tf == 0 || tf == 48 || tf == 53 || tf == 49 || tf == 50 ||
+                tf == 54 || tf == 55 || tf == 103 || tf == 120) {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
 }
 
 # Detect polyglot files — returns a Vec of FileType constants
@@ -2654,6 +2708,114 @@ fn gzip_scan(data, data_len, rules_path) {
         str_from("File is a GZIP compressed archive (embedded content not scanned — deflate decompression pending)")
     );
     vec_push(findings, f);
+    return findings;
+}
+
+# ================================================================
+# Archive Scanning — TAR (POSIX ustar format)
+# ================================================================
+
+# Parse an ASCII octal string to integer.
+# data = pointer to octal bytes, len = number of bytes to parse.
+# Stops at null byte or space. Returns parsed integer value.
+fn parse_octal(data, len) {
+    var result = 0;
+    for (var i = 0; i < len; i = i + 1) {
+        var c = load8(data + i);
+        if (c == 0 || c == 32) { return result; }  # null or space terminates
+        if (c < 48 || c > 55) { return result; }    # non-octal digit terminates
+        result = result * 8 + (c - 48);
+    }
+    return result;
+}
+
+fn tar_scan_entries(data, data_len, rules_path, max_depth) {
+    var findings = vec_new();
+    if (max_depth <= 0) { return findings; }
+
+    var offset = 0;
+    var entry_count = 0;
+
+    while (offset + 512 <= data_len && entry_count < ARCHIVE_MAX_ENTRIES) {
+        var header = data + offset;
+
+        # Check if header block is all zeros (end of archive)
+        var all_zero = 1;
+        for (var z = 0; z < 512; z = z + 8) {
+            if (load64(header + z) != 0) { all_zero = 0; z = 512; }
+        }
+        if (all_zero == 1) { break; }
+
+        # Parse size from octal ASCII at offset 124, 12 bytes
+        var size = parse_octal(header + 124, 12);
+
+        # Parse typeflag at offset 156
+        var typeflag = load8(header + 156);
+
+        # Regular file: typeflag '0' (ASCII 48) or '\0' (0)
+        if (typeflag == 48 || typeflag == 0) {
+            var file_start = offset + 512;
+            if (size > 0 && file_start + size <= data_len && size <= ARCHIVE_MAX_EXPAND) {
+                var entry_data = data + file_start;
+
+                # Run analysis on embedded file
+                var entry_findings = analyze_findings(entry_data, size,
+                    scan_target_new(SCAN_TARGET_FILE, str_from("tar-embedded")));
+
+                # Run YARA on embedded content
+                var engine = yara_engine_new();
+                yara_engine_load_builtin_rules(engine);
+                var yf = yara_engine_scan(engine, entry_data, size);
+
+                # Merge analysis findings
+                var nef = vec_len(entry_findings);
+                for (var i = 0; i < nef; i = i + 1) {
+                    vec_push(findings, vec_get(entry_findings, i));
+                }
+
+                # Merge YARA findings
+                var nyf = vec_len(yf);
+                for (var i = 0; i < nyf; i = i + 1) {
+                    vec_push(findings, vec_get(yf, i));
+                }
+
+                # Recursive: check if embedded file is also an archive
+                var etype = detect_file_type(entry_data, size);
+                if (etype == FILETYPE_ZIP) {
+                    var sub = zip_scan_entries(entry_data, size, rules_path, max_depth - 1);
+                    var nsub = vec_len(sub);
+                    for (var i = 0; i < nsub; i = i + 1) {
+                        vec_push(findings, vec_get(sub, i));
+                    }
+                }
+                if (etype == FILETYPE_TAR) {
+                    var sub = tar_scan_entries(entry_data, size, rules_path, max_depth - 1);
+                    var nsub = vec_len(sub);
+                    for (var i = 0; i < nsub; i = i + 1) {
+                        vec_push(findings, vec_get(sub, i));
+                    }
+                }
+                if (etype == FILETYPE_GZIP) {
+                    var sub = gzip_scan(entry_data, size, rules_path);
+                    var nsub = vec_len(sub);
+                    for (var i = 0; i < nsub; i = i + 1) {
+                        vec_push(findings, vec_get(sub, i));
+                    }
+                }
+            }
+        }
+
+        # Advance to next entry: header (512) + file data rounded up to 512
+        var padded_size = size;
+        if (size > 0) {
+            var remainder = size % 512;
+            if (remainder != 0) {
+                padded_size = size + (512 - remainder);
+            }
+        }
+        offset = offset + 512 + padded_size;
+        entry_count = entry_count + 1;
+    }
     return findings;
 }
 
@@ -7211,6 +7373,13 @@ fn run_scan(path, rules_path) {
             vec_push(load64(result + 8), vec_get(gz_findings, i));
         }
     }
+    if (ftype == FILETYPE_TAR || (ftype == FILETYPE_UNKNOWN && detect_tar(data_ptr, data_len) == 1)) {
+        var tar_findings = tar_scan_entries(data_ptr, data_len, rules_path, ARCHIVE_MAX_DEPTH);
+        var ntar = vec_len(tar_findings);
+        for (var i = 0; i < ntar; i = i + 1) {
+            vec_push(load64(result + 8), vec_get(tar_findings, i));
+        }
+    }
 
     # Record scan duration
     var end_time = clock_epoch_secs();
@@ -7771,6 +7940,100 @@ fn cmd_rules_fetch(url, output_path) {
 
 
 # ================================================================
+# CLI — Subcommand: intel import (STIX/TAXII threat intel)
+# ================================================================
+
+fn cmd_intel_import(stix_path) {
+    var data = phylax_read_file(stix_path);
+    if (data == 0) {
+        str_println(str_from("Error: cannot read STIX file"));
+        return 1;
+    }
+
+    var text = data;  # already a Str
+    var hashes = vec_new();
+
+    # Scan for SHA-256 hashes (64-char hex strings)
+    var tdata = str_data(text);
+    var tlen = str_len(text);
+    var i = 0;
+    while (i + 64 <= tlen) {
+        # Check if we're at a 64-char hex string
+        var all_hex = 1;
+        for (var j = 0; j < 64; j = j + 1) {
+            var c = load8(tdata + i + j);
+            var is_hex = 0;
+            if (c >= 48 && c <= 57) { is_hex = 1; }
+            if (c >= 97 && c <= 102) { is_hex = 1; }
+            if (c >= 65 && c <= 70) { is_hex = 1; }
+            if (is_hex == 0) { all_hex = 0; j = 64; }
+        }
+        if (all_hex == 1) {
+            # Check boundaries (should be preceded by non-hex char)
+            var before_ok = (i == 0);
+            if (i > 0) {
+                var bc = load8(tdata + i - 1);
+                if (bc == 39 || bc == 34 || bc == 32 || bc == 58) { before_ok = 1; }
+            }
+            if (before_ok) {
+                var hash = str_from_buf(tdata + i, 64);
+                vec_push(hashes, hash);
+                i = i + 64;
+            } else {
+                i = i + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+
+    if (vec_len(hashes) == 0) {
+        str_println(str_from("No SHA-256 indicators found in STIX file."));
+        return 0;
+    }
+
+    # Generate YARA rules
+    var output = str_from("# Auto-generated from STIX threat intel\n");
+    output = str_cat(output, str_from("# Source: "));
+    output = str_cat(output, str_from(stix_path));
+    output = str_cat(output, str_from("\n\n"));
+
+    for (var idx = 0; idx < vec_len(hashes); idx = idx + 1) {
+        var hash = vec_get(hashes, idx);
+        var rule_name = str_cat(str_from("stix_sha256_"), str_from_int(idx));
+        output = str_cat(output, str_from("rule "));
+        output = str_cat(output, rule_name);
+        output = str_cat(output, str_from(" {\n"));
+        output = str_cat(output, str_from("    meta:\n"));
+        output = str_cat(output, str_from("        description = \"STIX indicator SHA-256\"\n"));
+        output = str_cat(output, str_from("        severity = \"high\"\n"));
+        output = str_cat(output, str_from("        sha256 = \""));
+        output = str_cat(output, hash);
+        output = str_cat(output, str_from("\"\n"));
+        output = str_cat(output, str_from("    condition:\n"));
+        output = str_cat(output, str_from("        true\n"));
+        output = str_cat(output, str_from("}\n\n"));
+    }
+
+    # Write to file
+    var out_path = "phylax-intel.yar";
+    var fd = syscall(2, out_path, 577, 420);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
+    if (fd < 0) {
+        str_println(str_from("Error: cannot write phylax-intel.yar"));
+        return 1;
+    }
+    syscall(1, fd, str_data(output), str_len(output));
+    syscall(3, fd);
+
+    str_println(str_cat(str_from("Extracted "), str_cat(str_from_int(vec_len(hashes)),
+        str_cat(str_from(" SHA-256 indicators -> phylax-intel.yar ("),
+        str_cat(str_from_int(str_len(output)), str_from(" bytes)"))))));
+
+    return 0;
+}
+
+
+# ================================================================
 # CLI — Subcommand: status
 # ================================================================
 
@@ -7964,6 +8227,7 @@ fn print_usage() {
     str_println(str_from("  report    Generate a threat report (json, markdown, sarif)"));
     str_println(str_from("  watch     Watch directories for file changes and scan"));
     str_println(str_from("  rules     List or validate YARA rules"));
+    str_println(str_from("  intel     Import threat intelligence (STIX/TAXII)"));
     str_println(str_from("  daemon    Run as daemon listening on a Unix socket"));
     str_println(str_from("  status    Show engine status and capabilities"));
     str_println(str_from("  help      Show this help message"));
@@ -7991,6 +8255,9 @@ fn print_usage() {
     str_println(str_from("  rules list [file]     List loaded rules"));
     str_println(str_from("  rules validate <files...>  Validate rule files"));
     str_println(str_from(""));
+    str_println(str_from("INTEL SUBCOMMANDS:"));
+    str_println(str_from("  intel import <file>   Import STIX 2.1 JSON threat intel as YARA rules"));
+    str_println(str_from(""));
     str_println(str_from("EXAMPLES:"));
     str_println(str_from("  phylax scan /tmp/suspicious"));
     str_println(str_from("  phylax scan /home/user/downloads --rules custom.yar"));
@@ -7999,6 +8266,7 @@ fn print_usage() {
     str_println(str_from("  phylax rules list"));
     str_println(str_from("  phylax rules validate rules/*.yar"));
     str_println(str_from("  phylax daemon --socket /tmp/phylax.sock"));
+    str_println(str_from("  phylax intel import stix-bundle.json"));
     str_println(str_from("  phylax status"));
 }
 
@@ -8226,6 +8494,24 @@ fn main() {
         }
 
         str_println(str_cat(str_from("Unknown rules subcommand: "), str_from(subcmd)));
+        return 1;
+    }
+
+    # ---- intel ----
+    if (streq(cmd, "intel") == 1) {
+        if (argc < 3) {
+            str_println(str_from("Usage: phylax intel import <stix_file>"));
+            return 1;
+        }
+        var subcmd = argv(2);
+        if (streq(subcmd, "import") == 1) {
+            if (argc < 4) {
+                str_println(str_from("Usage: phylax intel import <stix_file>"));
+                return 1;
+            }
+            return cmd_intel_import(argv(3));
+        }
+        str_println(str_cat(str_from("Unknown intel subcommand: "), str_from(subcmd)));
         return 1;
     }
 
