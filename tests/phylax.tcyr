@@ -328,7 +328,7 @@ fn test_yara() {
     store8(hex_bytes, 0x7f); store8(hex_bytes + 1, 0x45);
     store8(hex_bytes + 2, 0x4c); store8(hex_bytes + 3, 0x46);
 
-    var pat = yara_pattern_from_bytes(hex_bytes, 4);
+    var pat = yara_pattern_from_bytes(str_from("$elf"), hex_bytes, 4);
     assert(pat != 0, "pattern created");
 
     # Pattern matching
