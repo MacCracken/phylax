@@ -4,118 +4,67 @@
 
 ```bash
 # All tests
-make test
+cyrius test tests/phylax.tcyr
 
-# Full CI check locally
-make check
+# Build only (syntax check)
+cyrius check src/main.cyr
 
-# With output
-cargo test -- --nocapture
+# Run benchmarks
+cyrius bench tests/phylax.bcyr
 
-# Single module
-cargo test yara::tests
-cargo test analyze::tests
-cargo test watch::tests
+# Track regressions over time
+./scripts/bench-history.sh
 ```
 
-## Test Categories
+## Test Groups (16)
 
-| Category | Location | Count | Command |
-|----------|----------|-------|---------|
-| Unit tests | `src/*.rs` | 221 | `cargo test` |
-| Integration tests | `tests/integration.rs` | 10 | `cargo test --test integration` |
-| Property tests | `src/{pe,elf,strings}.rs` | 13 | `cargo test proptest` |
-| Bote feature tests | `src/bote_tools.rs` | 4 | `cargo test --features bote` |
-| Fuzz tests | `fuzz/fuzz_targets/` | 3 | `cargo +nightly fuzz run <target>` |
-| Benchmarks | `benches/benchmarks.rs` | 16 groups | `cargo bench` |
+| Group | What it tests |
+|-------|--------------|
+| severity | Ordering, ranking, names |
+| errors | Error codes, names |
+| entropy | Shannon entropy: zeros, two-value, uniform, suspicious threshold |
+| chi_squared | Empty, uniform, single-value, classification ranges |
+| file_detection | 9 magic byte signatures + unknown + too-short |
+| sha256 | Known values, determinism |
+| strings | ASCII extraction, printable byte checks |
+| pe_parser | Not-PE rejection, too-short, minimal valid header |
+| elf_parser | Not-ELF rejection, minimal 64-bit header |
+| yara | Engine creation, pattern matching, non-matching |
+| queue | Empty, enqueue/dequeue, priority ordering, capacity |
+| ssdeep | Empty, single byte, determinism |
+| tlsh | Too-short, varied data, determinism, identical distance |
+| memmem | Found, not-found, empty needle |
+| hex | Encode basic, encode empty |
+| report | Empty report, markdown rendering |
 
-**Total: 231 tests** (221 unit + 10 integration; 235 with bote feature)
+## Benchmarks (12 groups)
 
-## Test Distribution by Module
-
-| Module | Tests | Coverage |
-|--------|-------|----------|
-| analyze | 37 | Entropy, magic bytes, SHA-256, polyglot, escalation, findings |
-| yara | 35 | Patterns, conditions, constraints, TOML loading, edge cases |
-| core | 23 | Types, serialization, Display, FromStr, ordering |
-| pe | 20 | Header parsing, sections, flags, truncation, serialization, **5 proptest** |
-| elf | 20 | 32/64-bit, big/little endian, sections, strtab, serialization, **5 proptest** |
-| hoosh | 16 | Client config, prompt building, response parsing, batch |
-| strings | 15 | ASCII, UTF-16, filtering, sorting, edge cases, **3 proptest** |
-| queue | 10 | Priority ordering, FIFO, capacity, target preservation, IDs |
-| watch | 9 | File detection, extension filter, size filter, config |
-| report | 9 | JSON/Markdown rendering, summary, serialization, escaping |
-| quarantine | 9 | Quarantine/release, persistence, SHA-256, errors |
-| error | 9 | Every PhylaxError variant, #[from] conversion |
-| daimon | 7 | URL validation, path traversal, deregister rejection |
-| ai | 2 | Registration defaults, serialization |
-
-## Coverage
-
-```bash
-make coverage
-open coverage/html/index.html
-```
-
-Targets: 80% project, 75% patch (configured in `codecov.yml`).
+| Group | What it measures |
+|-------|-----------------|
+| entropy_1k | Shannon entropy on 1KB |
+| entropy_1m | Shannon entropy on 1MB |
+| chi_squared | Chi-squared on 4KB |
+| file_detection | Magic bytes detection |
+| sha256_4k | SHA-256 on 4KB |
+| memmem_4k | Byte search in 4KB |
+| hex_encode_256 | Hex encoding 256 bytes |
+| extract_ascii | String extraction from 4KB |
+| ssdeep_4k | SSDEEP hash on 4KB |
+| tlsh_1k | TLSH hash on 1KB |
+| queue_enqueue | 1000 enqueue operations |
+| queue_dequeue | 1000 enqueue + dequeue |
 
 ## Fuzzing
 
 ```bash
-cargo install cargo-fuzz
-
-# YARA rule parsing with random input
-cargo +nightly fuzz run fuzz_yara -- -max_total_time=30
-
-# Binary analysis with random data
-cargo +nightly fuzz run fuzz_analyze -- -max_total_time=30
-
-# Entropy calculation edge cases
-cargo +nightly fuzz run fuzz_entropy -- -max_total_time=30
+cyrius build tests/phylax.fcyr build/phylax-fuzz
+./build/phylax-fuzz
 ```
-
-## Benchmarks
-
-```bash
-# All 16 groups
-make bench
-
-# Specific group
-cargo bench -- entropy
-cargo bench -- yara
-cargo bench -- full_scan
-cargo bench -- strings
-cargo bench -- pe_parse
-
-# Track regressions over time
-make bench-history
-```
-
-### Benchmark Groups (16)
-
-| Group | What it measures |
-|-------|-----------------|
-| entropy | Shannon entropy at 1KB–1MB |
-| entropy_profile | Block profiling at various block sizes |
-| entropy_quality | High vs low entropy data |
-| file_detection | Magic bytes + polyglot detection |
-| sha256 | Hashing throughput at 1KB–1MB |
-| analyze | Full binary analysis pipeline |
-| yara | Rule loading + scan throughput |
-| full_scan | Complete scan pipeline throughput |
-| polyglot | Polyglot detection at scale |
-| pattern_match | Literal vs hex vs regex pattern speed |
-| findings | analyze_findings vs precomputed |
-| strings | ASCII + UTF-16 extraction throughput |
-| pe_parse | PE header parsing speed |
-| elf_parse | ELF header parsing speed |
-| queue | Enqueue/dequeue throughput |
-| report | JSON + Markdown rendering speed |
 
 ## Testing Patterns
 
-- **Serialization roundtrips**: serialize → deserialize → assert equal
 - **Edge cases**: empty input, truncated data, oversized files
-- **Error paths**: invalid hex, bad regex, unknown conditions, path traversal
-- **Security**: agent_id validation, daemon path canonicalization
-- **Property-based (proptest)**: parsers never panic on random input, invariants hold across random data
+- **Error paths**: invalid hex, bad patterns, unknown conditions, path traversal
+- **Security**: agent_id validation, quarantine path traversal rejection
+- **Bounds checking**: every parser tested with too-short data
+- **Determinism**: hash functions tested for reproducibility

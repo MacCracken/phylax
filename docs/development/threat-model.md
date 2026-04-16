@@ -99,6 +99,7 @@ Phylax contains **zero** `unsafe` blocks.
 
 ## Supply Chain
 
-- `cargo audit` — checks for known vulnerabilities in dependencies
-- `cargo deny` — enforces license allowlist, bans wildcards, denies unknown sources
-- `cargo vet` — supply chain verification via audits
+- `cyrius lint` — static analysis for common issues
+- `cyrius vet` — include verification
+- `cyrius deny` — policy enforcement
+- Only 2 external deps (sakshi, sigil) — both AGNOS-maintained

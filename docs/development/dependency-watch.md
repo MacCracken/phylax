@@ -1,49 +1,52 @@
 # Dependency Watch
 
-Status tracking for all direct dependencies.
+Status tracking for all dependencies.
 
-## Runtime Dependencies
+## Cyrius Stdlib Modules (25)
 
-| Crate | Version | Purpose | Notes |
-|-------|---------|---------|-------|
-| `serde` | 1 | Serialization | Derive feature; used everywhere |
-| `serde_json` | 1 | JSON serialization | Reports, hoosh API, daemon protocol |
-| `toml` | 0.8 | TOML parsing | YARA rule loading |
-| `anyhow` | 1 | Error handling | CLI and daemon error chains |
-| `thiserror` | 2 | Error derive | PhylaxError, YaraError |
-| `tracing` | 0.1 | Structured logging | All library modules |
-| `tracing-subscriber` | 0.3 | Log output | CLI with env-filter |
-| `tokio` | 1 | Async runtime | Daemon, hoosh client, daimon lifecycle |
-| `reqwest` | 0.12 | HTTP client | Hoosh triage, daimon registration |
-| `clap` | 4 | CLI parsing | Derive-based argument parsing |
-| `chrono` | 0.4 | Date/time | ThreatFinding timestamps, quarantine |
-| `uuid` | 1 | Unique IDs | Finding IDs, quarantine IDs |
-| `regex` | 1 | Pattern matching | YARA regex patterns (linear-time) |
-| `sha2` | 0.10 | Hashing | File SHA-256 |
-| `notify` | 8 | Filesystem events | Watch mode (inotify/kqueue/FSEvents) |
+| Module | Purpose |
+|--------|---------|
+| `string` | C string utilities (strlen, streq, memcpy) |
+| `fmt` | Number formatting (fmt_int, fmt_hex) |
+| `alloc` | Heap allocator (bump + arena) |
+| `vec` | Dynamic vectors |
+| `str` | Str type (fat pointer: data+len) |
+| `syscalls` | Linux x86_64 syscall bindings |
+| `io` | File I/O (open, read, write, close) |
+| `args` | Command-line arguments |
+| `assert` | Testing assertions |
+| `hashmap` | Hash table (open addressing, FNV-1a) |
+| `json` | JSON parser/serializer |
+| `toml` | TOML parser |
+| `regex` | Pattern matching |
+| `fs` | Filesystem operations |
+| `net` | TCP/UDP sockets |
+| `tagged` | Option/Result types |
+| `fnptr` | Function pointers |
+| `callback` | Closure patterns |
+| `thread` | Thread creation via clone(2) |
+| `bench` | Benchmarking primitives |
+| `bounds` | Boundary checking |
+| `math` | f64 builtins |
+| `process` | Process management |
+| `chrono` | Time/date operations |
+| `base64` | Base64 encoding |
+| `csv` | CSV parsing |
 
-## Optional Dependencies
+## External Dependencies
 
-| Crate | Version | Feature | Purpose |
-|-------|---------|---------|---------|
-| `bote` | 0.22 | `bote` | MCP tool registration |
+| Dependency | Version | Purpose | Notes |
+|-----------|---------|---------|-------|
+| `sakshi` | 1.0.0 | Structured logging | Replaces Rust tracing/tracing-subscriber |
+| `sigil` | 2.1.2 | Cryptographic primitives | SHA-256 for file hashing and imphash |
 
-## Dev Dependencies
+## Toolchain
 
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| `criterion` | 0.5 | Benchmarking (16 groups) |
-| `proptest` | 1 | Property-based testing (PE, ELF, strings) |
-| `tempfile` | 3 | Temporary dirs for quarantine/watch tests |
-
-## MSRV
-
-- **Minimum Supported Rust Version**: 1.85
-- Tested in CI via dedicated MSRV job
-- `rust-version` field in Cargo.toml
+- **Cyrius**: 5.1.3 (pinned in `.cyrius-toolchain`)
+- **Minimum recommended**: 5.0.0 (IR, cyrius.cyml support)
 
 ## Upgrade Notes
 
-- `notify` 8.x uses inotify on Linux, kqueue on macOS/BSD, FSEvents not used (ReadDirectoryChanges on Windows)
-- `reqwest` 0.12 requires `tokio` 1.x runtime
-- `bote` 0.22 must match the AGNOS ecosystem version
+- `sakshi` 1.0.0 is stable — no breaking changes expected
+- `sigil` 2.x provides SHA-256, HMAC, and other cryptographic primitives
+- Stdlib modules are bundled with the Cyrius toolchain — version tracks the compiler

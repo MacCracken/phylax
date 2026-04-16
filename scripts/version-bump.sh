@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ $# -ne 1 ]; then
     echo "Usage: $0 <new-version>"
-    echo "Example: $0 0.2.0"
+    echo "Example: $0 0.8.0"
     exit 1
 fi
 
@@ -16,18 +16,22 @@ echo "Bumping phylax to version ${NEW_VERSION}..."
 echo "$NEW_VERSION" > "$REPO_ROOT/VERSION"
 echo "  Updated VERSION"
 
-sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" "$REPO_ROOT/Cargo.toml"
-echo "  Updated Cargo.toml"
+sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" "$REPO_ROOT/cyrius.cyml"
+echo "  Updated cyrius.cyml"
 
-cd "$REPO_ROOT"
-cargo generate-lockfile 2>/dev/null
-echo "  Regenerated Cargo.lock"
+sed -i "s/var VERSION = str_from(\".*\");/var VERSION = str_from(\"${NEW_VERSION}\");/" "$REPO_ROOT/src/main.cyr"
+echo "  Updated src/main.cyr"
 
+# Verify
 FILE_VERSION=$(cat "$REPO_ROOT/VERSION" | tr -d '[:space:]')
-CARGO_VERSION=$(grep '^version = ' "$REPO_ROOT/Cargo.toml" | head -1 | sed 's/version = "\(.*\)"/\1/')
+CYML_VERSION=$(grep '^version = ' "$REPO_ROOT/cyrius.cyml" | head -1 | sed 's/version = "\(.*\)"/\1/')
+SRC_VERSION=$(grep 'var VERSION = str_from' "$REPO_ROOT/src/main.cyr" | sed 's/.*str_from("\(.*\)").*/\1/')
 
-if [ "$FILE_VERSION" != "$NEW_VERSION" ] || [ "$CARGO_VERSION" != "$NEW_VERSION" ]; then
+if [ "$FILE_VERSION" != "$NEW_VERSION" ] || [ "$CYML_VERSION" != "$NEW_VERSION" ] || [ "$SRC_VERSION" != "$NEW_VERSION" ]; then
     echo "ERROR: Version mismatch after bump"
+    echo "  VERSION:     $FILE_VERSION"
+    echo "  cyrius.cyml: $CYML_VERSION"
+    echo "  main.cyr:    $SRC_VERSION"
     exit 1
 fi
 
@@ -35,7 +39,7 @@ echo ""
 echo "Version bumped to ${NEW_VERSION}"
 echo ""
 echo "Next steps:"
-echo "  git add VERSION Cargo.toml Cargo.lock"
+echo "  git add VERSION cyrius.cyml src/main.cyr"
 echo "  git commit -m \"bump to ${NEW_VERSION}\""
 echo "  git tag ${NEW_VERSION}"
 echo "  git push && git push --tags"

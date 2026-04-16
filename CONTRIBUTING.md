@@ -4,32 +4,32 @@ Thank you for considering contributing to Phylax. This guide will help you get s
 
 ## Prerequisites
 
-- Rust 1.85+ (MSRV)
-- Components: `rustfmt`, `clippy`
-- Optional: `cargo-audit`, `cargo-deny`, `cargo-fuzz`, `cargo-llvm-cov`
+- Cyrius 5.1.3+ (see `.cyrius-toolchain`)
+- The Cyrius build tool (`cyrius build`, `cyrius test`, `cyrius bench`)
 
 ## Getting started
 
 ```bash
 git clone https://github.com/MacCracken/phylax
 cd phylax
-make check   # runs fmt-check + clippy + test + audit
+cyrius deps                          # resolve dependencies
+cyrius build src/main.cyr build/phylax  # build
+cyrius test tests/phylax.tcyr        # run tests
 ```
 
 ## Development workflow
 
 | Command | What it does |
 |---------|-------------|
-| `make check` | Full CI locally (fmt, clippy, test, audit) |
-| `make fmt` | Format all code |
-| `make clippy` | Lint with `-D warnings` |
-| `make test` | Run all tests |
-| `make bench` | Run 16 benchmark groups |
-| `make bench-history` | CSV + 3-run Markdown tracking |
-| `make doc` | Build docs with `-D warnings` |
-| `make coverage` | Generate HTML coverage report |
-| `make deny` | Supply chain and license check |
-| `make vet` | cargo-vet verification |
+| `cyrius build src/main.cyr build/phylax` | Build the binary |
+| `cyrius test tests/phylax.tcyr` | Run all tests |
+| `cyrius bench tests/phylax.bcyr` | Run 12 benchmark groups |
+| `cyrius check src/main.cyr` | Syntax check |
+| `cyrius fmt src/main.cyr` | Format code |
+| `cyrius lint src/main.cyr` | Static analysis |
+| `cyrius vet src/main.cyr` | Include verification |
+| `cyrius deny src/main.cyr` | Policy enforcement |
+| `./scripts/bench-history.sh` | CSV + 3-run Markdown tracking |
 
 ## What to contribute
 
@@ -42,46 +42,34 @@ make check   # runs fmt-check + clippy + test + audit
 
 ## Code style
 
-- `cargo fmt` — required, checked in CI
-- `cargo clippy -- -D warnings` — zero warnings
-- `#[non_exhaustive]` on public enums
-- Doc comments (`///`) on all public types and functions
-- No `println!` in library modules — use `tracing` instead
-- No `unsafe` code
-- Minimal dependencies — prefer pure Rust
+- `cyrius fmt` — required, checked in CI
+- `cyrius lint` — zero warnings
+- Bounds check all buffer access (`offset < data_len` before `load8/16/32/64`)
+- No raw `syscall` without input validation
+- Use `sakshi_info/warn/error` for logging, not `println` in library functions
+- Comment section headers with `# ================================================================`
+- Keep functions focused — one responsibility per function
 
 ## Project layout
 
 ```
-src/
-├── main.rs          # CLI (scan, daemon, watch, report, rules, status)
-├── lib.rs           # Public API root
-├── core.rs          # ScanTarget, ThreatFinding, ScanResult, ScanConfig
-├── error.rs         # PhylaxError enum
-├── yara.rs          # YARA rule engine — patterns, conditions, constraints
-├── analyze.rs       # Entropy, magic bytes, SHA-256, polyglot, escalation
-├── pe.rs            # PE header parsing (sections, imports, exports)
-├── elf.rs           # ELF parsing (32/64-bit, sections, symbols, DT_NEEDED)
-├── strings.rs       # ASCII + UTF-16 LE string extraction
-├── hoosh.rs         # HooshClient — LLM triage via hoosh
-├── daimon.rs        # DaimonClient — agent lifecycle with daimon
-├── ai.rs            # AgentRegistration, capability constants
-├── bote_tools.rs    # Bote MCP tool registration (feature-gated)
-├── queue.rs         # Priority scan queue
-├── quarantine.rs    # File quarantine/release with persistent index
-├── report.rs        # ThreatReport generation (JSON, Markdown)
-└── watch.rs         # Filesystem watch mode (inotify/kqueue/FSEvents)
+src/main.cyr           — Complete engine (single flat binary)
+rust-old/src/          — Original Rust source (preserved for reference)
+tests/phylax.tcyr      — Test suite (16 test groups)
+tests/phylax.bcyr      — Benchmarks (12 groups)
+tests/phylax.fcyr      — Fuzz harness
+scripts/               — Build and benchmark scripts
+docs/                  — Architecture, roadmap, guides
 ```
 
 ## Adding a new analyzer
 
-1. Create `src/your_module.rs` with analysis functions
-2. Return `Vec<ThreatFinding>` for integration with the scan pipeline
-3. Add `pub mod your_module;` in `lib.rs`
-4. Add unit tests covering edge cases (empty input, truncated data, known-good files)
-5. Wire it into `run_scan_with_engine()` in `src/main.rs`
-6. Add a fuzz target if the analyzer processes untrusted input
-7. Add benchmarks in `benches/benchmarks.rs`
+1. Add analysis functions to `src/main.cyr` in the appropriate section
+2. Return findings via `vec_push` into a findings vec
+3. Add unit tests in `tests/phylax.tcyr` as a new `test_group`
+4. Wire it into the `run_scan()` pipeline near the bottom of `main.cyr`
+5. Add a fuzz target if the analyzer processes untrusted input
+6. Add benchmarks in `tests/phylax.bcyr`
 
 ## Commit messages
 
@@ -94,7 +82,7 @@ src/
 - One logical change per PR
 - Include tests for new functionality
 - Update docs if the public API changes
-- All CI checks must pass (fmt, clippy, test, audit, deny)
+- All CI checks must pass (fmt, lint, test, vet, deny)
 
 ## License
 

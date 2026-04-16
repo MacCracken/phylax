@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run criterion benchmarks and produce two outputs:
+# Run Cyrius benchmarks and produce two outputs:
 #   1) CSV history (appended each run)   — for tracking regressions over time
 #   2) Markdown table (overwritten)      — last 3 runs per benchmark for trend tracking
 #
@@ -17,7 +17,7 @@ BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 
 # Create CSV header if file doesn't exist
 if [ ! -f "$HISTORY_FILE" ]; then
-    echo "timestamp,commit,branch,benchmark,low_ns,estimate_ns,high_ns" > "$HISTORY_FILE"
+    echo "timestamp,commit,branch,benchmark,iterations,total_ns,per_iter_ns" > "$HISTORY_FILE"
 fi
 
 echo "Running benchmarks..."
@@ -25,25 +25,13 @@ echo "  commit: $COMMIT"
 echo "  branch: $BRANCH"
 echo ""
 
-# Run all benchmarks and capture output
-BENCH_OUTPUT=$(cargo bench 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+# Build and run benchmarks
+cyrius build tests/phylax.bcyr build/phylax-bench 2>&1
+BENCH_OUTPUT=$(./build/phylax-bench 2>&1 || true)
 
 # Show full output
 echo "$BENCH_OUTPUT"
 echo ""
-
-# ── Helper: normalise a value+unit pair to nanoseconds ───────────────────────
-to_ns() {
-    local val="$1" unit="$2"
-    case "$unit" in
-        ps)     awk "BEGIN {printf \"%.4f\", $val / 1000}" ;;
-        ns)     echo "$val" ;;
-        µs|us)  awk "BEGIN {printf \"%.4f\", $val * 1000}" ;;
-        ms)     awk "BEGIN {printf \"%.4f\", $val * 1000000}" ;;
-        s)      awk "BEGIN {printf \"%.4f\", $val * 1000000000}" ;;
-        *)      echo "$val" ;;
-    esac
-}
 
 # ── Helper: format ns to a human-readable string ────────────────────────────
 human_ns() {
@@ -58,46 +46,35 @@ human_ns() {
     }"
 }
 
-# ── Parse criterion output and append to CSV ─────────────────────────────────
+# ── Parse bench output and append to CSV ─────────────────────────────────
+# Expected format from Cyrius bench: "name: Niters total_ns ns/iter per_iter_ns"
 LINES_ADDED=0
-PREV_LINE=""
 
 while IFS= read -r line; do
-    # Match criterion timing lines (contain "time:" with unit values in brackets)
-    # Skip "change:" lines which contain percentage values, not timings
-    if [[ "$line" == *"time:"*"["* ]] && [[ "$line" != *"change:"* ]]; then
-        # Extract benchmark name
-        BENCH_NAME=$(echo "$line" | sed -E 's/[[:space:]]*time:.*//' | xargs)
-        if [ -z "$BENCH_NAME" ]; then
-            BENCH_NAME=$(echo "$PREV_LINE" | xargs)
+    # Match lines like: "entropy_1k: 10000 iters, 1234567 ns total, 123 ns/iter"
+    if [[ "$line" == *"iters"*"ns"* ]]; then
+        BENCH_NAME=$(echo "$line" | sed -E 's/:.*//' | xargs)
+        ITERS=$(echo "$line" | grep -oP '\d+(?= iters)' || echo "0")
+        TOTAL_NS=$(echo "$line" | grep -oP '\d+(?= ns total)' || echo "0")
+        PER_ITER=$(echo "$line" | grep -oP '\d+(?= ns/iter)' || echo "0")
+
+        if [ -n "$BENCH_NAME" ] && [ "$ITERS" != "0" ]; then
+            echo "${TIMESTAMP},${COMMIT},${BRANCH},${BENCH_NAME},${ITERS},${TOTAL_NS},${PER_ITER}" >> "$HISTORY_FILE"
+            LINES_ADDED=$((LINES_ADDED + 1))
         fi
-
-        # Extract the three values inside brackets: [low mid high]
-        VALS=$(echo "$line" | sed -E 's/.*\[(.+)\]/\1/')
-        LOW_VAL=$(echo "$VALS" | awk '{print $1}')
-        LOW_UNIT=$(echo "$VALS" | awk '{print $2}')
-        MID_VAL=$(echo "$VALS" | awk '{print $3}')
-        MID_UNIT=$(echo "$VALS" | awk '{print $4}')
-        HIGH_VAL=$(echo "$VALS" | awk '{print $5}')
-        HIGH_UNIT=$(echo "$VALS" | awk '{print $6}')
-
-        LOW_NS=$(to_ns "$LOW_VAL" "$LOW_UNIT")
-        MID_NS=$(to_ns "$MID_VAL" "$MID_UNIT")
-        HIGH_NS=$(to_ns "$HIGH_VAL" "$HIGH_UNIT")
-
-        # Append to CSV
-        echo "${TIMESTAMP},${COMMIT},${BRANCH},${BENCH_NAME},${LOW_NS},${MID_NS},${HIGH_NS}" >> "$HISTORY_FILE"
-        LINES_ADDED=$((LINES_ADDED + 1))
     fi
-    PREV_LINE="$line"
 done <<< "$BENCH_OUTPUT"
 
-# ── Build 3-point tracking markdown from CSV history ─────────────────────────
-# Collect the last 3 unique run timestamps
+# ── Build 3-point tracking markdown from CSV history ─────────────────────
 TIMESTAMPS=($(tail -n +2 "$HISTORY_FILE" | awk -F, '{print $1}' | sort -u | tail -3))
 NUM_TS=${#TIMESTAMPS[@]}
 
-# Labels for columns (most recent last)
+if [ "$NUM_TS" -eq 0 ]; then
+    echo "No benchmark data found in $HISTORY_FILE"
+    exit 0
+fi
+
+# Labels for columns
 declare -a COL_LABELS=()
 for i in $(seq 0 $((NUM_TS - 1))); do
     ts="${TIMESTAMPS[$i]}"
@@ -106,7 +83,7 @@ for i in $(seq 0 $((NUM_TS - 1))); do
     COL_LABELS+=("${short_date} (${col_commit})")
 done
 
-# Get ordered list of benchmark names (preserve order from latest run)
+# Get ordered list of benchmark names from latest run
 LATEST_TS="${TIMESTAMPS[$((NUM_TS - 1))]}"
 BENCH_NAMES=($(grep "^${LATEST_TS}," "$HISTORY_FILE" | awk -F, '{print $4}'))
 
@@ -114,7 +91,6 @@ BENCH_NAMES=($(grep "^${LATEST_TS}," "$HISTORY_FILE" | awk -F, '{print $4}'))
     echo "# Benchmark Results — Last ${NUM_TS} Runs"
     echo ""
 
-    # Header row
     HEADER="| Benchmark |"
     SEP="|-----------|"
     for label in "${COL_LABELS[@]}"; do
@@ -124,13 +100,12 @@ BENCH_NAMES=($(grep "^${LATEST_TS}," "$HISTORY_FILE" | awk -F, '{print $4}'))
     echo "$HEADER"
     echo "$SEP"
 
-    # Data rows
     for bench in "${BENCH_NAMES[@]}"; do
         ROW="| ${bench} |"
         for ts in "${TIMESTAMPS[@]}"; do
-            est_ns=$(grep "^${ts},.*,${bench}," "$HISTORY_FILE" | awk -F, '{print $6}' | head -1)
-            if [ -n "$est_ns" ]; then
-                ROW+=" $(human_ns "$est_ns") |"
+            per_iter=$(grep "^${ts},.*,${bench}," "$HISTORY_FILE" | awk -F, '{print $7}' | head -1)
+            if [ -n "$per_iter" ]; then
+                ROW+=" $(human_ns "$per_iter") |"
             else
                 ROW+=" — |"
             fi
@@ -139,7 +114,7 @@ BENCH_NAMES=($(grep "^${LATEST_TS}," "$HISTORY_FILE" | awk -F, '{print $4}'))
     done
 
     echo ""
-    echo "_Generated by \`scripts/bench-history.sh\` — showing point estimates from last ${NUM_TS} runs_"
+    echo "_Generated by \`scripts/bench-history.sh\` — showing per-iteration times from last ${NUM_TS} runs_"
 } > "$MD_FILE"
 
 echo ""
