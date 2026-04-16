@@ -1,6 +1,6 @@
 # phylax fuzz harness
 
-include "src/phylax.cyr"
+include "src/lib.cyr"
 
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }

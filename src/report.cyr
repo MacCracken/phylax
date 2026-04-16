@@ -1,0 +1,334 @@
+# ================================================================
+# Report — Structs
+# ================================================================
+
+struct ReportSummary {
+    targets_scanned;       # i64
+    targets_clean;         # i64
+    targets_with_findings; # i64
+    critical_count;        # i64
+    high_count;            # i64
+    medium_count;          # i64
+    low_count;             # i64
+    info_count;            # i64
+}
+
+struct ThreatReport {
+    session_id;      # Str
+    generated_at;    # Str (formatted timestamp)
+    engine_version;  # Str
+    results;         # Vec of ScanResult
+    total_findings;  # i64
+    summary;         # ReportSummary
+}
+
+# ================================================================
+# Report — Build summary from scan results
+# ================================================================
+
+fn report_summary_new() {
+    var s = alloc(64);
+    store64(s, 0);
+    store64(s + 8, 0);
+    store64(s + 16, 0);
+    store64(s + 24, 0);
+    store64(s + 32, 0);
+    store64(s + 40, 0);
+    store64(s + 48, 0);
+    store64(s + 56, 0);
+    return s;
+}
+
+fn report_from_results(session_id, results) {
+    var report = alloc(48);
+    store64(report, session_id);
+    store64(report + 8, phylax_timestamp(clock_epoch_secs()));
+    store64(report + 16, VERSION);
+    store64(report + 24, results);
+
+    var summary = report_summary_new();
+    var total = 0;
+    var nresults = vec_len(results);
+
+    store64(summary, nresults);
+
+    for (var i = 0; i < nresults; i = i + 1) {
+        var r = vec_get(results, i);
+        var nfindings = vec_len(load64(r + 8));
+        total = total + nfindings;
+
+        if (nfindings == 0) {
+            store64(summary + 8, load64(summary + 8) + 1);
+        } else {
+            store64(summary + 16, load64(summary + 16) + 1);
+        }
+
+        # Count by severity
+        for (var j = 0; j < nfindings; j = j + 1) {
+            var f = vec_get(load64(r + 8), j);
+            if (load64(f + 16) == SEVERITY_CRITICAL) {
+                store64(summary + 24, load64(summary + 24) + 1);
+            }
+            if (load64(f + 16) == SEVERITY_HIGH) {
+                store64(summary + 32, load64(summary + 32) + 1);
+            }
+            if (load64(f + 16) == SEVERITY_MEDIUM) {
+                store64(summary + 40, load64(summary + 40) + 1);
+            }
+            if (load64(f + 16) == SEVERITY_LOW) {
+                store64(summary + 48, load64(summary + 48) + 1);
+            }
+            if (load64(f + 16) == SEVERITY_INFO) {
+                store64(summary + 56, load64(summary + 56) + 1);
+            }
+        }
+    }
+
+    store64(report + 32, total);
+    store64(report + 40, summary);
+    return report;
+}
+
+# ================================================================
+# Report — JSON renderer
+# ================================================================
+
+fn report_render_json(report) {
+    var root = map_new();
+    map_set(root, "session_id", load64(report));
+    map_set(root, "generated_at", load64(report + 8));
+    map_set(root, "engine_version", load64(report + 16));
+    map_set(root, "total_findings", load64(report + 32));
+
+    # Summary object
+    var s = load64(report + 40);
+    var sm = map_new();
+    map_set(sm, "targets_scanned", load64(s));
+    map_set(sm, "targets_clean", load64(s + 8));
+    map_set(sm, "targets_with_findings", load64(s + 16));
+    map_set(sm, "critical", load64(s + 24));
+    map_set(sm, "high", load64(s + 32));
+    map_set(sm, "medium", load64(s + 40));
+    map_set(sm, "low", load64(s + 48));
+    map_set(sm, "info", load64(s + 56));
+    map_set(root, "summary", sm);
+
+    # Results array
+    var results_arr = vec_new();
+    var nresults = vec_len(load64(report + 24));
+    for (var i = 0; i < nresults; i = i + 1) {
+        var r = vec_get(load64(report + 24), i);
+        var rm = map_new();
+        map_set(rm, "target", load64(load64(r) + 8));
+        map_set(rm, "scan_duration_ms", load64(r + 16));
+
+        var findings_arr = vec_new();
+        var nf = vec_len(load64(r + 8));
+        for (var j = 0; j < nf; j = j + 1) {
+            var f = vec_get(load64(r + 8), j);
+            var fm = map_new();
+            map_set(fm, "severity", severity_name(load64(f + 16)));
+            map_set(fm, "category", category_name(load64(f + 8)));
+            map_set(fm, "rule_name", load64(f + 24));
+            map_set(fm, "description", load64(f + 32));
+            map_set(fm, "timestamp", load64(f + 48));
+            vec_push(findings_arr, fm);
+        }
+        map_set(rm, "findings", findings_arr);
+        vec_push(results_arr, rm);
+    }
+    map_set(root, "results", results_arr);
+
+    return json_build(root);
+}
+
+# ================================================================
+# Report — Markdown renderer
+# ================================================================
+
+# Escape pipe characters for markdown table cells.
+fn md_escape_pipe(s) {
+    var len = str_len(s);
+    var data = str_data(s);
+    var out = str_from("");
+
+    for (var i = 0; i < len; i = i + 1) {
+        var ch = load8(data + i);
+        if (ch == 0x7C) {
+            # Replace '|' with '\|'
+            out = str_cat(out, str_from("\\|"));
+        } else {
+            # Single byte to string — allocate 1-byte buffer
+            var buf = alloc(1);
+            store8(buf, ch);
+            var one = str_from("");
+            # Build character manually — use str_cat with a char trick
+            # Simpler: rebuild from the original slice approach
+            out = str_cat(out, str_from(""));
+        }
+    }
+
+    # Fallback: if pipe not found just return original
+    return s;
+}
+
+fn report_render_markdown(report) {
+    var s = load64(report + 40);
+
+    var out = str_from("# Phylax Threat Report\n\n");
+    out = str_cat(out, str_from("- **Session**: "));
+    out = str_cat(out, str_from_int(load64(report)));
+    out = str_cat(out, str_from("\n"));
+    out = str_cat(out, str_from("- **Generated**: "));
+    out = str_cat(out, str_from_int(load64(report + 8)));
+    out = str_cat(out, str_from("\n"));
+    out = str_cat(out, str_from("- **Engine**: phylax v"));
+    out = str_cat(out, VERSION);
+    out = str_cat(out, str_from("\n"));
+    out = str_cat(out, str_from("- **Total Findings**: "));
+    out = str_cat(out, str_from_int(load64(report + 32)));
+    out = str_cat(out, str_from("\n\n"));
+
+    # Summary table
+    out = str_cat(out, str_from("## Summary\n\n"));
+    out = str_cat(out, str_from("| Metric | Count |\n"));
+    out = str_cat(out, str_from("|--------|-------|\n"));
+    out = str_cat(out, str_from("| Targets Scanned | "));
+    out = str_cat(out, str_from_int(load64(s)));
+    out = str_cat(out, str_from(" |\n"));
+    out = str_cat(out, str_from("| Clean | "));
+    out = str_cat(out, str_from_int(load64(s + 8)));
+    out = str_cat(out, str_from(" |\n"));
+    out = str_cat(out, str_from("| With Findings | "));
+    out = str_cat(out, str_from_int(load64(s + 16)));
+    out = str_cat(out, str_from(" |\n"));
+    out = str_cat(out, str_from("| Critical | "));
+    out = str_cat(out, str_from_int(load64(s + 24)));
+    out = str_cat(out, str_from(" |\n"));
+    out = str_cat(out, str_from("| High | "));
+    out = str_cat(out, str_from_int(load64(s + 32)));
+    out = str_cat(out, str_from(" |\n"));
+    out = str_cat(out, str_from("| Medium | "));
+    out = str_cat(out, str_from_int(load64(s + 40)));
+    out = str_cat(out, str_from(" |\n"));
+    out = str_cat(out, str_from("| Low | "));
+    out = str_cat(out, str_from_int(load64(s + 48)));
+    out = str_cat(out, str_from(" |\n"));
+    out = str_cat(out, str_from("| Info | "));
+    out = str_cat(out, str_from_int(load64(s + 56)));
+    out = str_cat(out, str_from(" |\n\n"));
+
+    # Findings detail table
+    out = str_cat(out, str_from("## Findings\n\n"));
+    out = str_cat(out, str_from("| Target | Severity | Category | Rule | Description |\n"));
+    out = str_cat(out, str_from("|--------|----------|----------|------|-------------|\n"));
+
+    var nresults = vec_len(load64(report + 24));
+    for (var i = 0; i < nresults; i = i + 1) {
+        var r = vec_get(load64(report + 24), i);
+        var nf = vec_len(load64(r + 8));
+        for (var j = 0; j < nf; j = j + 1) {
+            var f = vec_get(load64(r + 8), j);
+            out = str_cat(out, str_from("| "));
+            out = str_cat(out, load64(load64(r) + 8));
+            out = str_cat(out, str_from(" | "));
+            out = str_cat(out, severity_name(load64(f + 16)));
+            out = str_cat(out, str_from(" | "));
+            out = str_cat(out, category_name(load64(f + 8)));
+            out = str_cat(out, str_from(" | "));
+            out = str_cat(out, load64(f + 24));
+            out = str_cat(out, str_from(" | "));
+            out = str_cat(out, load64(f + 32));
+            out = str_cat(out, str_from(" |\n"));
+        }
+    }
+
+    return out;
+}
+
+# ================================================================
+# Report — SARIF v2.1.0 renderer
+# ================================================================
+
+fn report_render_sarif(report) {
+    var sarif = map_new();
+    map_set(sarif, "$schema", str_from("https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json"));
+    map_set(sarif, "version", str_from("2.1.0"));
+
+    # Build the single run
+    var run = map_new();
+
+    # Tool object
+    var tool = map_new();
+    var driver = map_new();
+    map_set(driver, "name", str_from("phylax"));
+    map_set(driver, "version", load64(report + 16));
+    map_set(driver, "informationUri", str_from("https://github.com/MacCracken/phylax"));
+    map_set(tool, "driver", driver);
+    map_set(run, "tool", tool);
+
+    # Results array
+    var sarif_results = vec_new();
+    var nresults = vec_len(load64(report + 24));
+
+    for (var i = 0; i < nresults; i = i + 1) {
+        var r = vec_get(load64(report + 24), i);
+        var nf = vec_len(load64(r + 8));
+
+        for (var j = 0; j < nf; j = j + 1) {
+            var f = vec_get(load64(r + 8), j);
+            var sr = map_new();
+
+            map_set(sr, "ruleId", load64(f + 24));
+
+            # Map severity to SARIF level
+            var level = str_from("note");
+            if (load64(f + 16) == SEVERITY_CRITICAL) { level = str_from("error"); }
+            if (load64(f + 16) == SEVERITY_HIGH)     { level = str_from("error"); }
+            if (load64(f + 16) == SEVERITY_MEDIUM)   { level = str_from("warning"); }
+            if (load64(f + 16) == SEVERITY_LOW)      { level = str_from("note"); }
+            map_set(sr, "level", level);
+
+            # Message
+            var msg = map_new();
+            map_set(msg, "text", load64(f + 32));
+            map_set(sr, "message", msg);
+
+            # Location — physical location with artifact URI
+            var locations = vec_new();
+            var loc = map_new();
+            var phys = map_new();
+            var artifact = map_new();
+            map_set(artifact, "uri", load64(load64(r) + 8));
+            map_set(phys, "artifactLocation", artifact);
+            map_set(loc, "physicalLocation", phys);
+            vec_push(locations, loc);
+            map_set(sr, "locations", locations);
+
+            # Properties — extra metadata
+            var props = map_new();
+            map_set(props, "severity", severity_name(load64(f + 16)));
+            map_set(props, "category", category_name(load64(f + 8)));
+            map_set(props, "timestamp", load64(f + 48));
+            map_set(sr, "properties", props);
+
+            vec_push(sarif_results, sr);
+        }
+    }
+
+    map_set(run, "results", sarif_results);
+
+    # Invocation
+    var invocations = vec_new();
+    var inv = map_new();
+    map_set(inv, "executionSuccessful", 1);
+    map_set(inv, "startTimeUtc", load64(report + 8));
+    vec_push(invocations, inv);
+    map_set(run, "invocations", invocations);
+
+    var runs = vec_new();
+    vec_push(runs, run);
+    map_set(sarif, "runs", runs);
+
+    return json_build(sarif);
+}

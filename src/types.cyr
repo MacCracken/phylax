@@ -1,0 +1,564 @@
+# phylax — Threat detection engine
+# Ported from 14133 lines of Rust to Cyrius
+# GPL-3.0-only
+
+# ================================================================
+# Constants — Version
+# ================================================================
+
+var VERSION = 0;
+
+fn _init_version() {
+    VERSION = str_from("1.0.0");
+}
+
+# ================================================================
+# Syscall constants (not in stdlib)
+# ================================================================
+
+var SYS_RENAME = 82;
+var SYS_UNLINK = 87;
+var SYS_SOCKET = 41;
+var SYS_BIND = 49;
+var SYS_LISTEN = 50;
+var SYS_ACCEPT = 43;
+var AF_UNIX = 1;
+var SOCK_STREAM = 1;
+var SYS_INOTIFY_INIT = 253;
+var SYS_INOTIFY_ADD_WATCH = 254;
+var SYS_INOTIFY_RM_WATCH = 255;
+
+# inotify event masks
+var IN_CREATE = 256;
+var IN_MODIFY = 2;
+var IN_CLOSE_WRITE = 8;
+var WATCH_MASK = 266;  # IN_CREATE | IN_CLOSE_WRITE | IN_MODIFY
+
+# File open flags for hardened scanning
+var O_RDONLY = 0;
+var O_NOFOLLOW = 131072;  # 0x20000 — reject symlinks
+var SYS_FSTAT = 5;
+
+# Per-scan allocation tracking
+var G_SCAN_ALLOC_TOTAL = 0;
+var G_SCAN_ALLOC_LIMIT = 209715200;  # 200 MB per scan
+
+# ================================================================
+# Enum constants — ScanTarget kind
+# ================================================================
+
+var SCAN_TARGET_FILE    = 0;
+var SCAN_TARGET_AGENT   = 1;
+var SCAN_TARGET_PACKAGE = 2;
+var SCAN_TARGET_MEMORY  = 3;
+
+# ================================================================
+# Enum constants — FindingSeverity
+# ================================================================
+
+var SEVERITY_INFO     = 0;
+var SEVERITY_LOW      = 1;
+var SEVERITY_MEDIUM   = 2;
+var SEVERITY_HIGH     = 3;
+var SEVERITY_CRITICAL = 4;
+
+fn severity_rank(sev) {
+    return sev;
+}
+
+fn severity_gt(a, b) {
+    return severity_rank(a) > severity_rank(b);
+}
+
+fn severity_gte(a, b) {
+    return severity_rank(a) >= severity_rank(b);
+}
+
+fn severity_name(sev) {
+    if (sev == SEVERITY_CRITICAL) { return str_from("CRITICAL"); }
+    if (sev == SEVERITY_HIGH)     { return str_from("HIGH"); }
+    if (sev == SEVERITY_MEDIUM)   { return str_from("MEDIUM"); }
+    if (sev == SEVERITY_LOW)      { return str_from("LOW"); }
+    return str_from("INFO");
+}
+
+# ================================================================
+# Enum constants — FindingCategory
+# ================================================================
+
+var CATEGORY_MALWARE              = 0;
+var CATEGORY_RANSOMWARE           = 1;
+var CATEGORY_SUSPICIOUS           = 2;
+var CATEGORY_EMBEDDED_PAYLOAD     = 3;
+var CATEGORY_VULNERABLE_DEPENDENCY = 4;
+var CATEGORY_BEHAVIOR_ANOMALY     = 5;
+var CATEGORY_CUSTOM_RULE          = 6;
+
+fn category_name(cat) {
+    if (cat == CATEGORY_MALWARE)              { return str_from("Malware"); }
+    if (cat == CATEGORY_RANSOMWARE)           { return str_from("Ransomware"); }
+    if (cat == CATEGORY_SUSPICIOUS)           { return str_from("Suspicious"); }
+    if (cat == CATEGORY_EMBEDDED_PAYLOAD)     { return str_from("Embedded Payload"); }
+    if (cat == CATEGORY_VULNERABLE_DEPENDENCY) { return str_from("Vulnerable Dependency"); }
+    if (cat == CATEGORY_BEHAVIOR_ANOMALY)     { return str_from("Behavior Anomaly"); }
+    if (cat == CATEGORY_CUSTOM_RULE)          { return str_from("Custom Rule"); }
+    return str_from("Unknown");
+}
+
+# ================================================================
+# Enum constants — RandomnessClass
+# ================================================================
+
+var RANDOMNESS_ENCRYPTED  = 0;
+var RANDOMNESS_COMPRESSED = 1;
+var RANDOMNESS_NORMAL     = 2;
+
+fn randomness_name(cls) {
+    if (cls == RANDOMNESS_ENCRYPTED)  { return str_from("encrypted"); }
+    if (cls == RANDOMNESS_COMPRESSED) { return str_from("compressed"); }
+    return str_from("normal");
+}
+
+# ================================================================
+# Enum constants — FileType (magic bytes)
+# ================================================================
+
+var FILETYPE_ELF     = 0;
+var FILETYPE_PE      = 1;
+var FILETYPE_MACHO   = 2;
+var FILETYPE_PDF     = 3;
+var FILETYPE_ZIP     = 4;
+var FILETYPE_GZIP    = 5;
+var FILETYPE_PNG     = 6;
+var FILETYPE_JPEG    = 7;
+var FILETYPE_SCRIPT  = 8;
+var FILETYPE_UNKNOWN = 9;
+var FILETYPE_TAR     = 10;
+
+fn filetype_name(ft) {
+    if (ft == FILETYPE_ELF)     { return str_from("ELF"); }
+    if (ft == FILETYPE_PE)      { return str_from("PE"); }
+    if (ft == FILETYPE_MACHO)   { return str_from("Mach-O"); }
+    if (ft == FILETYPE_PDF)     { return str_from("PDF"); }
+    if (ft == FILETYPE_ZIP)     { return str_from("ZIP"); }
+    if (ft == FILETYPE_GZIP)    { return str_from("GZIP"); }
+    if (ft == FILETYPE_PNG)     { return str_from("PNG"); }
+    if (ft == FILETYPE_JPEG)    { return str_from("JPEG"); }
+    if (ft == FILETYPE_SCRIPT)  { return str_from("Script"); }
+    if (ft == FILETYPE_TAR)     { return str_from("TAR"); }
+    return str_from("Unknown");
+}
+
+fn filetype_is_executable(ft) {
+    if (ft == FILETYPE_ELF)   { return 1; }
+    if (ft == FILETYPE_PE)    { return 1; }
+    if (ft == FILETYPE_MACHO) { return 1; }
+    return 0;
+}
+
+# ================================================================
+# Enum constants — ScriptLanguage
+# ================================================================
+
+var SCRIPT_POWERSHELL = 0;
+var SCRIPT_VBSCRIPT   = 1;
+var SCRIPT_JAVASCRIPT = 2;
+var SCRIPT_PYTHON     = 3;
+var SCRIPT_BATCH      = 4;
+var SCRIPT_SHELL      = 5;
+var SCRIPT_UNKNOWN    = 6;
+
+fn script_language_name(lang) {
+    if (lang == SCRIPT_POWERSHELL) { return str_from("PowerShell"); }
+    if (lang == SCRIPT_VBSCRIPT)   { return str_from("VBScript"); }
+    if (lang == SCRIPT_JAVASCRIPT) { return str_from("JavaScript"); }
+    if (lang == SCRIPT_PYTHON)     { return str_from("Python"); }
+    if (lang == SCRIPT_BATCH)      { return str_from("Batch"); }
+    if (lang == SCRIPT_SHELL)      { return str_from("Shell"); }
+    return str_from("Unknown");
+}
+
+# ================================================================
+# Enum constants — StringEncoding
+# ================================================================
+
+var STRING_ENCODING_ASCII   = 0;
+var STRING_ENCODING_UTF16LE = 1;
+
+# ================================================================
+# Struct layouts
+# ================================================================
+
+# ScanTarget: kind (i64), data (Str — path or name, 0 for Memory)
+struct ScanTarget {
+    kind;
+    data;
+}
+
+fn scan_target_new(kind, data) {
+    var t = alloc(16);
+    store64(t, kind);
+    store64(t + 8, data);
+    return t;
+}
+
+fn scan_target_file(path) {
+    return scan_target_new(SCAN_TARGET_FILE, path);
+}
+
+fn scan_target_agent(name) {
+    return scan_target_new(SCAN_TARGET_AGENT, name);
+}
+
+fn scan_target_package(name) {
+    return scan_target_new(SCAN_TARGET_PACKAGE, name);
+}
+
+fn scan_target_memory() {
+    return scan_target_new(SCAN_TARGET_MEMORY, 0);
+}
+
+# ThreatFinding
+struct ThreatFinding {
+    target;       # ScanTarget ptr
+    category;     # FindingCategory enum
+    severity;     # FindingSeverity enum
+    rule_name;    # Str
+    description;  # Str
+    metadata;     # HashMap (map_new)
+    timestamp;    # i64 (unix epoch seconds)
+}
+
+fn finding_new(target, category, severity, rule_name, description) {
+    var f = alloc(56);
+    store64(f, target);
+    store64(f + 8, category);
+    store64(f + 16, severity);
+    store64(f + 24, rule_name);
+    store64(f + 32, description);
+    store64(f + 40, map_new());
+    store64(f + 48, 0);
+    return f;
+}
+
+fn finding_is_critical(f) {
+    return load64(f + 16) == SEVERITY_CRITICAL;
+}
+
+fn finding_fingerprint(f) {
+    # Build "rule_name|target_display|severity"
+    var s = load64(f + 24);  # rule_name (Str)
+    s = str_cat(s, str_from("|"));
+    # target display
+    var target = load64(f);
+    var tkind = load64(target);
+    if (tkind == SCAN_TARGET_FILE) {
+        s = str_cat(s, str_cat(str_from("file:"), str_from(load64(target + 8))));
+    } elif (tkind == SCAN_TARGET_MEMORY) {
+        s = str_cat(s, str_from("memory"));
+    } else {
+        s = str_cat(s, str_from(load64(target + 8)));
+    }
+    s = str_cat(s, str_from("|"));
+    s = str_cat(s, severity_name(load64(f + 16)));
+    # SHA-256 hash
+    return sha256_hex(str_data(s), str_len(s));
+}
+
+# ScanResult
+struct ScanResult {
+    target;           # ScanTarget ptr
+    findings;         # Vec of ThreatFinding ptrs
+    scan_duration_ms; # i64 milliseconds
+    scanner_version;  # Str
+}
+
+fn scan_result_new(target) {
+    var r = alloc(32);
+    store64(r, target);
+    store64(r + 8, vec_new());
+    store64(r + 16, 0);
+    store64(r + 24, VERSION);
+    return r;
+}
+
+fn scan_result_highest_severity(r) {
+    var len = vec_len(load64(r + 8));
+    if (len == 0) { return None(); }
+    var best = SEVERITY_INFO;
+    for (var i = 0; i < len; i = i + 1) {
+        var f = vec_get(load64(r + 8), i);
+        if (load64(f + 16) > best) {
+            best = load64(f + 16);
+        }
+    }
+    return Some(best);
+}
+
+fn scan_result_has_threats(r) {
+    return vec_len(load64(r + 8)) > 0;
+}
+
+fn scan_result_finding_count(r) {
+    return vec_len(load64(r + 8));
+}
+
+# ScanConfig
+struct ScanConfig {
+    max_file_size;      # i64 bytes
+    timeout_secs;       # i64
+    enable_yara;        # i64 (0/1)
+    enable_entropy;     # i64 (0/1)
+    enable_magic_bytes; # i64 (0/1)
+    enable_ml;          # i64 (0/1)
+    rule_paths;         # Vec of Str
+}
+
+fn scan_config_default() {
+    var c = alloc(56);
+    store64(c, 50 * 1024 * 1024);
+    store64(c + 8, 60);
+    store64(c + 16, 1);
+    store64(c + 24, 1);
+    store64(c + 32, 1);
+    store64(c + 40, 1);
+    store64(c + 48, vec_new());
+    return c;
+}
+
+# BinaryAnalysis
+struct BinaryAnalysis {
+    file_type; # FileType enum
+    entropy;   # f64 (as i64 bit pattern)
+    size;      # i64
+    sha256;    # Str
+}
+
+# SectionEntropy
+struct SectionEntropy {
+    name;       # Str
+    entropy;    # f64 bit pattern
+    raw_size;   # i64
+    executable; # i64 (0/1)
+    writable;   # i64 (0/1)
+}
+
+# OverlayInfo
+struct OverlayInfo {
+    offset;  # i64
+    size;    # i64
+    entropy; # f64 bit pattern
+}
+
+# PackingSignals
+struct PackingSignals {
+    packer_sections;      # Vec of Str
+    wx_sections;          # Vec of Str
+    hollow_sections;      # Vec of Str
+    import_count;         # i64
+    entry_in_high_entropy; # i64 (0/1)
+    has_encrypted_overlay; # i64 (0/1)
+}
+
+fn packing_signals_new() {
+    var s = alloc(48);
+    store64(s, vec_new());
+    store64(s + 8, vec_new());
+    store64(s + 16, vec_new());
+    store64(s + 24, 0);
+    store64(s + 32, 0);
+    store64(s + 40, 0);
+    return s;
+}
+
+fn packing_signal_count(s) {
+    var count = 0;
+    if (vec_len(load64(s)) > 0) { count = count + 1; }
+    if (vec_len(load64(s + 8)) > 0)     { count = count + 1; }
+    if (vec_len(load64(s + 16)) > 0) { count = count + 1; }
+    if (load64(s + 24) < 5) {
+        if (load64(s + 24) > 0) { count = count + 1; }
+    }
+    if (load64(s + 32)) { count = count + 1; }
+    if (load64(s + 40)) { count = count + 1; }
+    return count;
+}
+
+# ObfuscationSignals
+struct ObfuscationSignals {
+    high_entropy_lines; # i64
+    total_lines;        # i64
+    patterns;           # Vec of Str
+    score;              # i64
+}
+
+fn obfuscation_signals_new() {
+    var s = alloc(32);
+    store64(s, 0);
+    store64(s + 8, 0);
+    store64(s + 16, vec_new());
+    store64(s + 24, 0);
+    return s;
+}
+
+# ExtractedString
+struct ExtractedString {
+    value;    # Str
+    offset;   # i64
+    encoding; # StringEncoding enum
+}
+
+# SsdeepHash
+struct SsdeepHash {
+    digest;     # Str
+    block_size; # i64 (u32)
+}
+
+# TlshHash
+struct TlshHash {
+    digest; # Str
+}
+
+# Baseline suppression
+struct Baseline {
+    fingerprints; # Vec of Str (64-char hex fingerprints)
+    rule_names;   # Vec of Str
+}
+
+fn baseline_new() {
+    var b = alloc(16);
+    store64(b, vec_new());
+    store64(b + 8, vec_new());
+    return b;
+}
+
+fn baseline_is_empty(b) {
+    return (vec_len(load64(b)) == 0) && (vec_len(load64(b + 8)) == 0);
+}
+
+fn baseline_len(b) {
+    return vec_len(load64(b)) + vec_len(load64(b + 8));
+}
+
+fn baseline_from_ignore_file(content) {
+    # Parse .phylax-ignore: one entry per line
+    # 64-char hex = fingerprint, anything else = rule name
+    # Lines starting with # are comments, empty lines skipped
+    var b = alloc(16);
+    store64(b, vec_new());      # fingerprints vec
+    store64(b + 8, vec_new());  # rule_names vec
+
+    var data = str_data(content);
+    var len = str_len(content);
+    var line_start = 0;
+
+    for (var i = 0; i <= len; i = i + 1) {
+        var at_end = (i == len);
+        if (at_end == 0) { at_end = (load8(data + i) == 10); }
+        if (at_end) {
+            var ll = i - line_start;
+            if (ll > 0) {
+                var line = str_trim(str_from_raw(data + line_start, ll));
+                var llen = str_len(line);
+                if (llen > 0) {
+                    var first = load8(str_data(line));
+                    if (first != 35) {  # not '#'
+                        if (llen == 64) {
+                            # Check if all hex digits
+                            var all_hex = 1;
+                            for (var j = 0; j < 64; j = j + 1) {
+                                var c = load8(str_data(line) + j);
+                                var is_hex = 0;
+                                if (c >= 48 && c <= 57) { is_hex = 1; }
+                                if (c >= 97 && c <= 102) { is_hex = 1; }
+                                if (c >= 65 && c <= 70) { is_hex = 1; }
+                                if (is_hex == 0) { all_hex = 0; j = 64; }
+                            }
+                            if (all_hex) { vec_push(load64(b), line); }
+                            else { vec_push(load64(b + 8), line); }
+                        } else {
+                            vec_push(load64(b + 8), line);
+                        }
+                    }
+                }
+            }
+            line_start = i + 1;
+        }
+    }
+    return b;
+}
+
+fn baseline_is_suppressed(b, finding) {
+    var fp = finding_fingerprint(finding);
+    var rule = load64(finding + 24);
+
+    # Check fingerprints
+    var fps = load64(b);
+    for (var i = 0; i < vec_len(fps); i = i + 1) {
+        if (str_eq(vec_get(fps, i), fp)) { return 1; }
+    }
+
+    # Check rule names
+    var rules = load64(b + 8);
+    for (var i = 0; i < vec_len(rules); i = i + 1) {
+        if (str_eq(vec_get(rules, i), rule)) { return 1; }
+    }
+
+    return 0;
+}
+
+fn baseline_filter(b, findings) {
+    var out = vec_new();
+    for (var i = 0; i < vec_len(findings); i = i + 1) {
+        var f = vec_get(findings, i);
+        if (baseline_is_suppressed(b, f) == 0) {
+            vec_push(out, f);
+        }
+    }
+    return out;
+}
+
+# ================================================================
+# Error handling
+# ================================================================
+
+var ERR_NONE               = 0;
+var ERR_IO                 = 1;
+var ERR_FILE_TOO_LARGE     = 2;
+var ERR_TIMEOUT            = 3;
+var ERR_RULE_PARSE         = 4;
+var ERR_INVALID_SEVERITY   = 5;
+var ERR_INVALID_CATEGORY   = 6;
+var ERR_SCAN               = 7;
+var ERR_CONFIG             = 8;
+var ERR_SERIALIZATION      = 9;
+var ERR_AGENT              = 10;
+
+# PhylaxError: tagged result using Err(code)
+# Usage: return Err(ERR_FILE_TOO_LARGE);
+#        var result = do_thing(); if (!is_ok(result)) { ... }
+
+fn err_name(code) {
+    if (code == ERR_IO)               { return str_from("IO error"); }
+    if (code == ERR_FILE_TOO_LARGE)   { return str_from("file too large"); }
+    if (code == ERR_TIMEOUT)          { return str_from("scan timed out"); }
+    if (code == ERR_RULE_PARSE)       { return str_from("rule parse error"); }
+    if (code == ERR_INVALID_SEVERITY) { return str_from("invalid severity"); }
+    if (code == ERR_INVALID_CATEGORY) { return str_from("invalid category"); }
+    if (code == ERR_SCAN)             { return str_from("scan error"); }
+    if (code == ERR_CONFIG)           { return str_from("configuration error"); }
+    if (code == ERR_SERIALIZATION)    { return str_from("serialization error"); }
+    if (code == ERR_AGENT)            { return str_from("agent error"); }
+    return str_from("unknown error");
+}
+
+# ================================================================
+# Initialization helper
+# ================================================================
+
+fn phylax_init() {
+    alloc_init();
+    _init_version();
+    AGENT_NAME = str_from("phylax");
+    init_pearson_table();
+}

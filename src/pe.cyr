@@ -1,0 +1,831 @@
+# ================================================================
+# ================================================================
+#
+#   PART 2 — PE Parser, ELF Parser, YARA Engine
+#
+# ================================================================
+# ================================================================
+
+
+# ================================================================
+# PE Parser — Constants
+# ================================================================
+
+var PE_MAGIC_MZ = 0x5A4D;  # "MZ"
+
+# Machine types
+var PE_MACHINE_UNKNOWN = 0;
+var PE_MACHINE_I386    = 0x014c;
+var PE_MACHINE_AMD64   = 0x8664;
+var PE_MACHINE_ARM     = 0x01c0;
+var PE_MACHINE_ARM64   = 0xAA64;
+var PE_MACHINE_IA64    = 0x0200;
+var PE_MACHINE_RISCV32 = 0x5032;
+var PE_MACHINE_RISCV64 = 0x5064;
+
+# Optional header magic
+var PE_OPT_MAGIC_32  = 0x10b;
+var PE_OPT_MAGIC_64  = 0x20b;
+
+# Section characteristics flags
+var PE_SCN_CNT_CODE            = 0x00000020;
+var PE_SCN_MEM_EXECUTE         = 0x20000000;
+var PE_SCN_MEM_READ            = 0x40000000;
+var PE_SCN_MEM_WRITE           = 0x80000000;
+
+# Data directory indices
+var PE_DIR_EXPORT    = 0;
+var PE_DIR_IMPORT    = 1;
+var PE_DIR_RESOURCE  = 2;
+var PE_DIR_SECURITY  = 4;
+var PE_DIR_DEBUG     = 6;
+var PE_DIR_TLS       = 9;
+
+# DLL characteristics
+var PE_IMAGE_DLL = 0x2000;
+
+# Limits
+var PE_MAX_SECTIONS = 96;
+var PE_MAX_IMPORTS  = 256;
+var PE_MAX_EXPORTS  = 1024;
+
+# Rich header sentinel
+var PE_RICH_SIGNATURE = 0x68636952;  # "Rich"
+var PE_DANS_SIGNATURE = 0x536E6144;  # "DanS"
+
+# Debug types
+var PE_DEBUG_TYPE_CODEVIEW = 2;
+var PE_CODEVIEW_RSDS       = 0x53445352;  # "RSDS"
+
+# ================================================================
+# PE Parser — Read helpers
+# ================================================================
+
+# Read little-endian u16 from raw byte buffer
+fn read_u16_le(data, offset) {
+    return load8(data + offset) | (load8(data + offset + 1) << 8);
+}
+
+# Read little-endian u32 from raw byte buffer
+fn read_u32_le(data, offset) {
+    return load8(data + offset)
+         | (load8(data + offset + 1) << 8)
+         | (load8(data + offset + 2) << 16)
+         | (load8(data + offset + 3) << 24);
+}
+
+# Read little-endian u64 from raw byte buffer
+fn read_u64_le(data, offset) {
+    var lo = read_u32_le(data, offset);
+    var hi = read_u32_le(data, offset + 4);
+    return lo | (hi << 32);
+}
+
+# Read null-terminated ASCII string, up to max_len bytes
+fn read_ascii(data, offset, max_len) {
+    var buf = alloc(max_len + 1);
+    var i = 0;
+    while (i < max_len) {
+        var ch = load8(data + offset + i);
+        if (ch == 0) { i = max_len; }  # break
+        else {
+            store8(buf + i, ch);
+            i = i + 1;
+        }
+    }
+    # Re-scan for actual length (since we jump i on break)
+    var len = 0;
+    while (len < max_len) {
+        if (load8(data + offset + len) == 0) { len = max_len + 1; }  # break
+        else { len = len + 1; }
+    }
+    if (len > max_len) { len = len - max_len - 1 + max_len; }
+    # Simpler: just count from buf
+    var actual = 0;
+    while (actual < max_len) {
+        if (load8(data + offset + actual) == 0) {
+            return str_from_raw(buf, actual);
+        }
+        store8(buf + actual, load8(data + offset + actual));
+        actual = actual + 1;
+    }
+    return str_from_raw(buf, max_len);
+}
+
+# Read a fixed-length ASCII string (e.g. section name, 8 bytes)
+fn read_fixed_ascii(data, offset, len) {
+    var buf = alloc(len + 1);
+    var actual = 0;
+    for (var i = 0; i < len; i = i + 1) {
+        var ch = load8(data + offset + i);
+        if (ch == 0) { i = len; }  # break
+        else {
+            store8(buf + actual, ch);
+            actual = actual + 1;
+        }
+    }
+    return str_from_raw(buf, actual);
+}
+
+# ================================================================
+# PE Parser — Structs
+# ================================================================
+
+struct PeSection {
+    name;             # Str
+    virtual_size;     # i64
+    virtual_address;  # i64
+    raw_data_size;    # i64
+    raw_data_offset;  # i64
+    characteristics;  # i64
+}
+
+fn pe_section_new() {
+    var s = alloc(48);
+    store64(s, str_from(""));
+    store64(s + 8, 0);
+    store64(s + 16, 0);
+    store64(s + 24, 0);
+    store64(s + 32, 0);
+    store64(s + 40, 0);
+    return s;
+}
+
+fn pe_section_is_executable(sec) {
+    return (load64(sec + 40) & PE_SCN_MEM_EXECUTE) != 0;
+}
+
+fn pe_section_is_writable(sec) {
+    return (load64(sec + 40) & PE_SCN_MEM_WRITE) != 0;
+}
+
+fn pe_section_contains_code(sec) {
+    return (load64(sec + 40) & PE_SCN_CNT_CODE) != 0;
+}
+
+struct PeImport {
+    dll;       # Str — DLL name
+    function;  # Str — function name
+}
+
+fn pe_import_new(dll, func) {
+    var imp = alloc(16);
+    store64(imp, dll);
+    store64(imp + 8, func);
+    return imp;
+}
+
+struct PeRichEntry {
+    comp_id;    # i64 — compiler/tool ID
+    build_id;   # i64 — build number
+    use_count;  # i64 — usage count
+}
+
+fn pe_rich_entry_new(comp_id, build_id, use_count) {
+    var e = alloc(24);
+    store64(e, comp_id);
+    store64(e + 8, build_id);
+    store64(e + 16, use_count);
+    return e;
+}
+
+struct PeResource {
+    res_type; # i64 — resource type ID
+    name;     # Str
+    size;     # i64
+    offset;   # i64
+}
+
+fn pe_resource_new() {
+    var r = alloc(32);
+    store64(r, 0);
+    store64(r + 8, str_from(""));
+    store64(r + 16, 0);
+    store64(r + 24, 0);
+    return r;
+}
+
+struct PeCertificate {
+    present;  # i64 (0/1)
+    offset;   # i64
+    size;     # i64
+}
+
+fn pe_certificate_new() {
+    var c = alloc(24);
+    store64(c, 0);
+    store64(c + 8, 0);
+    store64(c + 16, 0);
+    return c;
+}
+
+struct PeInfo {
+    machine;           # i64 — machine type
+    num_sections;      # i64
+    timestamp;         # i64
+    is_dll;            # i64 (0/1)
+    is_64bit;          # i64 (0/1)
+    entry_point;       # i64 — address of entry point
+    image_base;        # i64
+    sections;          # Vec of PeSection
+    imports;           # Vec of PeImport (dll-level)
+    import_functions;  # Vec of PeImport (function-level)
+    exports;           # Vec of Str
+    has_tls_callbacks; # i64 (0/1)
+    pdb_path;          # Str or 0
+    rich_entries;      # Vec of PeRichEntry
+    resources;         # Vec of PeResource
+    certificate;       # PeCertificate
+    opt_offset;        # i64 — offset of optional header
+    size_of_opt;       # i64 — size of optional header
+}
+
+fn pe_info_new() {
+    var p = alloc(144);
+    store64(p, 0);
+    store64(p + 8, 0);
+    store64(p + 16, 0);
+    store64(p + 24, 0);
+    store64(p + 32, 0);
+    store64(p + 40, 0);
+    store64(p + 48, 0);
+    store64(p + 56, vec_new());
+    store64(p + 64, vec_new());
+    store64(p + 72, vec_new());
+    store64(p + 80, vec_new());
+    store64(p + 88, 0);
+    store64(p + 96, 0);
+    store64(p + 104, vec_new());
+    store64(p + 112, vec_new());
+    store64(p + 120, pe_certificate_new());
+    store64(p + 128, 0);
+    store64(p + 136, 0);
+    return p;
+}
+
+# ================================================================
+# PE Parser — Machine name
+# ================================================================
+
+fn pe_machine_name(machine) {
+    if (machine == PE_MACHINE_I386)    { return str_from("i386"); }
+    if (machine == PE_MACHINE_AMD64)   { return str_from("AMD64"); }
+    if (machine == PE_MACHINE_ARM)     { return str_from("ARM"); }
+    if (machine == PE_MACHINE_ARM64)   { return str_from("ARM64"); }
+    if (machine == PE_MACHINE_IA64)    { return str_from("IA64"); }
+    if (machine == PE_MACHINE_RISCV32) { return str_from("RISC-V 32"); }
+    if (machine == PE_MACHINE_RISCV64) { return str_from("RISC-V 64"); }
+    return str_from("Unknown");
+}
+
+# ================================================================
+# PE Parser — RVA to file offset
+# ================================================================
+
+# Convert a Relative Virtual Address to a raw file offset
+# Uses the section table to find which section contains the RVA
+fn rva_to_offset(pe, rva) {
+    var nsec = vec_len(load64(pe + 56));
+    for (var i = 0; i < nsec; i = i + 1) {
+        var sec = vec_get(load64(pe + 56), i);
+        var va = load64(sec + 16);
+        var vs = load64(sec + 8);
+        if (vs == 0) { vs = load64(sec + 24); }
+        if (rva >= va) {
+            if (rva < va + vs) {
+                return load64(sec + 32) + (rva - va);
+            }
+        }
+    }
+    return -1;  # not found
+}
+
+# RVA to offset using raw data and section parsing (before PeInfo is built)
+fn rva_to_offset_raw(data, data_len, pe_offset, num_sections, sec_table_offset, rva) {
+    for (var i = 0; i < num_sections; i = i + 1) {
+        var soff = sec_table_offset + i * 40;
+        if (soff + 40 > data_len) { return -1; }
+        var va = read_u32_le(data, soff + 12);
+        var vs = read_u32_le(data, soff + 8);
+        var raw_off = read_u32_le(data, soff + 20);
+        if (vs == 0) { vs = read_u32_le(data, soff + 16); }
+        if (rva >= va) {
+            if (rva < va + vs) {
+                return raw_off + (rva - va);
+            }
+        }
+    }
+    return -1;
+}
+
+# ================================================================
+# PE Parser — Rich header
+# ================================================================
+
+fn parse_rich_header(data, data_len, pe_offset) {
+    var entries = vec_new();
+    # Rich header sits between DOS stub and PE signature
+    # Search backward from pe_offset for "Rich" signature
+    if (pe_offset < 16) { return entries; }
+
+    var rich_pos = -1;
+    var search_start = 128;  # Skip DOS header
+    if (search_start > pe_offset - 8) { search_start = pe_offset - 8; }
+    for (var i = pe_offset - 8; i >= search_start; i = i - 4) {
+        if (read_u32_le(data, i) == PE_RICH_SIGNATURE) {
+            rich_pos = i;
+            i = search_start - 1;  # break
+        }
+    }
+    if (rich_pos < 0) { return entries; }
+
+    # XOR key is the dword right after "Rich"
+    var xor_key = read_u32_le(data, rich_pos + 4);
+
+    # Find "DanS" marker by decrypting backward
+    var dans_pos = -1;
+    for (var i = rich_pos - 4; i >= 0; i = i - 4) {
+        var decrypted = read_u32_le(data, i) ^ xor_key;
+        if (decrypted == PE_DANS_SIGNATURE) {
+            dans_pos = i;
+            i = -1;  # break
+        }
+    }
+    if (dans_pos < 0) { return entries; }
+
+    # Entries start after DanS + 3 padding dwords (all XOR key)
+    var entry_start = dans_pos + 16;
+    var pos = entry_start;
+    while (pos + 8 <= rich_pos) {
+        var raw1 = read_u32_le(data, pos) ^ xor_key;
+        var raw2 = read_u32_le(data, pos + 4) ^ xor_key;
+        var comp_id = (raw1 >> 16) & 0xFFFF;
+        var build_id = raw1 & 0xFFFF;
+        var use_count = raw2;
+        if (comp_id != 0 || build_id != 0) {
+            vec_push(entries, pe_rich_entry_new(comp_id, build_id, use_count));
+        }
+        pos = pos + 8;
+    }
+    return entries;
+}
+
+fn rich_product_name(product_id) {
+    if (product_id == 0) { return str_from("[padding]"); }
+    if (product_id == 1) { return str_from("Import"); }
+    if (product_id >= 2 && product_id <= 6) { return str_from("VS6.0 (1998)"); }
+    if (product_id >= 7 && product_id <= 9) { return str_from("VS2002 (7.0)"); }
+    if (product_id >= 10 && product_id <= 13) { return str_from("VS2003 (7.1)"); }
+    if (product_id >= 14 && product_id <= 39) { return str_from("VS2005 (8.0)"); }
+    if (product_id >= 40 && product_id <= 83) { return str_from("VS2008 (9.0)"); }
+    if (product_id >= 84 && product_id <= 146) { return str_from("VS2010 (10.0)"); }
+    if (product_id >= 147 && product_id <= 169) { return str_from("VS2012 (11.0)"); }
+    if (product_id >= 170 && product_id <= 199) { return str_from("VS2013 (12.0)"); }
+    if (product_id >= 200 && product_id <= 219) { return str_from("VS2015 (14.0)"); }
+    if (product_id >= 220 && product_id <= 260) { return str_from("VS2017 (14.1)"); }
+    if (product_id >= 261 && product_id <= 270) { return str_from("VS2019 (14.2)"); }
+    if (product_id >= 271 && product_id <= 280) { return str_from("VS2022 (14.3)"); }
+    if (product_id >= 281 && product_id <= 300) { return str_from("VS2022 (14.4+)"); }
+    return str_from("Unknown");
+}
+
+# ================================================================
+# PE Parser — Import parsing
+# ================================================================
+
+fn parse_pe_imports(data, data_len, pe) {
+    var imports = vec_new();
+    var import_funcs = vec_new();
+
+    # Locate import directory from optional header
+    var opt_off = load64(pe + 128);
+    var is_64 = load64(pe + 32);
+
+    # Data directories start at different offsets for PE32 vs PE32+
+    var dd_offset = 0;
+    if (is_64) {
+        dd_offset = opt_off + 112;  # PE32+: data dirs at offset 112
+    } else {
+        dd_offset = opt_off + 96;   # PE32: data dirs at offset 96
+    }
+
+    # Import directory is entry 1 (index 1)
+    var import_dir_off = dd_offset + PE_DIR_IMPORT * 8;
+    if (import_dir_off + 8 > data_len) { return imports; }
+    var import_rva = read_u32_le(data, import_dir_off);
+    var import_size = read_u32_le(data, import_dir_off + 4);
+    if (import_rva == 0 || import_size == 0) { return imports; }
+
+    var import_file_off = rva_to_offset(pe, import_rva);
+    if (import_file_off < 0) { return imports; }
+
+    # Each import descriptor is 20 bytes
+    var count = 0;
+    var pos = import_file_off;
+    while (count < PE_MAX_IMPORTS) {
+        if (pos + 20 > data_len) { count = PE_MAX_IMPORTS; }
+        else {
+            var ilt_rva  = read_u32_le(data, pos);       # Import Lookup Table RVA
+            var name_rva = read_u32_le(data, pos + 12);   # DLL name RVA
+            # Null descriptor terminates
+            if (ilt_rva == 0) { if (name_rva == 0) { count = PE_MAX_IMPORTS; } }
+            if (count < PE_MAX_IMPORTS) {
+                if (name_rva != 0) {
+                    var name_off = rva_to_offset(pe, name_rva);
+                    var dll_name = str_from("unknown");
+                    if (name_off >= 0) {
+                        if (name_off < data_len) {
+                            dll_name = read_ascii(data, name_off, 256);
+                        }
+                    }
+                    vec_push(imports, pe_import_new(dll_name, str_from("")));
+
+                    # Parse the Import Lookup Table for function names
+                    if (ilt_rva != 0) {
+                        var ilt_off = rva_to_offset(pe, ilt_rva);
+                        if (ilt_off >= 0) {
+                            var fcount = 0;
+                            var fpos = ilt_off;
+                            var entry_size = 4;
+                            if (is_64) { entry_size = 8; }
+                            while (fcount < 512) {
+                                if (fpos + entry_size > data_len) { fcount = 512; }
+                                else {
+                                    var entry = 0;
+                                    if (is_64) { entry = read_u64_le(data, fpos); }
+                                    else { entry = read_u32_le(data, fpos); }
+                                    if (entry == 0) { fcount = 512; }  # end
+                                    else {
+                                        # Check ordinal flag (high bit)
+                                        var ordinal_flag = 0;
+                                        if (is_64) { ordinal_flag = (entry >> 63) & 1; }
+                                        else { ordinal_flag = (entry >> 31) & 1; }
+                                        if (ordinal_flag == 0) {
+                                            # Hint/Name entry
+                                            var hint_rva = entry & 0x7FFFFFFF;
+                                            var hint_off = rva_to_offset(pe, hint_rva);
+                                            if (hint_off >= 0) {
+                                                if (hint_off + 2 < data_len) {
+                                                    var func_name = read_ascii(data, hint_off + 2, 256);
+                                                    vec_push(import_funcs,
+                                                        pe_import_new(dll_name, func_name));
+                                                }
+                                            }
+                                        } else {
+                                            # Ordinal import
+                                            var ord = entry & 0xFFFF;
+                                            var ord_name = str_cat(str_from("ord:"),
+                                                           str_from_int(ord));
+                                            vec_push(import_funcs,
+                                                pe_import_new(dll_name, ord_name));
+                                        }
+                                        fcount = fcount + 1;
+                                        fpos = fpos + entry_size;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                count = count + 1;
+                pos = pos + 20;
+            }
+        }
+    }
+
+    # Store results into PeInfo
+    store64(pe + 64, imports);
+    store64(pe + 72, import_funcs);
+    return imports;
+}
+
+# ================================================================
+# PE Parser — Export parsing
+# ================================================================
+
+fn parse_pe_exports(data, data_len, pe) {
+    var exports = vec_new();
+    var opt_off = load64(pe + 128);
+    var is_64 = load64(pe + 32);
+
+    var dd_offset = 0;
+    if (is_64) { dd_offset = opt_off + 112; }
+    else { dd_offset = opt_off + 96; }
+
+    var export_dir_off = dd_offset + PE_DIR_EXPORT * 8;
+    if (export_dir_off + 8 > data_len) { return exports; }
+    var export_rva = read_u32_le(data, export_dir_off);
+    var export_size = read_u32_le(data, export_dir_off + 4);
+    if (export_rva == 0 || export_size == 0) { return exports; }
+
+    var export_file_off = rva_to_offset(pe, export_rva);
+    if (export_file_off < 0) { return exports; }
+    if (export_file_off + 40 > data_len) { return exports; }
+
+    # Export directory table
+    var num_names = read_u32_le(data, export_file_off + 24);
+    var name_ptr_rva = read_u32_le(data, export_file_off + 32);
+    var name_ptr_off = rva_to_offset(pe, name_ptr_rva);
+    if (name_ptr_off < 0) { return exports; }
+
+    var limit = num_names;
+    if (limit > PE_MAX_EXPORTS) { limit = PE_MAX_EXPORTS; }
+
+    for (var i = 0; i < limit; i = i + 1) {
+        var noff = name_ptr_off + i * 4;
+        if (noff + 4 <= data_len) {
+            var nrva = read_u32_le(data, noff);
+            var str_off = rva_to_offset(pe, nrva);
+            if (str_off >= 0) {
+                if (str_off < data_len) {
+                    var name = read_ascii(data, str_off, 256);
+                    vec_push(exports, name);
+                }
+            }
+        }
+    }
+
+    store64(pe + 80, exports);
+    return exports;
+}
+
+# ================================================================
+# PE Parser — TLS callback detection
+# ================================================================
+
+fn detect_tls_callbacks(data, data_len, pe) {
+    var opt_off = load64(pe + 128);
+    var is_64 = load64(pe + 32);
+
+    var dd_offset = 0;
+    if (is_64) { dd_offset = opt_off + 112; }
+    else { dd_offset = opt_off + 96; }
+
+    var tls_dir_off = dd_offset + PE_DIR_TLS * 8;
+    if (tls_dir_off + 8 > data_len) { return 0; }
+    var tls_rva = read_u32_le(data, tls_dir_off);
+    if (tls_rva == 0) { return 0; }
+
+    var tls_off = rva_to_offset(pe, tls_rva);
+    if (tls_off < 0) { return 0; }
+
+    # TLS directory: callbacks pointer is at offset 12 (PE32) or 24 (PE32+)
+    var cb_va = 0;
+    if (is_64) {
+        if (tls_off + 32 > data_len) { return 0; }
+        cb_va = read_u64_le(data, tls_off + 24);
+    } else {
+        if (tls_off + 16 > data_len) { return 0; }
+        cb_va = read_u32_le(data, tls_off + 12);
+    }
+
+    if (cb_va != 0) {
+        # Convert VA to RVA by subtracting image base
+        var cb_rva = cb_va - load64(pe + 48);
+        var cb_off = rva_to_offset(pe, cb_rva);
+        if (cb_off >= 0) {
+            if (cb_off + 4 <= data_len) {
+                # Check if at least one callback pointer is non-zero
+                var first = 0;
+                if (is_64) { first = read_u64_le(data, cb_off); }
+                else { first = read_u32_le(data, cb_off); }
+                if (first != 0) {
+                    store64(pe + 88, 1);
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+# ================================================================
+# PE Parser — Debug directory (PDB path extraction)
+# ================================================================
+
+fn parse_debug_directory(data, data_len, pe) {
+    var opt_off = load64(pe + 128);
+    var is_64 = load64(pe + 32);
+
+    var dd_offset = 0;
+    if (is_64) { dd_offset = opt_off + 112; }
+    else { dd_offset = opt_off + 96; }
+
+    var debug_dir_off = dd_offset + PE_DIR_DEBUG * 8;
+    if (debug_dir_off + 8 > data_len) { return 0; }
+    var debug_rva = read_u32_le(data, debug_dir_off);
+    var debug_size = read_u32_le(data, debug_dir_off + 4);
+    if (debug_rva == 0 || debug_size == 0) { return 0; }
+
+    var debug_off = rva_to_offset(pe, debug_rva);
+    if (debug_off < 0) { return 0; }
+
+    # Each debug directory entry is 28 bytes
+    var num_entries = debug_size / 28;
+    for (var i = 0; i < num_entries; i = i + 1) {
+        var eoff = debug_off + i * 28;
+        if (eoff + 28 > data_len) { return 0; }
+        var dtype = read_u32_le(data, eoff + 12);
+        if (dtype == PE_DEBUG_TYPE_CODEVIEW) {
+            var dsize = read_u32_le(data, eoff + 16);
+            var daddr = read_u32_le(data, eoff + 24);   # pointer to raw data
+            if (daddr > 0) {
+                if (daddr + 24 < data_len) {
+                    var sig = read_u32_le(data, daddr);
+                    if (sig == PE_CODEVIEW_RSDS) {
+                        # RSDS: 4 sig + 16 GUID + 4 age = 24 bytes header
+                        var pdb_off = daddr + 24;
+                        if (pdb_off < data_len) {
+                            var pdb = read_ascii(data, pdb_off, 260);
+                            store64(pe + 96, pdb);
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+# ================================================================
+# PE Parser — Certificate / Authenticode
+# ================================================================
+
+fn parse_pe_certificate(data, data_len, pe) {
+    var opt_off = load64(pe + 128);
+    var is_64 = load64(pe + 32);
+
+    var dd_offset = 0;
+    if (is_64) { dd_offset = opt_off + 112; }
+    else { dd_offset = opt_off + 96; }
+
+    var cert_dir_off = dd_offset + PE_DIR_SECURITY * 8;
+    if (cert_dir_off + 8 > data_len) { return 0; }
+    var cert_offset = read_u32_le(data, cert_dir_off);
+    var cert_size = read_u32_le(data, cert_dir_off + 4);
+    if (cert_offset > 0) {
+        if (cert_size > 0) {
+            store64(load64(pe + 120), 1);
+            store64(load64(pe + 120) + 8, cert_offset);
+            store64(load64(pe + 120) + 16, cert_size);
+        }
+    }
+}
+
+# ================================================================
+# PE Parser — Sections
+# ================================================================
+
+fn parse_pe_sections(data, data_len, sec_table_offset, num_sections) {
+    var sections = vec_new();
+    var limit = num_sections;
+    if (limit > PE_MAX_SECTIONS) { limit = PE_MAX_SECTIONS; }
+
+    for (var i = 0; i < limit; i = i + 1) {
+        var soff = sec_table_offset + i * 40;
+        if (soff + 40 > data_len) { return sections; }
+
+        var sec = pe_section_new();
+        store64(sec, read_fixed_ascii(data, soff, 8));
+        store64(sec + 8, read_u32_le(data, soff + 8));
+        store64(sec + 16, read_u32_le(data, soff + 12));
+        store64(sec + 24, read_u32_le(data, soff + 16));
+        store64(sec + 32, read_u32_le(data, soff + 20));
+        store64(sec + 40, read_u32_le(data, soff + 36));
+        vec_push(sections, sec);
+    }
+    return sections;
+}
+
+# ================================================================
+# PE Parser — Import hash (imphash)
+# ================================================================
+
+# Compute MD5-based import hash (simplified — uses Pearson-like hash)
+# Real imphash: lowercase "dll.function" concatenated, then MD5.
+# We approximate with our string hashing since we lack MD5 in stdlib.
+fn compute_imphash(import_funcs) {
+    var n = vec_len(import_funcs);
+    if (n == 0) { return str_from(""); }
+
+    # Build the canonical import string: "dll.func,dll.func,..."
+    var result = str_from("");
+    for (var i = 0; i < n; i = i + 1) {
+        var imp = vec_get(import_funcs, i);
+        var dll = str_lower(load64(imp));
+        var func = str_lower(load64(imp + 8));
+
+        # Strip .dll extension if present
+        var dlen = str_len(dll);
+        if (dlen > 4) {
+            var ddata = str_data(dll);
+            if (load8(ddata + dlen - 4) == 46) {   # '.'
+                if (load8(ddata + dlen - 3) == 100) {  # 'd'
+                    if (load8(ddata + dlen - 2) == 108) {  # 'l'
+                        if (load8(ddata + dlen - 1) == 108) {  # 'l'
+                            dll = str_substr(dll, 0, dlen - 4);
+                        }
+                    }
+                }
+            }
+        }
+
+        var entry = str_cat(dll, str_cat(str_from("."), func));
+        if (i > 0) {
+            result = str_cat(result, str_cat(str_from(","), entry));
+        } else {
+            result = entry;
+        }
+    }
+
+    # Hash the result string with our Pearson hash, encode as hex
+    var rdata = str_data(result);
+    var rlen = str_len(result);
+    var hash_buf = alloc(16);  # 128-bit hash
+    for (var h = 0; h < 16; h = h + 1) {
+        var hval = h;
+        for (var j = 0; j < rlen; j = j + 1) {
+            var idx = (hval ^ load8(rdata + j)) & 0xFF;
+            hval = pearson_lookup(idx);
+        }
+        store8(hash_buf + h, hval & 0xFF);
+    }
+    return hex_encode(hash_buf, 16);
+}
+
+# ================================================================
+# PE Parser — Main parse function
+# ================================================================
+
+fn parse_pe(data, data_len) {
+    # Validate minimum size and MZ signature
+    if (data_len < 64) { return 0; }
+    var mz = read_u16_le(data, 0);
+    if (mz != PE_MAGIC_MZ) { return 0; }
+
+    # e_lfanew: offset to PE signature at offset 0x3C
+    var pe_offset = read_u32_le(data, 0x3C);
+    if (pe_offset + 4 > data_len) { return 0; }
+
+    # Verify PE\0\0 signature
+    if (load8(data + pe_offset) != 80) { return 0; }      # 'P'
+    if (load8(data + pe_offset + 1) != 69) { return 0; }  # 'E'
+    if (load8(data + pe_offset + 2) != 0) { return 0; }
+    if (load8(data + pe_offset + 3) != 0) { return 0; }
+
+    var coff_offset = pe_offset + 4;
+    if (coff_offset + 20 > data_len) { return 0; }
+
+    var pe = pe_info_new();
+
+    # COFF header fields
+    store64(pe, read_u16_le(data, coff_offset));
+    store64(pe + 8, read_u16_le(data, coff_offset + 2));
+    store64(pe + 16, read_u32_le(data, coff_offset + 4));
+    var size_of_opt_hdr = read_u16_le(data, coff_offset + 16);
+    var characteristics = read_u16_le(data, coff_offset + 18);
+
+    store64(pe + 24, 0);
+    if (characteristics & PE_IMAGE_DLL) { store64(pe + 24, 1); }
+
+    # Optional header
+    var opt_offset = coff_offset + 20;
+    store64(pe + 128, opt_offset);
+    store64(pe + 136, size_of_opt_hdr);
+    if (opt_offset + 2 > data_len) { return 0; }
+    var opt_magic = read_u16_le(data, opt_offset);
+
+    if (opt_magic == PE_OPT_MAGIC_64) {
+        store64(pe + 32, 1);
+        if (opt_offset + 24 > data_len) { return 0; }
+        store64(pe + 40, read_u32_le(data, opt_offset + 16));
+        store64(pe + 48, read_u64_le(data, opt_offset + 24));
+    } else {
+        if (opt_magic == PE_OPT_MAGIC_32) {
+            store64(pe + 32, 0);
+            if (opt_offset + 28 > data_len) { return 0; }
+            store64(pe + 40, read_u32_le(data, opt_offset + 16));
+            store64(pe + 48, read_u32_le(data, opt_offset + 28));
+        } else {
+            return 0;  # Unknown optional header magic
+        }
+    }
+
+    # Section table follows optional header
+    var sec_table_offset = opt_offset + size_of_opt_hdr;
+    store64(pe + 56, parse_pe_sections(data, data_len, sec_table_offset, load64(pe + 8)));
+
+    # Rich header (between DOS stub and PE signature)
+    store64(pe + 104, parse_rich_header(data, data_len, pe_offset));
+
+    # Imports, exports, TLS, debug, certificate
+    parse_pe_imports(data, data_len, pe);
+    parse_pe_exports(data, data_len, pe);
+    detect_tls_callbacks(data, data_len, pe);
+    parse_debug_directory(data, data_len, pe);
+    parse_pe_certificate(data, data_len, pe);
+
+    return pe;
+}
+

@@ -1,11 +1,5 @@
-# phylax — Threat detection engine entry point
-# Includes the library and provides the binary entry point
-
-include "src/phylax.cyr"
-
-# ================================================================
-# Entry point — invoke main and exit with its return code
-# ================================================================
+# phylax — Threat detection engine
+include "src/lib.cyr"
 
 var r = main();
 syscall(SYS_EXIT, r);

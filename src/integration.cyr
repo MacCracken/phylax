@@ -1,0 +1,431 @@
+
+# ================================================================
+# Hoosh Client — LLM-assisted triage (synchronous)
+# ================================================================
+
+struct TriageResult {
+    finding_id;      # Str — identifier of the triaged finding
+    classification;  # Str — e.g. "true_positive", "false_positive", "needs_review"
+    confidence;      # i64 — 0..100
+    explanation;     # Str — LLM-generated explanation
+    model;           # Str — model name used
+}
+
+# Build a triage prompt from a finding's details.
+fn build_triage_prompt(finding) {
+    var prompt = str_from("You are a threat analysis assistant. Classify the following security finding.\n\n");
+    prompt = str_cat(prompt, str_from("Rule: "));
+    prompt = str_cat(prompt, load64(finding + 24));
+    prompt = str_cat(prompt, str_from("\n"));
+    prompt = str_cat(prompt, str_from("Severity: "));
+    prompt = str_cat(prompt, severity_name(load64(finding + 16)));
+    prompt = str_cat(prompt, str_from("\n"));
+    prompt = str_cat(prompt, str_from("Category: "));
+    prompt = str_cat(prompt, category_name(load64(finding + 8)));
+    prompt = str_cat(prompt, str_from("\n"));
+    prompt = str_cat(prompt, str_from("Description: "));
+    prompt = str_cat(prompt, load64(finding + 32));
+    prompt = str_cat(prompt, str_from("\n\n"));
+    prompt = str_cat(prompt, str_from("Respond with JSON: {\"classification\": \"true_positive|false_positive|needs_review\", \"confidence\": 0-100, \"explanation\": \"...\"}"));
+    return prompt;
+}
+
+# Parse the LLM response JSON. Falls back to text heuristics if JSON parsing fails.
+fn parse_triage_response(content, finding_id, model) {
+    var result = alloc(40);
+    store64(result, finding_id);
+    store64(result + 32, model);
+
+    # Try JSON parse first
+    var parsed = json_parse(content);
+    if (parsed != 0) {
+        store64(result + 8, map_get(parsed, "classification"));
+        store64(result + 16, map_get(parsed, "confidence"));
+        store64(result + 24, map_get(parsed, "explanation"));
+
+        # Validate classification — default to needs_review if unrecognized
+        if (load64(result + 8) == 0) {
+            store64(result + 8, str_from("needs_review"));
+        }
+        if (load64(result + 16) < 0) { store64(result + 16, 0); }
+        if (load64(result + 16) > 100) { store64(result + 16, 100); }
+        if (load64(result + 24) == 0) {
+            store64(result + 24, str_from("No explanation provided"));
+        }
+        return result;
+    }
+
+    # Fallback: text heuristics
+    store64(result + 16, 50);
+    store64(result + 24, content);
+
+    # Check for keywords in the response
+    if (str_len(content) > 0) {
+        # Simple keyword matching for classification
+        var lower = content;  # Cyrius lacks str_lower; match as-is
+        var has_fp = 0;
+        var has_tp = 0;
+
+        # Check for "false_positive" or "false positive"
+        var parts = str_split(content, str_from("false_positive"));
+        if (vec_len(parts) > 1) { has_fp = 1; }
+        if (has_fp == 0) {
+            parts = str_split(content, str_from("false positive"));
+            if (vec_len(parts) > 1) { has_fp = 1; }
+        }
+
+        # Check for "true_positive" or "true positive"
+        parts = str_split(content, str_from("true_positive"));
+        if (vec_len(parts) > 1) { has_tp = 1; }
+        if (has_tp == 0) {
+            parts = str_split(content, str_from("true positive"));
+            if (vec_len(parts) > 1) { has_tp = 1; }
+        }
+
+        if (has_fp == 1) {
+            store64(result + 8, str_from("false_positive"));
+        } else {
+            if (has_tp == 1) {
+                store64(result + 8, str_from("true_positive"));
+            } else {
+                store64(result + 8, str_from("needs_review"));
+            }
+        }
+    } else {
+        store64(result + 8, str_from("needs_review"));
+    }
+
+    return result;
+}
+
+# Send a finding to Hoosh (OpenAI-compatible endpoint) for LLM triage.
+# Returns a TriageResult, or 0 on network/parse failure.
+fn hoosh_triage_finding(base_url, model, finding) {
+    # Build the chat completion request body
+    var messages = vec_new();
+    var sys_msg = map_new();
+    map_set(sys_msg, "role", str_from("system"));
+    map_set(sys_msg, "content", str_from("You are a cybersecurity threat triage assistant. Respond with valid JSON only."));
+    vec_push(messages, sys_msg);
+
+    var user_msg = map_new();
+    map_set(user_msg, "role", str_from("user"));
+    map_set(user_msg, "content", build_triage_prompt(finding));
+    vec_push(messages, user_msg);
+
+    var body = map_new();
+    map_set(body, "model", model);
+    map_set(body, "messages", messages);
+    map_set(body, "temperature", 0);
+
+    var url = str_cat(base_url, str_from("/v1/chat/completions"));
+    var body_str = json_build(body);
+    var headers = str_from("Content-Type: application/json");
+
+    var resp = http_post(url, body_str, headers);
+    if (resp == 0) {
+        var msg = str_from("hoosh: HTTP request failed");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    # Parse response JSON
+    var resp_obj = json_parse(resp);
+    if (resp_obj == 0) {
+        var msg = str_from("hoosh: failed to parse response");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    # Extract content from choices[0].message.content
+    var choices = map_get(resp_obj, "choices");
+    if (choices == 0) { return 0; }
+    if (vec_len(choices) == 0) { return 0; }
+
+    var choice = vec_get(choices, 0);
+    var message = map_get(choice, "message");
+    if (message == 0) { return 0; }
+
+    var content = map_get(message, "content");
+    if (content == 0) { return 0; }
+
+    var finding_id = str_cat(load64(finding + 24), str_from("-"));
+    finding_id = str_cat(finding_id, str_from_int(load64(finding + 48)));
+
+    return parse_triage_response(content, finding_id, model);
+}
+
+
+# ================================================================
+# Daimon Client — Agent registration (synchronous)
+# ================================================================
+
+# Validate an agent ID: reject path separators and traversal characters.
+fn daimon_validate_agent_id(agent_id) {
+    var len = str_len(agent_id);
+    if (len == 0) { return 0; }
+
+    var data = str_data(agent_id);
+    for (var i = 0; i < len; i = i + 1) {
+        var ch = load8(data + i);
+        if (ch == 0x2F) { return 0; }   # '/'
+        if (ch == 0x5C) { return 0; }   # '\'
+        if (ch == 0x2E) {               # '.'
+            if (i + 1 < len) {
+                if (load8(data + i + 1) == 0x2E) { return 0; }
+            }
+        }
+    }
+    return 1;
+}
+
+# Register this agent with the Daimon orchestrator.
+# Returns the assigned agent_id as a Str, or 0 on failure.
+fn daimon_register(base_url) {
+    var url = str_cat(base_url, str_from("/v1/agents/register"));
+
+    var body = map_new();
+    map_set(body, "name", str_from("phylax"));
+    map_set(body, "version", VERSION);
+
+    var caps = vec_new();
+    vec_push(caps, str_from("file_scan"));
+    vec_push(caps, str_from("yara"));
+    vec_push(caps, str_from("entropy"));
+    vec_push(caps, str_from("pe_parse"));
+    vec_push(caps, str_from("elf_parse"));
+    vec_push(caps, str_from("quarantine"));
+    map_set(body, "capabilities", caps);
+
+    var body_str = json_build(body);
+    var headers = str_from("Content-Type: application/json");
+
+    var resp = http_post(url, body_str, headers);
+    if (resp == 0) {
+        var msg = str_from("daimon: registration failed - no response");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    var resp_obj = json_parse(resp);
+    if (resp_obj == 0) {
+        var msg = str_from("daimon: registration failed - bad response");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    var agent_id = map_get(resp_obj, "agent_id");
+    if (agent_id == 0) {
+        var msg = str_from("daimon: registration failed - no agent_id");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    if (daimon_validate_agent_id(agent_id) == 0) {
+        var msg = str_from("daimon: registration failed - invalid agent_id");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    var msg = str_cat(str_from("daimon: registered as "), agent_id);
+    sakshi_info(str_data(msg), str_len(msg));
+    return agent_id;
+}
+
+# Send a heartbeat to the Daimon orchestrator.
+# Returns 1 on success, 0 on failure.
+fn daimon_heartbeat(base_url, agent_id) {
+    if (daimon_validate_agent_id(agent_id) == 0) {
+        return 0;
+    }
+
+    var url = str_cat(base_url, str_from("/v1/agents/"));
+    url = str_cat(url, agent_id);
+    url = str_cat(url, str_from("/heartbeat"));
+
+    var body = map_new();
+    map_set(body, "status", str_from("active"));
+    map_set(body, "timestamp", clock_epoch_secs());
+
+    var body_str = json_build(body);
+    var headers = str_from("Content-Type: application/json");
+
+    var resp = http_post(url, body_str, headers);
+    if (resp == 0) {
+        var msg = str_from("daimon: heartbeat failed");
+        sakshi_warn(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    return 1;
+}
+
+# Deregister this agent from the Daimon orchestrator.
+# Returns 1 on success, 0 on failure.
+fn daimon_deregister(base_url, agent_id) {
+    if (daimon_validate_agent_id(agent_id) == 0) {
+        return 0;
+    }
+
+    # Daimon expects a DELETE, but Cyrius HTTP only has post/get.
+    # Use POST with _method override as a workaround.
+    var url = str_cat(base_url, str_from("/v1/agents/"));
+    url = str_cat(url, agent_id);
+    url = str_cat(url, str_from("/deregister"));
+
+    var body = map_new();
+    map_set(body, "agent_id", agent_id);
+
+    var body_str = json_build(body);
+    var headers = str_from("Content-Type: application/json");
+
+    var resp = http_post(url, body_str, headers);
+    if (resp == 0) {
+        var msg = str_from("daimon: deregister failed");
+        sakshi_warn(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    var msg = str_cat(str_from("daimon: deregistered "), agent_id);
+    sakshi_info(str_data(msg), str_len(msg));
+    return 1;
+}
+
+
+# ================================================================
+# AI Registration — Constants
+# ================================================================
+
+var AGENT_NAME = 0;
+
+var AGENT_CAPABILITIES = 0;
+# Populated lazily by phylax_ai_capabilities() below.
+
+fn phylax_ai_capabilities() {
+    var caps = vec_new();
+    vec_push(caps, str_from("file_scan"));
+    vec_push(caps, str_from("binary_analysis"));
+    vec_push(caps, str_from("yara_matching"));
+    vec_push(caps, str_from("pe_parsing"));
+    vec_push(caps, str_from("elf_parsing"));
+    vec_push(caps, str_from("entropy_analysis"));
+    vec_push(caps, str_from("string_extraction"));
+    vec_push(caps, str_from("ssdeep_hashing"));
+    vec_push(caps, str_from("tlsh_hashing"));
+    vec_push(caps, str_from("quarantine"));
+    vec_push(caps, str_from("threat_reporting"));
+    return caps;
+}
+
+
+# ================================================================
+# Bote MCP Tool Registration
+# ================================================================
+
+# Handler: phylax_scan — scan a file and return analysis JSON
+fn phylax_scan_handler(args, claims) {
+    var target = json_get(args, "target");
+    if (target == 0) {
+        return str_from("{\"error\":\"missing target parameter\"}");
+    }
+
+    var data_str = phylax_read_file(target);
+    if (data_str == 0) {
+        return str_from("{\"error\":\"failed to read file\"}");
+    }
+
+    var data = str_data(data_str);
+    var dlen = str_len(data_str);
+    var ftype = detect_file_type(data, dlen);
+    var ent = shannon_entropy(data, dlen);
+    var hash = sha256_hex(data, dlen);
+    var suspicious = is_suspicious_entropy(ent);
+
+    var result = str_from("{\"file_type\":\"");
+    result = str_cat(result, filetype_name(ftype));
+    result = str_cat(result, str_from("\",\"sha256\":\""));
+    result = str_cat(result, hash);
+    result = str_cat(result, str_from("\",\"size\":"));
+    result = str_cat(result, str_from_int(dlen));
+    result = str_cat(result, str_from(",\"suspicious_entropy\":"));
+    if (suspicious) { result = str_cat(result, str_from("true")); }
+    else { result = str_cat(result, str_from("false")); }
+    result = str_cat(result, str_from("}"));
+    return result;
+}
+
+# Handler: phylax_status — return engine status JSON
+fn phylax_status_handler(args, claims) {
+    var result = str_from("{\"status\":\"ready\",\"version\":\"");
+    result = str_cat(result, VERSION);
+    result = str_cat(result, str_from("\",\"analyzers\":[\"entropy\",\"magic_bytes\",\"yara\",\"polyglot\",\"pe\",\"elf\",\"strings\",\"ssdeep\",\"tlsh\",\"script\"]}"));
+    return result;
+}
+
+# Build a tool schema JSON string for MCP tool definitions.
+fn phylax_schema_object(props_json, required_json) {
+    var s = str_from("{\"type\":\"object\",\"properties\":");
+    s = str_cat(s, props_json);
+    s = str_cat(s, str_from(",\"required\":"));
+    s = str_cat(s, required_json);
+    s = str_cat(s, str_from("}"));
+    return s;
+}
+
+# Register all phylax MCP tools with a bote registry + dispatcher.
+fn phylax_register_tools(registry, dispatcher) {
+    # phylax_scan — scan a file for threats
+    var scan_schema = phylax_schema_object(
+        str_from("{\"target\":{\"type\":\"string\",\"description\":\"Path to file to scan\"},\"target_type\":{\"type\":\"string\",\"enum\":[\"file\",\"agent\",\"package\",\"memory\"]},\"enable_yara\":{\"type\":\"boolean\"},\"enable_entropy\":{\"type\":\"boolean\"}}"),
+        str_from("[\"target\",\"target_type\"]")
+    );
+    var scan_def = tool_def_new(str_from("phylax_scan"),
+        str_from("Scan a file for threats using YARA rules, entropy analysis, and magic bytes detection"),
+        scan_schema);
+    registry_register(registry, scan_def);
+    dispatcher_handle(dispatcher, str_from("phylax_scan"), &phylax_scan_handler);
+
+    # phylax_rules — list/search/inspect YARA rules
+    var rules_schema = phylax_schema_object(
+        str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"list\",\"search\",\"inspect\"]},\"query\":{\"type\":\"string\",\"description\":\"Search query or rule name\"}}"),
+        str_from("[\"action\"]")
+    );
+    var rules_def = tool_def_new(str_from("phylax_rules"),
+        str_from("List, search, or inspect loaded YARA rules"),
+        rules_schema);
+    registry_register(registry, rules_def);
+
+    # phylax_status — engine status
+    var status_schema = phylax_schema_object(
+        str_from("{\"verbose\":{\"type\":\"boolean\",\"description\":\"Include detailed statistics\"}}"),
+        str_from("[]")
+    );
+    var status_def = tool_def_new(str_from("phylax_status"),
+        str_from("Get the current status of the Phylax threat detection engine"),
+        status_schema);
+    registry_register(registry, status_def);
+    dispatcher_handle(dispatcher, str_from("phylax_status"), &phylax_status_handler);
+
+    # phylax_quarantine — quarantine/release/list
+    var quar_schema = phylax_schema_object(
+        str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"quarantine\",\"release\",\"list\"]},\"target\":{\"type\":\"string\",\"description\":\"Path or quarantine ID\"},\"reason\":{\"type\":\"string\",\"description\":\"Reason for action\"}}"),
+        str_from("[\"action\"]")
+    );
+    var quar_def = tool_def_new(str_from("phylax_quarantine"),
+        str_from("Quarantine or release a file flagged as a threat"),
+        quar_schema);
+    registry_register(registry, quar_def);
+
+    # phylax_report — generate threat report
+    var report_schema = phylax_schema_object(
+        str_from("{\"target\":{\"type\":\"string\",\"description\":\"Specific target to report on\"},\"format\":{\"type\":\"string\",\"enum\":[\"json\",\"markdown\"]}}"),
+        str_from("[]")
+    );
+    var report_def = tool_def_new(str_from("phylax_report"),
+        str_from("Generate a threat report for recent scans"),
+        report_schema);
+    registry_register(registry, report_def);
+
+    return registry;
+}
+

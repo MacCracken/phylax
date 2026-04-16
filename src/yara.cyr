@@ -1,0 +1,1751 @@
+
+# ================================================================
+# ================================================================
+# YARA Engine
+# ================================================================
+# ================================================================
+
+# ================================================================
+# YARA Engine — Constants
+# ================================================================
+
+# Pattern types
+var YARA_PAT_LITERAL = 0;  # Literal byte sequence
+var YARA_PAT_HEX     = 1;  # Hex byte string (e.g. { 4D 5A })
+var YARA_PAT_REGEX   = 2;  # Simplified regex (literal search)
+var YARA_PAT_STRING  = 3;  # ASCII string match
+
+# Condition types
+var YARA_COND_ALL        = 0;  # All patterns must match
+var YARA_COND_ANY        = 1;  # Any pattern matches
+var YARA_COND_AT_LEAST   = 2;  # At least N patterns match
+var YARA_COND_EXPRESSION = 3;  # Complex boolean expression
+
+# Expression node types (for condition tree)
+var YARA_EXPR_AND       = 0;
+var YARA_EXPR_OR        = 1;
+var YARA_EXPR_NOT       = 2;
+var YARA_EXPR_PAT_MATCH = 3;   # Pattern ID matched
+var YARA_EXPR_PAT_AT    = 4;   # Pattern at specific offset
+var YARA_EXPR_PAT_COUNT = 5;   # #pattern comparison
+var YARA_EXPR_FILESIZE  = 6;   # filesize comparison
+var YARA_EXPR_TRUE      = 7;
+var YARA_EXPR_FALSE     = 8;
+var YARA_EXPR_ALL_OF    = 9;   # all of them
+var YARA_EXPR_ANY_OF    = 10;  # any of them
+var YARA_EXPR_N_OF      = 11;  # N of them
+var YARA_EXPR_PE_IS_DLL    = 12;  # pe.is_dll
+var YARA_EXPR_PE_IS_64BIT  = 13;  # pe.is_64bit (pe.is_pe32 negated, pe.is_pe64)
+var YARA_EXPR_PE_MACHINE   = 14;  # pe.machine == <value>
+var YARA_EXPR_ELF_MACHINE  = 15;  # elf.machine == <value>
+var YARA_EXPR_ELF_TYPE     = 16;  # elf.type == <value>
+
+# Comparison operators
+var YARA_CMP_LT = 0;
+var YARA_CMP_LE = 1;
+var YARA_CMP_GT = 2;
+var YARA_CMP_GE = 3;
+var YARA_CMP_EQ = 4;
+var YARA_CMP_NE = 5;
+
+# Match limits
+var YARA_MAX_MATCH_OFFSETS = 4096;
+
+# ================================================================
+# YARA Engine — Hex string parsing
+# ================================================================
+
+# Parse a hex string like "4D5A90" into a byte buffer
+# Returns: ptr to bytes, sets *out_len
+fn parse_hex_pattern(hex_str, out_len_ptr) {
+    var sdata = str_data(hex_str);
+    var slen = str_len(hex_str);
+
+    # First pass: count non-space hex chars
+    var hex_chars = 0;
+    for (var i = 0; i < slen; i = i + 1) {
+        var ch = load8(sdata + i);
+        if (ch != 32) {  # skip spaces
+            if (ch != 123) {  # skip '{'
+                if (ch != 125) {  # skip '}'
+                    hex_chars = hex_chars + 1;
+                }
+            }
+        }
+    }
+
+    if (hex_chars == 0 || (hex_chars & 1) != 0) {
+        store64(out_len_ptr, 0);
+        return 0;
+    }
+
+    var byte_count = hex_chars / 2;
+    var buf = alloc(byte_count);
+    var bi = 0;
+    var hi_nibble = -1;
+
+    for (var i = 0; i < slen; i = i + 1) {
+        var ch = load8(sdata + i);
+        if (ch != 32) {
+            if (ch != 123) {
+                if (ch != 125) {
+                    var val = hex_digit_value(ch);
+                    if (val < 0) {
+                        # Wildcard '?' — treat as 0
+                        if (ch == 63) { val = 0; }
+                        else {
+                            store64(out_len_ptr, 0);
+                            return 0;
+                        }
+                    }
+                    if (hi_nibble < 0) {
+                        hi_nibble = val;
+                    } else {
+                        store8(buf + bi, (hi_nibble << 4) | val);
+                        bi = bi + 1;
+                        hi_nibble = -1;
+                    }
+                }
+            }
+        }
+    }
+
+    store64(out_len_ptr, byte_count);
+    return buf;
+}
+
+# ================================================================
+# YARA Engine — Pattern struct
+# ================================================================
+
+struct YaraPattern {
+    id;         # Str — pattern identifier ($a, $b, etc.)
+    pat_type;   # i64 — YARA_PAT_*
+    data;       # ptr to byte pattern (for literal/hex)
+    data_len;   # i64
+    text;       # Str — original text (for string patterns)
+    nocase;     # i64 (0/1) — case-insensitive
+}
+
+fn yara_pattern_new(id, pat_type) {
+    var p = alloc(48);
+    store64(p, id);
+    store64(p + 8, pat_type);
+    store64(p + 16, 0);
+    store64(p + 24, 0);
+    store64(p + 32, str_from(""));
+    store64(p + 40, 0);
+    return p;
+}
+
+# Create a pattern from a hex string like "4D 5A"
+fn yara_pattern_from_hex(id, hex_str) {
+    var p = yara_pattern_new(id, YARA_PAT_HEX);
+    var len_ptr = alloc(8);
+    var bytes = parse_hex_pattern(hex_str, len_ptr);
+    store64(p + 16, bytes);
+    store64(p + 24, load64(len_ptr));
+    store64(p + 32, hex_str);
+    return p;
+}
+
+# Create a pattern from an ASCII string
+fn yara_pattern_from_string(id, text) {
+    var p = yara_pattern_new(id, YARA_PAT_STRING);
+    var sdata = str_data(text);
+    var slen = str_len(text);
+    var buf = alloc(slen);
+    for (var i = 0; i < slen; i = i + 1) {
+        store8(buf + i, load8(sdata + i));
+    }
+    store64(p + 16, buf);
+    store64(p + 24, slen);
+    store64(p + 32, text);
+    return p;
+}
+
+# Create a pattern from raw bytes
+fn yara_pattern_from_bytes(id, bytes, blen) {
+    var p = yara_pattern_new(id, YARA_PAT_LITERAL);
+    store64(p + 16, bytes);
+    store64(p + 24, blen);
+    return p;
+}
+
+# ================================================================
+# YARA Engine — Pattern matching
+# ================================================================
+
+# Check if pattern matches anywhere in data
+fn yara_pattern_matches(pat, data, data_len) {
+    if (load64(pat + 16) == 0 || load64(pat + 24) == 0) { return 0; }
+    if (load64(pat + 24) > data_len) { return 0; }
+
+    if (load64(pat + 40)) {
+        # Case-insensitive search
+        var plen = load64(pat + 24);
+        var limit = data_len - plen;
+        for (var i = 0; i <= limit; i = i + 1) {
+            var hit = 1;
+            for (var j = 0; j < plen; j = j + 1) {
+                var a = load8(data + i + j);
+                var b = load8(load64(pat + 16) + j);
+                # Lowercase both
+                if (a >= 65) { if (a <= 90) { a = a + 32; } }
+                if (b >= 65) { if (b <= 90) { b = b + 32; } }
+                if (a != b) {
+                    hit = 0;
+                    j = plen;  # break
+                }
+            }
+            if (hit) { return 1; }
+        }
+        return 0;
+    }
+
+    return memmem(data, data_len, load64(pat + 16), load64(pat + 24)) >= 0;
+}
+
+# Find all offsets where pattern matches, capped at YARA_MAX_MATCH_OFFSETS
+# Returns a vec of i64 offsets
+fn yara_pattern_find_offsets(pat, data, data_len) {
+    var offsets = vec_new();
+    if (load64(pat + 16) == 0 || load64(pat + 24) == 0) { return offsets; }
+    if (load64(pat + 24) > data_len) { return offsets; }
+
+    var plen = load64(pat + 24);
+    var pos = 0;
+    var count = 0;
+
+    while (pos + plen <= data_len) {
+        if (count >= YARA_MAX_MATCH_OFFSETS) { return offsets; }
+
+        var found = -1;
+        if (load64(pat + 40)) {
+            # Case-insensitive scan from pos
+            var limit = data_len - plen;
+            for (var i = pos; i <= limit; i = i + 1) {
+                var hit = 1;
+                for (var j = 0; j < plen; j = j + 1) {
+                    var a = load8(data + i + j);
+                    var b = load8(load64(pat + 16) + j);
+                    if (a >= 65) { if (a <= 90) { a = a + 32; } }
+                    if (b >= 65) { if (b <= 90) { b = b + 32; } }
+                    if (a != b) {
+                        hit = 0;
+                        j = plen;  # break
+                    }
+                }
+                if (hit) {
+                    found = i;
+                    i = limit + 1;  # break
+                }
+            }
+        } else {
+            var result = memmem(data + pos, data_len - pos, load64(pat + 16), plen);
+            if (result >= 0) {
+                found = pos + result;
+            }
+        }
+
+        if (found < 0) { return offsets; }
+        vec_push(offsets, found);
+        count = count + 1;
+        pos = found + 1;
+    }
+    return offsets;
+}
+
+# ================================================================
+# YARA Engine — Condition expression tree
+# ================================================================
+
+# ConditionExpr — a node in the expression tree
+# We use a flat struct; the "left" and "right" fields are pointers
+# to other ConditionExpr nodes (or 0 for leaf nodes).
+struct ConditionExpr {
+    node_type;  # i64 — YARA_EXPR_*
+    left;       # ptr to ConditionExpr (or 0)
+    right;      # ptr to ConditionExpr (or 0)
+    pat_index;  # i64 — pattern index (for PAT_MATCH)
+    cmp_op;     # i64 — YARA_CMP_* (for FILESIZE, PAT_COUNT)
+    cmp_value;  # i64 — comparison value
+    n_count;    # i64 — for N_OF
+}
+
+fn cond_expr_new(node_type) {
+    var e = alloc(56);
+    store64(e, node_type);
+    store64(e + 8, 0);
+    store64(e + 16, 0);
+    store64(e + 24, 0);
+    store64(e + 32, YARA_CMP_EQ);
+    store64(e + 40, 0);
+    store64(e + 48, 0);
+    return e;
+}
+
+fn cond_expr_pat(pat_index) {
+    var e = cond_expr_new(YARA_EXPR_PAT_MATCH);
+    store64(e + 24, pat_index);
+    return e;
+}
+
+fn cond_expr_and(left, right) {
+    var e = cond_expr_new(YARA_EXPR_AND);
+    store64(e + 8, left);
+    store64(e + 16, right);
+    return e;
+}
+
+fn cond_expr_or(left, right) {
+    var e = cond_expr_new(YARA_EXPR_OR);
+    store64(e + 8, left);
+    store64(e + 16, right);
+    return e;
+}
+
+fn cond_expr_not(child) {
+    var e = cond_expr_new(YARA_EXPR_NOT);
+    store64(e + 8, child);
+    return e;
+}
+
+fn cond_expr_filesize(cmp_op, value) {
+    var e = cond_expr_new(YARA_EXPR_FILESIZE);
+    store64(e + 32, cmp_op);
+    store64(e + 40, value);
+    return e;
+}
+
+fn cond_expr_all_of() {
+    return cond_expr_new(YARA_EXPR_ALL_OF);
+}
+
+fn cond_expr_any_of() {
+    return cond_expr_new(YARA_EXPR_ANY_OF);
+}
+
+fn cond_expr_n_of(n) {
+    var e = cond_expr_new(YARA_EXPR_N_OF);
+    store64(e + 48, n);
+    return e;
+}
+
+fn cond_expr_pe_is_dll() {
+    return cond_expr_new(YARA_EXPR_PE_IS_DLL);
+}
+
+fn cond_expr_pe_is_64bit() {
+    return cond_expr_new(YARA_EXPR_PE_IS_64BIT);
+}
+
+fn cond_expr_pe_machine(cmp_op, value) {
+    var e = cond_expr_new(YARA_EXPR_PE_MACHINE);
+    store64(e + 32, cmp_op);
+    store64(e + 40, value);
+    return e;
+}
+
+fn cond_expr_elf_machine(cmp_op, value) {
+    var e = cond_expr_new(YARA_EXPR_ELF_MACHINE);
+    store64(e + 32, cmp_op);
+    store64(e + 40, value);
+    return e;
+}
+
+fn cond_expr_elf_type(cmp_op, value) {
+    var e = cond_expr_new(YARA_EXPR_ELF_TYPE);
+    store64(e + 32, cmp_op);
+    store64(e + 40, value);
+    return e;
+}
+
+# ================================================================
+# YARA Engine — Condition evaluation
+# ================================================================
+
+# match_info: vec of i64 (0/1) indicating which patterns matched
+# data_len: file size for filesize comparisons
+# pe_info: PeInfo ptr (or 0 if not a PE file)
+# elf_info: ElfInfo ptr (or 0 if not an ELF file)
+fn eval_condition(expr, match_info, data_len, pe_info, elf_info) {
+    if (expr == 0) { return 0; }
+
+    var t = load64(expr);
+
+    if (t == YARA_EXPR_TRUE)  { return 1; }
+    if (t == YARA_EXPR_FALSE) { return 0; }
+
+    if (t == YARA_EXPR_PAT_MATCH) {
+        var idx = load64(expr + 24);
+        if (idx >= 0) {
+            if (idx < vec_len(match_info)) {
+                return vec_get(match_info, idx);
+            }
+        }
+        return 0;
+    }
+
+    if (t == YARA_EXPR_AND) {
+        if (eval_condition(load64(expr + 8), match_info, data_len, pe_info, elf_info) == 0) { return 0; }
+        return eval_condition(load64(expr + 16), match_info, data_len, pe_info, elf_info);
+    }
+
+    if (t == YARA_EXPR_OR) {
+        if (eval_condition(load64(expr + 8), match_info, data_len, pe_info, elf_info)) { return 1; }
+        return eval_condition(load64(expr + 16), match_info, data_len, pe_info, elf_info);
+    }
+
+    if (t == YARA_EXPR_NOT) {
+        if (eval_condition(load64(expr + 8), match_info, data_len, pe_info, elf_info) == 0) { return 1; }
+        return 0;
+    }
+
+    if (t == YARA_EXPR_FILESIZE) {
+        return cmp_eval(load64(expr + 32), data_len, load64(expr + 40));
+    }
+
+    if (t == YARA_EXPR_ALL_OF) {
+        var n = vec_len(match_info);
+        for (var i = 0; i < n; i = i + 1) {
+            if (vec_get(match_info, i) == 0) { return 0; }
+        }
+        return 1;
+    }
+
+    if (t == YARA_EXPR_ANY_OF) {
+        var n = vec_len(match_info);
+        for (var i = 0; i < n; i = i + 1) {
+            if (vec_get(match_info, i)) { return 1; }
+        }
+        return 0;
+    }
+
+    if (t == YARA_EXPR_N_OF) {
+        var matched = 0;
+        var n = vec_len(match_info);
+        for (var i = 0; i < n; i = i + 1) {
+            if (vec_get(match_info, i)) { matched = matched + 1; }
+        }
+        return matched >= load64(expr + 48);
+    }
+
+    if (t == YARA_EXPR_PAT_COUNT) {
+        # Compare count of pattern matches
+        var idx = load64(expr + 24);
+        var count = 0;
+        if (idx >= 0) {
+            if (idx < vec_len(match_info)) {
+                count = vec_get(match_info, idx);
+            }
+        }
+        return cmp_eval(load64(expr + 32), count, load64(expr + 40));
+    }
+
+    # PE module conditions
+    if (t == YARA_EXPR_PE_IS_DLL) {
+        if (pe_info == 0) { return 0; }
+        return load64(pe_info + 24);  # PeInfo.is_dll at offset +24
+    }
+
+    if (t == YARA_EXPR_PE_IS_64BIT) {
+        if (pe_info == 0) { return 0; }
+        return load64(pe_info + 32);  # PeInfo.is_64bit at offset +32
+    }
+
+    if (t == YARA_EXPR_PE_MACHINE) {
+        if (pe_info == 0) { return 0; }
+        return cmp_eval(load64(expr + 32), load64(pe_info), load64(expr + 40));  # PeInfo.machine at offset +0
+    }
+
+    # ELF module conditions
+    if (t == YARA_EXPR_ELF_MACHINE) {
+        if (elf_info == 0) { return 0; }
+        return cmp_eval(load64(expr + 32), load64(elf_info + 32), load64(expr + 40));  # ElfInfo.machine at offset +32
+    }
+
+    if (t == YARA_EXPR_ELF_TYPE) {
+        if (elf_info == 0) { return 0; }
+        return cmp_eval(load64(expr + 32), load64(elf_info + 24), load64(expr + 40));  # ElfInfo.file_type at offset +24
+    }
+
+    return 0;
+}
+
+# Generic comparison evaluator
+fn cmp_eval(op, lhs, rhs) {
+    if (op == YARA_CMP_LT) { return lhs < rhs; }
+    if (op == YARA_CMP_LE) { return lhs <= rhs; }
+    if (op == YARA_CMP_GT) { return lhs > rhs; }
+    if (op == YARA_CMP_GE) { return lhs >= rhs; }
+    if (op == YARA_CMP_EQ) { return lhs == rhs; }
+    if (op == YARA_CMP_NE) { return lhs != rhs; }
+    return 0;
+}
+
+# ================================================================
+# YARA Engine — Rule struct
+# ================================================================
+
+struct YaraConstraints {
+    min_file_size; # i64 (0 = no constraint)
+    max_file_size; # i64 (0 = no constraint)
+    at_offset;     # i64 (-1 = no constraint)
+}
+
+fn yara_constraints_new() {
+    var c = alloc(24);
+    store64(c, 0);
+    store64(c + 8, 0);
+    store64(c + 16, -1);
+    return c;
+}
+
+struct YaraRule {
+    name;         # Str — rule name
+    description;  # Str
+    severity;     # i64 — SEVERITY_*
+    tags;         # Vec of Str
+    patterns;     # Vec of YaraPattern
+    cond_type;    # i64 — YARA_COND_*
+    cond_expr;    # ConditionExpr ptr (for EXPRESSION type)
+    cond_count;   # i64 — for AT_LEAST
+    constraints;  # YaraConstraints
+}
+
+fn yara_rule_new(name) {
+    var r = alloc(72);
+    store64(r, name);
+    store64(r + 8, str_from(""));
+    store64(r + 16, SEVERITY_MEDIUM);
+    store64(r + 24, vec_new());
+    store64(r + 32, vec_new());
+    store64(r + 40, YARA_COND_ALL);
+    store64(r + 48, 0);
+    store64(r + 56, 0);
+    store64(r + 64, yara_constraints_new());
+    return r;
+}
+
+# ================================================================
+# YARA Engine — Rule matching
+# ================================================================
+
+# Check if a single rule matches against data
+# Returns: 1 if rule fires, 0 otherwise
+# pe_info/elf_info: parsed module data (0 if not applicable)
+fn yara_rule_matches(rule, data, data_len, pe_info, elf_info) {
+    # Check constraints first
+    var c = load64(rule + 64);
+    if (load64(c) > 0) {
+        if (data_len < load64(c)) { return 0; }
+    }
+    if (load64(c + 8) > 0) {
+        if (data_len > load64(c + 8)) { return 0; }
+    }
+
+    var npats = vec_len(load64(rule + 32));
+    if (npats == 0) {
+        # No patterns — condition might be filesize-only or module-only
+        if (load64(rule + 40) == YARA_COND_EXPRESSION) {
+            if (load64(rule + 48) != 0) {
+                var empty_info = vec_new();
+                return eval_condition(load64(rule + 48), empty_info, data_len, pe_info, elf_info);
+            }
+        }
+        return 0;
+    }
+
+    # Build match info — which patterns matched
+    var match_info = vec_new();
+    var total_matched = 0;
+    for (var i = 0; i < npats; i = i + 1) {
+        var pat = vec_get(load64(rule + 32), i);
+        var matched = 0;
+
+        if (load64(c + 16) >= 0) {
+            # Pattern must match at specific offset
+            if (load64(c + 16) + load64(pat + 24) <= data_len) {
+                if (load64(pat + 16) != 0) {
+                    var m = 1;
+                    for (var j = 0; j < load64(pat + 24); j = j + 1) {
+                        if (load8(data + load64(c + 16) + j) != load8(load64(pat + 16) + j)) {
+                            m = 0;
+                            j = load64(pat + 24);  # break
+                        }
+                    }
+                    matched = m;
+                }
+            }
+        } else {
+            matched = yara_pattern_matches(pat, data, data_len);
+        }
+
+        vec_push(match_info, matched);
+        if (matched) { total_matched = total_matched + 1; }
+    }
+
+    # Evaluate condition
+    if (load64(rule + 40) == YARA_COND_ALL) {
+        return total_matched == npats;
+    }
+    if (load64(rule + 40) == YARA_COND_ANY) {
+        return total_matched > 0;
+    }
+    if (load64(rule + 40) == YARA_COND_AT_LEAST) {
+        return total_matched >= load64(rule + 56);
+    }
+    if (load64(rule + 40) == YARA_COND_EXPRESSION) {
+        if (load64(rule + 48) != 0) {
+            return eval_condition(load64(rule + 48), match_info, data_len, pe_info, elf_info);
+        }
+    }
+
+    return 0;
+}
+
+# ================================================================
+# YARA Engine — Finding from rule match
+# ================================================================
+
+struct YaraFinding {
+    rule_name;   # Str
+    description; # Str
+    severity;    # i64
+    tags;        # Vec of Str
+    offsets;     # Vec of i64 — where patterns matched
+}
+
+fn yara_finding_new(rule) {
+    var f = alloc(40);
+    store64(f, load64(rule));
+    store64(f + 8, load64(rule + 8));
+    store64(f + 16, load64(rule + 16));
+    store64(f + 24, load64(rule + 24));
+    store64(f + 32, vec_new());
+    return f;
+}
+
+# ================================================================
+# YARA Engine — Engine struct
+# ================================================================
+
+struct YaraEngine {
+    rules;  # Vec of YaraRule
+}
+
+fn yara_engine_new() {
+    var e = alloc(8);
+    store64(e, vec_new());
+    return e;
+}
+
+fn yara_engine_add_rule(engine, rule) {
+    vec_push(load64(engine), rule);
+}
+
+fn yara_engine_rule_count(engine) {
+    return vec_len(load64(engine));
+}
+
+# Scan data against all loaded rules
+# Returns a vec of YaraFinding
+fn yara_engine_scan(engine, data, data_len) {
+    var findings = vec_new();
+    var nrules = vec_len(load64(engine));
+
+    # Parse PE/ELF module data for condition evaluation
+    var pe_info = 0;
+    var elf_info = 0;
+    var ft = detect_file_type(data, data_len);
+    if (ft == FILETYPE_PE) {
+        pe_info = parse_pe(data, data_len);
+    }
+    if (ft == FILETYPE_ELF) {
+        elf_info = parse_elf(data, data_len);
+    }
+
+    for (var i = 0; i < nrules; i = i + 1) {
+        var rule = vec_get(load64(engine), i);
+        if (yara_rule_matches(rule, data, data_len, pe_info, elf_info)) {
+            var finding = yara_finding_new(rule);
+
+            # Collect match offsets for the first matching pattern
+            var npats = vec_len(load64(rule + 32));
+            for (var j = 0; j < npats; j = j + 1) {
+                var pat = vec_get(load64(rule + 32), j);
+                if (yara_pattern_matches(pat, data, data_len)) {
+                    var offsets = yara_pattern_find_offsets(pat, data, data_len);
+                    store64(finding + 32, offsets);
+                    j = npats;  # break — use first matching pattern's offsets
+                }
+            }
+
+            vec_push(findings, finding);
+        }
+    }
+    return findings;
+}
+
+# ================================================================
+# YARA Engine — TOML rule loading
+# ================================================================
+
+# Load rules from a TOML string
+# Expected format:
+#   [[rules]]
+#   name = "SuspiciousMZ"
+#   description = "Detects MZ header"
+#   severity = "high"
+#   tags = ["pe", "executable"]
+#   condition = "all"
+#
+#   [[rules.patterns]]
+#   id = "$mz"
+#   type = "hex"
+#   value = "4D 5A"
+fn yara_engine_load_rules_toml(engine, toml_str) {
+    var sections = toml_parse(toml_str);
+    if (sections == 0) { return Err(ERR_RULE_PARSE); }
+
+    # Walk all sections in order. [[rule]] starts a new rule,
+    # [[rule.patterns]] adds a pattern to the current rule.
+    var nsections = vec_len(sections);
+    var current_rule = 0;
+    var nrules = 0;
+    var pat_idx = 0;
+
+    for (var i = 0; i < nsections; i = i + 1) {
+        var sec = vec_get(sections, i);
+        var sec_name = toml_section_name(sec);
+        var pairs = toml_section_pairs(sec);
+
+        if (str_eq(sec_name, str_from("rule"))) {
+            # Commit previous rule if any
+            if (current_rule != 0) {
+                yara_engine_add_rule(engine, current_rule);
+                nrules = nrules + 1;
+            }
+
+            var name = toml_get(pairs, str_from("name"));
+            if (name == 0) { name = str_from("unnamed"); }
+
+            current_rule = yara_rule_new(name);
+            pat_idx = 0;
+
+            var desc = toml_get(pairs, str_from("description"));
+            if (desc != 0) { store64(current_rule + 8, desc); }
+
+            # Parse severity
+            var sev_str = toml_get(pairs, str_from("severity"));
+            if (sev_str != 0) {
+                store64(current_rule + 16, parse_severity_str(sev_str));
+            }
+
+            # Parse tags — comma-separated in the flat TOML value
+            var tags_str = toml_get(pairs, str_from("tags"));
+            if (tags_str != 0) {
+                var tag_parts = str_split(tags_str, str_from(","));
+                var ntags = vec_len(tag_parts);
+                for (var t = 0; t < ntags; t = t + 1) {
+                    var tag = str_trim(vec_get(tag_parts, t));
+                    if (str_len(tag) > 0) {
+                        vec_push(load64(current_rule + 24), tag);
+                    }
+                }
+            }
+
+            # Parse condition
+            var cond_str = toml_get(pairs, str_from("condition"));
+            if (cond_str != 0) {
+                if (str_eq(cond_str, str_from("all"))) {
+                    store64(current_rule + 40, YARA_COND_ALL);
+                } else {
+                    if (str_eq(cond_str, str_from("any"))) {
+                        store64(current_rule + 40, YARA_COND_ANY);
+                    }
+                }
+            }
+
+            var cond_count_str = toml_get(pairs, str_from("condition_count"));
+            if (cond_count_str != 0) {
+                var cond_count = str_to_int(cond_count_str);
+                if (cond_count > 0) {
+                    store64(current_rule + 40, YARA_COND_AT_LEAST);
+                    store64(current_rule + 56, cond_count);
+                }
+            }
+
+            # Parse constraints
+            var min_size_str = toml_get(pairs, str_from("min_file_size"));
+            if (min_size_str != 0) {
+                var min_size = str_to_int(min_size_str);
+                if (min_size > 0) { store64(load64(current_rule + 64), min_size); }
+            }
+            var max_size_str = toml_get(pairs, str_from("max_file_size"));
+            if (max_size_str != 0) {
+                var max_size = str_to_int(max_size_str);
+                if (max_size > 0) { store64(load64(current_rule + 64) + 8, max_size); }
+            }
+            var at_off_str = toml_get(pairs, str_from("at_offset"));
+            if (at_off_str != 0) {
+                var at_off = str_to_int(at_off_str);
+                if (at_off >= 0) { store64(load64(current_rule + 64) + 16, at_off); }
+            }
+        } else {
+            if (str_eq(sec_name, str_from("rule.patterns"))) {
+                # Pattern subsection — attach to current rule
+                if (current_rule == 0) {
+                    sakshi_warn("rule.patterns section without preceding rule", 48);
+                } else {
+                    var pid = toml_get(pairs, str_from("id"));
+                    if (pid == 0) { pid = str_cat(str_from("$p"), str_from_int(pat_idx)); }
+                    pat_idx = pat_idx + 1;
+                    var ptype = toml_get(pairs, str_from("type"));
+                    var pval = toml_get(pairs, str_from("value"));
+                    if (pval != 0) {
+                        var pat = 0;
+                        if (ptype != 0) {
+                            if (str_eq(ptype, str_from("hex"))) {
+                                pat = yara_pattern_from_hex(pid, pval);
+                            } else {
+                                if (str_eq(ptype, str_from("string"))) {
+                                    pat = yara_pattern_from_string(pid, pval);
+                                } else {
+                                    pat = yara_pattern_from_string(pid, pval);
+                                }
+                            }
+                        } else {
+                            pat = yara_pattern_from_string(pid, pval);
+                        }
+
+                        # Check nocase flag
+                        var nocase_str = toml_get(pairs, str_from("nocase"));
+                        if (nocase_str != 0) {
+                            var nocase = str_to_int(nocase_str);
+                            if (nocase) { store64(pat + 40, 1); }
+                        }
+
+                        vec_push(load64(current_rule + 32), pat);
+                    }
+                }
+            }
+        }
+    }
+
+    # Commit the last rule
+    if (current_rule != 0) {
+        yara_engine_add_rule(engine, current_rule);
+        nrules = nrules + 1;
+    }
+
+    if (nrules == 0) { return Err(ERR_RULE_PARSE); }
+    return Ok(nrules);
+}
+
+# Helper: parse severity string to constant
+fn parse_severity_str(s) {
+    if (str_eq(s, str_from("critical"))) { return SEVERITY_CRITICAL; }
+    if (str_eq(s, str_from("CRITICAL"))) { return SEVERITY_CRITICAL; }
+    if (str_eq(s, str_from("high")))     { return SEVERITY_HIGH; }
+    if (str_eq(s, str_from("HIGH")))     { return SEVERITY_HIGH; }
+    if (str_eq(s, str_from("medium")))   { return SEVERITY_MEDIUM; }
+    if (str_eq(s, str_from("MEDIUM")))   { return SEVERITY_MEDIUM; }
+    if (str_eq(s, str_from("low")))      { return SEVERITY_LOW; }
+    if (str_eq(s, str_from("LOW")))      { return SEVERITY_LOW; }
+    if (str_eq(s, str_from("info")))     { return SEVERITY_INFO; }
+    if (str_eq(s, str_from("INFO")))     { return SEVERITY_INFO; }
+    return SEVERITY_MEDIUM;
+}
+
+# Parse severity from cstr (CLI argument). Case-insensitive via str_lower.
+# Returns SEVERITY_INFO as default if null or unrecognized.
+fn parse_severity(s) {
+    if (s == 0) { return SEVERITY_INFO; }
+    var low = str_lower(str_from(s));
+    if (str_eq(low, str_from("critical"))) { return SEVERITY_CRITICAL; }
+    if (str_eq(low, str_from("high")))     { return SEVERITY_HIGH; }
+    if (str_eq(low, str_from("medium")))   { return SEVERITY_MEDIUM; }
+    if (str_eq(low, str_from("low")))      { return SEVERITY_LOW; }
+    return SEVERITY_INFO;
+}
+
+# ================================================================
+# YARA Parser — .yar syntax lexer
+# ================================================================
+
+# Token types
+var YAR_TOK_EOF        = 0;
+var YAR_TOK_RULE       = 1;   # "rule" keyword
+var YAR_TOK_STRINGS    = 2;   # "strings:" keyword
+var YAR_TOK_CONDITION  = 3;   # "condition:" keyword
+var YAR_TOK_IMPORT     = 4;   # "import" keyword
+var YAR_TOK_LBRACE     = 5;   # {
+var YAR_TOK_RBRACE     = 6;   # }
+var YAR_TOK_LPAREN     = 7;   # (
+var YAR_TOK_RPAREN     = 8;   # )
+var YAR_TOK_EQ         = 9;   # =
+var YAR_TOK_COLON      = 10;  # :
+var YAR_TOK_DOLLAR     = 11;  # $identifier
+var YAR_TOK_STRING_LIT = 12;  # "..."
+var YAR_TOK_HEX_BLOCK  = 13;  # { 4D 5A ... }
+var YAR_TOK_IDENT      = 14;  # identifier
+var YAR_TOK_NUMBER     = 15;  # integer literal
+var YAR_TOK_AND        = 16;  # "and"
+var YAR_TOK_OR         = 17;  # "or"
+var YAR_TOK_NOT        = 18;  # "not"
+var YAR_TOK_ALL        = 19;  # "all"
+var YAR_TOK_ANY        = 20;  # "any"
+var YAR_TOK_OF         = 21;  # "of"
+var YAR_TOK_THEM       = 22;  # "them"
+var YAR_TOK_FILESIZE   = 23;  # "filesize"
+var YAR_TOK_LT         = 24;  # <
+var YAR_TOK_GT         = 25;  # >
+var YAR_TOK_LE         = 26;  # <=
+var YAR_TOK_GE         = 27;  # >=
+var YAR_TOK_EQEQ       = 28;  # ==
+var YAR_TOK_NE         = 29;  # !=
+var YAR_TOK_META       = 30;  # "meta:" keyword
+var YAR_TOK_TRUE       = 31;  # "true"
+var YAR_TOK_FALSE      = 32;  # "false"
+var YAR_TOK_AT         = 33;  # "at"
+var YAR_TOK_DOT        = 34;  # "."
+
+# Lexer state
+struct YarLexer {
+    src;    # Str — source text
+    pos;    # i64 — current position
+    len;    # i64 — source length
+    sdata;  # ptr — raw source bytes
+}
+
+fn yar_lexer_new(src) {
+    var l = alloc(32);
+    store64(l, src);
+    store64(l + 8, 0);
+    store64(l + 16, str_len(src));
+    store64(l + 24, str_data(src));
+    return l;
+}
+
+# Skip whitespace and comments
+fn yar_skip_ws(lex) {
+    while (load64(lex + 8) < load64(lex + 16)) {
+        var ch = load8(load64(lex + 24) + load64(lex + 8));
+        if (ch == 32 || ch == 9 || ch == 10 || ch == 13) {
+            store64(lex + 8, load64(lex + 8) + 1);
+        } else {
+            if (ch == 47) {  # '/'
+                if (load64(lex + 8) + 1 < load64(lex + 16)) {
+                    var next = load8(load64(lex + 24) + load64(lex + 8) + 1);
+                    if (next == 47) {
+                        # // line comment
+                        store64(lex + 8, load64(lex + 8) + 2);
+                        while (load64(lex + 8) < load64(lex + 16)) {
+                            if (load8(load64(lex + 24) + load64(lex + 8)) == 10) {
+                                store64(lex + 8, load64(lex + 8) + 1);
+                                store64(lex + 8, load64(lex + 8));  # continue outer
+                                return yar_skip_ws(lex);  # restart
+                            }
+                            store64(lex + 8, load64(lex + 8) + 1);
+                        }
+                    } else {
+                        if (next == 42) {
+                            # /* block comment */
+                            store64(lex + 8, load64(lex + 8) + 2);
+                            while (load64(lex + 8) + 1 < load64(lex + 16)) {
+                                if (load8(load64(lex + 24) + load64(lex + 8)) == 42) {
+                                    if (load8(load64(lex + 24) + load64(lex + 8) + 1) == 47) {
+                                        store64(lex + 8, load64(lex + 8) + 2);
+                                        return yar_skip_ws(lex);  # restart
+                                    }
+                                }
+                                store64(lex + 8, load64(lex + 8) + 1);
+                            }
+                        } else {
+                            return 0;  # not a comment
+                        }
+                    }
+                } else {
+                    return 0;
+                }
+            } else {
+                return 0;
+            }
+        }
+    }
+}
+
+# Token struct
+struct YarToken {
+    tok_type;  # i64 — YAR_TOK_*
+    value;     # Str — text value
+    num_val;   # i64 — numeric value (for NUMBER)
+}
+
+fn yar_token_new(tok_type, value) {
+    var t = alloc(24);
+    store64(t, tok_type);
+    store64(t + 8, value);
+    store64(t + 16, 0);
+    return t;
+}
+
+fn yar_is_alpha(ch) {
+    if (ch >= 65) { if (ch <= 90)  { return 1; } }
+    if (ch >= 97) { if (ch <= 122) { return 1; } }
+    if (ch == 95) { return 1; }  # '_'
+    return 0;
+}
+
+fn yar_is_alnum(ch) {
+    if (yar_is_alpha(ch)) { return 1; }
+    if (ch >= 48) { if (ch <= 57) { return 1; } }
+    return 0;
+}
+
+fn yar_is_digit(ch) {
+    if (ch >= 48) { if (ch <= 57) { return 1; } }
+    return 0;
+}
+
+# Read next token
+fn yar_next_token(lex) {
+    yar_skip_ws(lex);
+    if (load64(lex + 8) >= load64(lex + 16)) {
+        return yar_token_new(YAR_TOK_EOF, str_from(""));
+    }
+
+    var ch = load8(load64(lex + 24) + load64(lex + 8));
+
+    # Single-character tokens
+    if (ch == 123) { store64(lex + 8, load64(lex + 8) + 1); return yar_token_new(YAR_TOK_LBRACE, str_from("{")); }
+    if (ch == 125) { store64(lex + 8, load64(lex + 8) + 1); return yar_token_new(YAR_TOK_RBRACE, str_from("}")); }
+    if (ch == 40)  { store64(lex + 8, load64(lex + 8) + 1); return yar_token_new(YAR_TOK_LPAREN, str_from("(")); }
+    if (ch == 41)  { store64(lex + 8, load64(lex + 8) + 1); return yar_token_new(YAR_TOK_RPAREN, str_from(")")); }
+    if (ch == 58)  { store64(lex + 8, load64(lex + 8) + 1); return yar_token_new(YAR_TOK_COLON, str_from(":")); }
+    if (ch == 46)  { store64(lex + 8, load64(lex + 8) + 1); return yar_token_new(YAR_TOK_DOT, str_from(".")); }
+
+    # Two-char operators
+    if (ch == 60) {  # '<'
+        if (load64(lex + 8) + 1 < load64(lex + 16)) {
+            if (load8(load64(lex + 24) + load64(lex + 8) + 1) == 61) {
+                store64(lex + 8, load64(lex + 8) + 2);
+                return yar_token_new(YAR_TOK_LE, str_from("<="));
+            }
+        }
+        store64(lex + 8, load64(lex + 8) + 1);
+        return yar_token_new(YAR_TOK_LT, str_from("<"));
+    }
+    if (ch == 62) {  # '>'
+        if (load64(lex + 8) + 1 < load64(lex + 16)) {
+            if (load8(load64(lex + 24) + load64(lex + 8) + 1) == 61) {
+                store64(lex + 8, load64(lex + 8) + 2);
+                return yar_token_new(YAR_TOK_GE, str_from(">="));
+            }
+        }
+        store64(lex + 8, load64(lex + 8) + 1);
+        return yar_token_new(YAR_TOK_GT, str_from(">"));
+    }
+    if (ch == 61) {  # '='
+        if (load64(lex + 8) + 1 < load64(lex + 16)) {
+            if (load8(load64(lex + 24) + load64(lex + 8) + 1) == 61) {
+                store64(lex + 8, load64(lex + 8) + 2);
+                return yar_token_new(YAR_TOK_EQEQ, str_from("=="));
+            }
+        }
+        store64(lex + 8, load64(lex + 8) + 1);
+        return yar_token_new(YAR_TOK_EQ, str_from("="));
+    }
+    if (ch == 33) {  # '!'
+        if (load64(lex + 8) + 1 < load64(lex + 16)) {
+            if (load8(load64(lex + 24) + load64(lex + 8) + 1) == 61) {
+                store64(lex + 8, load64(lex + 8) + 2);
+                return yar_token_new(YAR_TOK_NE, str_from("!="));
+            }
+        }
+        # standalone '!' is handled as NOT in parsing
+        store64(lex + 8, load64(lex + 8) + 1);
+        return yar_token_new(YAR_TOK_NOT, str_from("!"));
+    }
+
+    # $ pattern identifier
+    if (ch == 36) {  # '$'
+        store64(lex + 8, load64(lex + 8) + 1);
+        var start = load64(lex + 8);
+        while (load64(lex + 8) < load64(lex + 16)) {
+            if (yar_is_alnum(load8(load64(lex + 24) + load64(lex + 8)))) {
+                store64(lex + 8, load64(lex + 8) + 1);
+            } else {
+                store64(lex + 8, load64(lex + 8));  # stop
+                var id_len = load64(lex + 8) - start;
+                var id = str_from("$");
+                if (id_len > 0) {
+                    id = str_cat(str_from("$"), str_substr(load64(lex), start, id_len));
+                }
+                return yar_token_new(YAR_TOK_DOLLAR, id);
+            }
+        }
+        var id_len = load64(lex + 8) - start;
+        var id = str_cat(str_from("$"), str_substr(load64(lex), start, id_len));
+        return yar_token_new(YAR_TOK_DOLLAR, id);
+    }
+
+    # String literal "..."
+    if (ch == 34) {  # '"'
+        store64(lex + 8, load64(lex + 8) + 1);
+        var start = load64(lex + 8);
+        while (load64(lex + 8) < load64(lex + 16)) {
+            var c = load8(load64(lex + 24) + load64(lex + 8));
+            if (c == 34) {
+                var sval = str_substr(load64(lex), start, load64(lex + 8) - start);
+                store64(lex + 8, load64(lex + 8) + 1);  # skip closing quote
+                return yar_token_new(YAR_TOK_STRING_LIT, sval);
+            }
+            if (c == 92) {  # backslash escape
+                store64(lex + 8, load64(lex + 8) + 2);
+            } else {
+                store64(lex + 8, load64(lex + 8) + 1);
+            }
+        }
+        # Unterminated string
+        var sval = str_substr(load64(lex), start, load64(lex + 8) - start);
+        return yar_token_new(YAR_TOK_STRING_LIT, sval);
+    }
+
+    # Number literal
+    if (yar_is_digit(ch)) {
+        var start = load64(lex + 8);
+        var val = 0;
+        # Check for hex prefix 0x
+        if (ch == 48) {
+            if (load64(lex + 8) + 1 < load64(lex + 16)) {
+                var nx = load8(load64(lex + 24) + load64(lex + 8) + 1);
+                if (nx == 120 || nx == 88) {  # 'x' or 'X'
+                    store64(lex + 8, load64(lex + 8) + 2);
+                    while (load64(lex + 8) < load64(lex + 16)) {
+                        var d = hex_digit_value(load8(load64(lex + 24) + load64(lex + 8)));
+                        if (d < 0) {
+                            var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+                            store64(tok + 16, val);
+                            return tok;
+                        }
+                        val = (val << 4) | d;
+                        store64(lex + 8, load64(lex + 8) + 1);
+                    }
+                    var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+                    store64(tok + 16, val);
+                    return tok;
+                }
+            }
+        }
+        while (load64(lex + 8) < load64(lex + 16)) {
+            var d = load8(load64(lex + 24) + load64(lex + 8));
+            if (d >= 48) {
+                if (d <= 57) {
+                    val = val * 10 + (d - 48);
+                    store64(lex + 8, load64(lex + 8) + 1);
+                } else {
+                    var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+                    store64(tok + 16, val);
+                    return tok;
+                }
+            } else {
+                var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+                store64(tok + 16, val);
+                return tok;
+            }
+        }
+        # Handle suffix multipliers (KB, MB)
+        var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+        store64(tok + 16, val);
+        return tok;
+    }
+
+    # Identifier or keyword
+    if (yar_is_alpha(ch)) {
+        var start = load64(lex + 8);
+        while (load64(lex + 8) < load64(lex + 16)) {
+            if (yar_is_alnum(load8(load64(lex + 24) + load64(lex + 8)))) {
+                store64(lex + 8, load64(lex + 8) + 1);
+            } else {
+                store64(lex + 8, load64(lex + 8));
+                var word = str_substr(load64(lex), start, load64(lex + 8) - start);
+                return yar_classify_keyword(word);
+            }
+        }
+        var word = str_substr(load64(lex), start, load64(lex + 8) - start);
+        return yar_classify_keyword(word);
+    }
+
+    # Unknown character — skip
+    store64(lex + 8, load64(lex + 8) + 1);
+    return yar_token_new(YAR_TOK_IDENT, str_from("?"));
+}
+
+# Classify an identifier as a keyword or plain identifier
+fn yar_classify_keyword(word) {
+    if (str_eq(word, str_from("rule")))      { return yar_token_new(YAR_TOK_RULE, word); }
+    if (str_eq(word, str_from("strings")))   { return yar_token_new(YAR_TOK_STRINGS, word); }
+    if (str_eq(word, str_from("condition"))) { return yar_token_new(YAR_TOK_CONDITION, word); }
+    if (str_eq(word, str_from("import")))    { return yar_token_new(YAR_TOK_IMPORT, word); }
+    if (str_eq(word, str_from("meta")))      { return yar_token_new(YAR_TOK_META, word); }
+    if (str_eq(word, str_from("and")))       { return yar_token_new(YAR_TOK_AND, word); }
+    if (str_eq(word, str_from("or")))        { return yar_token_new(YAR_TOK_OR, word); }
+    if (str_eq(word, str_from("not")))       { return yar_token_new(YAR_TOK_NOT, word); }
+    if (str_eq(word, str_from("all")))       { return yar_token_new(YAR_TOK_ALL, word); }
+    if (str_eq(word, str_from("any")))       { return yar_token_new(YAR_TOK_ANY, word); }
+    if (str_eq(word, str_from("of")))        { return yar_token_new(YAR_TOK_OF, word); }
+    if (str_eq(word, str_from("them")))      { return yar_token_new(YAR_TOK_THEM, word); }
+    if (str_eq(word, str_from("filesize")))  { return yar_token_new(YAR_TOK_FILESIZE, word); }
+    if (str_eq(word, str_from("true")))      { return yar_token_new(YAR_TOK_TRUE, word); }
+    if (str_eq(word, str_from("false")))     { return yar_token_new(YAR_TOK_FALSE, word); }
+    if (str_eq(word, str_from("at")))        { return yar_token_new(YAR_TOK_AT, word); }
+    # Size suffixes
+    if (str_eq(word, str_from("KB")))        { return yar_token_new(YAR_TOK_IDENT, word); }
+    if (str_eq(word, str_from("MB")))        { return yar_token_new(YAR_TOK_IDENT, word); }
+    return yar_token_new(YAR_TOK_IDENT, word);
+}
+
+# ================================================================
+# YARA Parser — .yar syntax parser
+# ================================================================
+
+struct YarParser {
+    lex;          # YarLexer
+    current;      # YarToken — current lookahead token
+    patterns;     # Vec of YaraPattern (current rule)
+    pattern_map;  # map from pattern id str -> index
+}
+
+fn yar_parser_new(src) {
+    var p = alloc(32);
+    store64(p, yar_lexer_new(src));
+    store64(p + 8, yar_next_token(load64(p)));
+    store64(p + 16, vec_new());
+    store64(p + 24, map_new());
+    return p;
+}
+
+fn yar_advance(parser) {
+    store64(parser + 8, yar_next_token(load64(parser)));
+    return load64(parser + 8);
+}
+
+fn yar_expect(parser, tok_type) {
+    if (load64(load64(parser + 8)) == tok_type) {
+        var tok = load64(parser + 8);
+        yar_advance(parser);
+        return tok;
+    }
+    return 0;  # unexpected token
+}
+
+# Parse a size value with optional KB/MB suffix
+fn yar_parse_size(parser) {
+    var tok = load64(parser + 8);
+    if (load64(tok) != YAR_TOK_NUMBER) { return 0; }
+    var val = load64(tok + 16);
+    yar_advance(parser);
+    # Check for KB/MB suffix
+    if (load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+        if (str_eq(load64(load64(parser + 8) + 8), str_from("KB"))) {
+            val = val * 1024;
+            yar_advance(parser);
+        } else {
+            if (str_eq(load64(load64(parser + 8) + 8), str_from("MB"))) {
+                val = val * 1024 * 1024;
+                yar_advance(parser);
+            }
+        }
+    }
+    return val;
+}
+
+# Parse the strings section
+fn yar_parse_strings(parser) {
+    store64(parser + 16, vec_new());
+    store64(parser + 24, map_new());
+
+    # Expect "strings" ":"
+    # "strings" was already consumed; expect ":"
+    yar_expect(parser, YAR_TOK_COLON);
+
+    var idx = 0;
+    while (load64(load64(parser + 8)) == YAR_TOK_DOLLAR) {
+        var pat_id = load64(load64(parser + 8) + 8);
+        yar_advance(parser);
+        yar_expect(parser, YAR_TOK_EQ);
+
+        var pat = 0;
+        if (load64(load64(parser + 8)) == YAR_TOK_STRING_LIT) {
+            pat = yara_pattern_from_string(pat_id, load64(load64(parser + 8) + 8));
+            yar_advance(parser);
+        } else {
+            if (load64(load64(parser + 8)) == YAR_TOK_LBRACE) {
+                # Hex block: { XX XX XX }
+                yar_advance(parser);  # skip '{'
+                var hex_str = str_from("");
+                while (load64(load64(parser + 8)) != YAR_TOK_RBRACE) {
+                    if (load64(load64(parser + 8)) == YAR_TOK_EOF) {
+                        return 0;  # error
+                    }
+                    hex_str = str_cat(hex_str, load64(load64(parser + 8) + 8));
+                    if (load64(load64(parser + 8)) == YAR_TOK_NUMBER |
+                        load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+                        hex_str = str_cat(hex_str, str_from(" "));
+                    }
+                    yar_advance(parser);
+                }
+                yar_advance(parser);  # skip '}'
+                pat = yara_pattern_from_hex(pat_id, hex_str);
+            } else {
+                # Unknown pattern type — skip
+                yar_advance(parser);
+            }
+        }
+
+        if (pat != 0) {
+            # Check for modifiers: nocase, ascii, wide
+            while (load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+                if (str_eq(load64(load64(parser + 8) + 8), str_from("nocase"))) {
+                    store64(pat + 40, 1);
+                    yar_advance(parser);
+                } else {
+                    if (str_eq(load64(load64(parser + 8) + 8), str_from("ascii"))) {
+                        yar_advance(parser);  # skip, default is ascii
+                    } else {
+                        if (str_eq(load64(load64(parser + 8) + 8), str_from("wide"))) {
+                            yar_advance(parser);  # acknowledged but not fully supported
+                        } else {
+                            store64(parser + 8, load64(parser + 8));  # stop modifier parsing
+                            var dummy = 0;
+                            dummy = 1;  # force break from while
+                            return 0;
+                        }
+                    }
+                }
+            }
+
+            vec_push(load64(parser + 16), pat);
+            map_set(load64(parser + 24), pat_id, idx);
+            idx = idx + 1;
+        }
+    }
+}
+
+# Parse condition expression (recursive descent)
+fn yar_parse_condition(parser) {
+    # Expect "condition" ":"
+    yar_expect(parser, YAR_TOK_COLON);
+    return yar_parse_or_expr(parser);
+}
+
+fn yar_parse_or_expr(parser) {
+    var left = yar_parse_and_expr(parser);
+    while (load64(load64(parser + 8)) == YAR_TOK_OR) {
+        yar_advance(parser);
+        var right = yar_parse_and_expr(parser);
+        left = cond_expr_or(left, right);
+    }
+    return left;
+}
+
+fn yar_parse_and_expr(parser) {
+    var left = yar_parse_not_expr(parser);
+    while (load64(load64(parser + 8)) == YAR_TOK_AND) {
+        yar_advance(parser);
+        var right = yar_parse_not_expr(parser);
+        left = cond_expr_and(left, right);
+    }
+    return left;
+}
+
+fn yar_parse_not_expr(parser) {
+    if (load64(load64(parser + 8)) == YAR_TOK_NOT) {
+        yar_advance(parser);
+        var child = yar_parse_primary_expr(parser);
+        return cond_expr_not(child);
+    }
+    return yar_parse_primary_expr(parser);
+}
+
+fn yar_parse_primary_expr(parser) {
+    var tok = load64(parser + 8);
+
+    # Pattern reference: $a
+    if (load64(tok) == YAR_TOK_DOLLAR) {
+        var pat_id = load64(tok + 8);
+        yar_advance(parser);
+        var idx = map_get(load64(parser + 24), pat_id);
+        if (idx != 0) {
+            return cond_expr_pat(idx);
+        }
+        # Try index 0 explicitly (map_get returns 0 for both missing and index 0)
+        var npats = vec_len(load64(parser + 16));
+        if (npats > 0) {
+            var first_pat = vec_get(load64(parser + 16), 0);
+            if (str_eq(load64(first_pat), pat_id)) {
+                return cond_expr_pat(0);
+            }
+        }
+        return cond_expr_new(YARA_EXPR_FALSE);
+    }
+
+    # "all of them"
+    if (load64(tok) == YAR_TOK_ALL) {
+        yar_advance(parser);
+        yar_expect(parser, YAR_TOK_OF);
+        yar_expect(parser, YAR_TOK_THEM);
+        return cond_expr_all_of();
+    }
+
+    # "any of them"
+    if (load64(tok) == YAR_TOK_ANY) {
+        yar_advance(parser);
+        yar_expect(parser, YAR_TOK_OF);
+        yar_expect(parser, YAR_TOK_THEM);
+        return cond_expr_any_of();
+    }
+
+    # N "of them"
+    if (load64(tok) == YAR_TOK_NUMBER) {
+        var n = load64(tok + 16);
+        yar_advance(parser);
+        if (load64(load64(parser + 8)) == YAR_TOK_OF) {
+            yar_advance(parser);
+            yar_expect(parser, YAR_TOK_THEM);
+            return cond_expr_n_of(n);
+        }
+        # Standalone number — used in comparisons after filesize etc.
+        # This is actually part of a filesize comparison handled elsewhere
+        var e = cond_expr_new(YARA_EXPR_TRUE);
+        store64(e + 40, n);
+        return e;
+    }
+
+    # "filesize" <op> <value>
+    if (load64(tok) == YAR_TOK_FILESIZE) {
+        yar_advance(parser);
+        var op = yar_parse_cmp_op(parser);
+        var val = yar_parse_size(parser);
+        return cond_expr_filesize(op, val);
+    }
+
+    # "true" / "false"
+    if (load64(tok) == YAR_TOK_TRUE) {
+        yar_advance(parser);
+        return cond_expr_new(YARA_EXPR_TRUE);
+    }
+    if (load64(tok) == YAR_TOK_FALSE) {
+        yar_advance(parser);
+        return cond_expr_new(YARA_EXPR_FALSE);
+    }
+
+    # Parenthesized expression
+    if (load64(tok) == YAR_TOK_LPAREN) {
+        yar_advance(parser);
+        var expr = yar_parse_or_expr(parser);
+        yar_expect(parser, YAR_TOK_RPAREN);
+        return expr;
+    }
+
+    # Module field access: pe.field or elf.field
+    if (load64(tok) == YAR_TOK_IDENT) {
+        var ident = load64(tok + 8);
+        # Check if next token is a dot — module field access
+        if (str_eq(ident, str_from("pe")) | str_eq(ident, str_from("elf"))) {
+            yar_advance(parser);
+            if (load64(load64(parser + 8)) == YAR_TOK_DOT) {
+                yar_advance(parser);  # skip dot
+                if (load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+                    var field = load64(load64(parser + 8) + 8);
+                    yar_advance(parser);  # skip field name
+
+                    # PE module fields
+                    if (str_eq(ident, str_from("pe"))) {
+                        if (str_eq(field, str_from("is_dll"))) {
+                            return cond_expr_pe_is_dll();
+                        }
+                        if (str_eq(field, str_from("is_64bit"))) {
+                            return cond_expr_pe_is_64bit();
+                        }
+                        if (str_eq(field, str_from("machine"))) {
+                            var op = yar_parse_cmp_op(parser);
+                            var val = 0;
+                            if (load64(load64(parser + 8)) == YAR_TOK_NUMBER) {
+                                val = load64(load64(parser + 8) + 16);
+                                yar_advance(parser);
+                            }
+                            return cond_expr_pe_machine(op, val);
+                        }
+                    }
+
+                    # ELF module fields
+                    if (str_eq(ident, str_from("elf"))) {
+                        if (str_eq(field, str_from("machine"))) {
+                            var op = yar_parse_cmp_op(parser);
+                            var val = 0;
+                            if (load64(load64(parser + 8)) == YAR_TOK_NUMBER) {
+                                val = load64(load64(parser + 8) + 16);
+                                yar_advance(parser);
+                            }
+                            return cond_expr_elf_machine(op, val);
+                        }
+                        if (str_eq(field, str_from("type"))) {
+                            var op = yar_parse_cmp_op(parser);
+                            var val = 0;
+                            if (load64(load64(parser + 8)) == YAR_TOK_NUMBER) {
+                                val = load64(load64(parser + 8) + 16);
+                                yar_advance(parser);
+                            }
+                            return cond_expr_elf_type(op, val);
+                        }
+                    }
+                }
+            }
+            # Unrecognized module.field — treat as true
+            return cond_expr_new(YARA_EXPR_TRUE);
+        }
+    }
+
+    # Unknown — skip and return true
+    yar_advance(parser);
+    return cond_expr_new(YARA_EXPR_TRUE);
+}
+
+fn yar_parse_cmp_op(parser) {
+    var tok = load64(parser + 8);
+    if (load64(tok) == YAR_TOK_LT) { yar_advance(parser); return YARA_CMP_LT; }
+    if (load64(tok) == YAR_TOK_LE) { yar_advance(parser); return YARA_CMP_LE; }
+    if (load64(tok) == YAR_TOK_GT) { yar_advance(parser); return YARA_CMP_GT; }
+    if (load64(tok) == YAR_TOK_GE) { yar_advance(parser); return YARA_CMP_GE; }
+    if (load64(tok) == YAR_TOK_EQEQ) { yar_advance(parser); return YARA_CMP_EQ; }
+    if (load64(tok) == YAR_TOK_NE) { yar_advance(parser); return YARA_CMP_NE; }
+    return YARA_CMP_EQ;  # default
+}
+
+# ================================================================
+# YARA Parser — Parse a complete .yar file
+# ================================================================
+
+# Parse .yar source text and return a vec of YaraRule
+fn yara_parse_rules(src) {
+    var parser = yar_parser_new(src);
+    var rules = vec_new();
+
+    while (load64(load64(parser + 8)) != YAR_TOK_EOF) {
+        # Skip "import" statements silently
+        if (load64(load64(parser + 8)) == YAR_TOK_IMPORT) {
+            yar_advance(parser);
+            # Skip the import target (string literal or identifier)
+            if (load64(load64(parser + 8)) == YAR_TOK_STRING_LIT |
+                load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+                yar_advance(parser);
+            }
+        } else {
+            if (load64(load64(parser + 8)) == YAR_TOK_RULE) {
+                var rule = yar_parse_one_rule(parser);
+                if (rule != 0) {
+                    vec_push(rules, rule);
+                }
+            } else {
+                # Skip unknown tokens
+                yar_advance(parser);
+            }
+        }
+    }
+
+    return rules;
+}
+
+# Parse a single rule: rule Name { ... }
+fn yar_parse_one_rule(parser) {
+    yar_advance(parser);  # skip "rule" keyword
+
+    # Rule name
+    if (load64(load64(parser + 8)) != YAR_TOK_IDENT) { return 0; }
+    var name = load64(load64(parser + 8) + 8);
+    yar_advance(parser);
+
+    # Optional tags: rule Name : tag1 tag2 { ... }
+    var tags = vec_new();
+    if (load64(load64(parser + 8)) == YAR_TOK_COLON) {
+        yar_advance(parser);
+        while (load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+            vec_push(tags, load64(load64(parser + 8) + 8));
+            yar_advance(parser);
+        }
+    }
+
+    # Opening brace
+    if (yar_expect(parser, YAR_TOK_LBRACE) == 0) { return 0; }
+
+    var rule = yara_rule_new(name);
+    store64(rule + 24, tags);
+
+    # Parse sections within the rule
+    while (load64(load64(parser + 8)) != YAR_TOK_RBRACE) {
+        if (load64(load64(parser + 8)) == YAR_TOK_EOF) { return rule; }
+
+        if (load64(load64(parser + 8)) == YAR_TOK_META) {
+            yar_advance(parser);
+            yar_parse_meta(parser, rule);
+        } else {
+            if (load64(load64(parser + 8)) == YAR_TOK_STRINGS) {
+                yar_advance(parser);
+                yar_parse_strings(parser);
+                store64(rule + 32, load64(parser + 16));
+            } else {
+                if (load64(load64(parser + 8)) == YAR_TOK_CONDITION) {
+                    yar_advance(parser);
+                    var expr = yar_parse_condition(parser);
+                    store64(rule + 40, YARA_COND_EXPRESSION);
+                    store64(rule + 48, expr);
+                } else {
+                    yar_advance(parser);  # skip unknown
+                }
+            }
+        }
+    }
+
+    yar_advance(parser);  # skip closing '}'
+    return rule;
+}
+
+# Parse meta section
+fn yar_parse_meta(parser, rule) {
+    yar_expect(parser, YAR_TOK_COLON);
+    while (load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+        var key = load64(load64(parser + 8) + 8);
+        yar_advance(parser);
+        yar_expect(parser, YAR_TOK_EQ);
+
+        if (load64(load64(parser + 8)) == YAR_TOK_STRING_LIT) {
+            var val = load64(load64(parser + 8) + 8);
+            yar_advance(parser);
+            if (str_eq(key, str_from("description"))) {
+                store64(rule + 8, val);
+            }
+            if (str_eq(key, str_from("severity"))) {
+                store64(rule + 16, parse_severity_str(val));
+            }
+        } else {
+            if (load64(load64(parser + 8)) == YAR_TOK_NUMBER) {
+                yar_advance(parser);
+            } else {
+                if (load64(load64(parser + 8)) == YAR_TOK_TRUE |
+                    load64(load64(parser + 8)) == YAR_TOK_FALSE) {
+                    yar_advance(parser);
+                } else {
+                    yar_advance(parser);
+                }
+            }
+        }
+    }
+}
+
+# ================================================================
+# YARA Engine — Load .yar file into engine
+# ================================================================
+
+fn yara_engine_load_rules_yar(engine, yar_src) {
+    var rules = yara_parse_rules(yar_src);
+    var n = vec_len(rules);
+    for (var i = 0; i < n; i = i + 1) {
+        yara_engine_add_rule(engine, vec_get(rules, i));
+    }
+    return n;
+}
+
+# ================================================================
+# YARA Engine — Built-in detection rules
+# ================================================================
+
+# Create standard detection rules for common threats
+fn yara_engine_load_builtin_rules(engine) {
+    # Rule: Detect MZ header (PE executable)
+    var mz_rule = yara_rule_new(str_from("IsPE"));
+    store64(mz_rule + 8, str_from("File contains PE executable header"));
+    store64(mz_rule + 16, SEVERITY_INFO);
+    vec_push(load64(mz_rule + 24), str_from("pe"));
+    vec_push(load64(mz_rule + 32), yara_pattern_from_hex(str_from("$mz"), str_from("4D 5A")));
+    store64(mz_rule + 40, YARA_COND_ALL);
+    store64(load64(mz_rule + 64) + 16, 0);
+    yara_engine_add_rule(engine, mz_rule);
+
+    # Rule: Detect ELF header
+    var elf_rule = yara_rule_new(str_from("IsELF"));
+    store64(elf_rule + 8, str_from("File contains ELF executable header"));
+    store64(elf_rule + 16, SEVERITY_INFO);
+    vec_push(load64(elf_rule + 24), str_from("elf"));
+    vec_push(load64(elf_rule + 32), yara_pattern_from_hex(str_from("$elf"), str_from("7F 45 4C 46")));
+    store64(elf_rule + 40, YARA_COND_ALL);
+    store64(load64(elf_rule + 64) + 16, 0);
+    yara_engine_add_rule(engine, elf_rule);
+
+    # Rule: Detect UPX-packed binaries
+    var upx_rule = yara_rule_new(str_from("UPXPacked"));
+    store64(upx_rule + 8, str_from("Binary is packed with UPX"));
+    store64(upx_rule + 16, SEVERITY_MEDIUM);
+    vec_push(load64(upx_rule + 24), str_from("packer"));
+    vec_push(load64(upx_rule + 24), str_from("upx"));
+    vec_push(load64(upx_rule + 32), yara_pattern_from_string(str_from("$upx0"), str_from("UPX0")));
+    vec_push(load64(upx_rule + 32), yara_pattern_from_string(str_from("$upx1"), str_from("UPX1")));
+    vec_push(load64(upx_rule + 32), yara_pattern_from_string(str_from("$upx2"), str_from("UPX!")));
+    store64(upx_rule + 40, YARA_COND_AT_LEAST);
+    store64(upx_rule + 56, 2);
+    yara_engine_add_rule(engine, upx_rule);
+
+    # Rule: Detect potential shellcode / NOP sled
+    var nop_rule = yara_rule_new(str_from("NopSled"));
+    store64(nop_rule + 8, str_from("Potential NOP sled detected (shellcode indicator)"));
+    store64(nop_rule + 16, SEVERITY_HIGH);
+    vec_push(load64(nop_rule + 24), str_from("shellcode"));
+    # 32 consecutive NOPs
+    vec_push(load64(nop_rule + 32), yara_pattern_from_hex(str_from("$nop"),
+        str_from("90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90")));
+    store64(nop_rule + 40, YARA_COND_ANY);
+    yara_engine_add_rule(engine, nop_rule);
+
+    # Rule: Detect suspicious API strings in PE
+    var api_rule = yara_rule_new(str_from("SuspiciousAPIs"));
+    store64(api_rule + 8, str_from("Contains suspicious Windows API references"));
+    store64(api_rule + 16, SEVERITY_MEDIUM);
+    vec_push(load64(api_rule + 24), str_from("suspicious"));
+    vec_push(load64(api_rule + 24), str_from("api"));
+    vec_push(load64(api_rule + 32), yara_pattern_from_string(str_from("$a1"), str_from("VirtualAllocEx")));
+    vec_push(load64(api_rule + 32), yara_pattern_from_string(str_from("$a2"), str_from("WriteProcessMemory")));
+    vec_push(load64(api_rule + 32), yara_pattern_from_string(str_from("$a3"), str_from("CreateRemoteThread")));
+    vec_push(load64(api_rule + 32), yara_pattern_from_string(str_from("$a4"), str_from("NtUnmapViewOfSection")));
+    store64(api_rule + 40, YARA_COND_AT_LEAST);
+    store64(api_rule + 56, 2);
+    yara_engine_add_rule(engine, api_rule);
+
+    # Rule: Detect ransomware indicators
+    var ransom_rule = yara_rule_new(str_from("RansomwareIndicators"));
+    store64(ransom_rule + 8, str_from("Contains ransomware-related strings"));
+    store64(ransom_rule + 16, SEVERITY_CRITICAL);
+    vec_push(load64(ransom_rule + 24), str_from("ransomware"));
+    vec_push(load64(ransom_rule + 32), yara_pattern_from_string(str_from("$r1"), str_from("Your files have been encrypted")));
+    vec_push(load64(ransom_rule + 32), yara_pattern_from_string(str_from("$r2"), str_from("bitcoin")));
+    vec_push(load64(ransom_rule + 32), yara_pattern_from_string(str_from("$r3"), str_from("decrypt")));
+    vec_push(load64(ransom_rule + 32), yara_pattern_from_string(str_from("$r4"), str_from("ransom")));
+    store64(ransom_rule + 40, YARA_COND_AT_LEAST);
+    store64(ransom_rule + 56, 2);
+    store64(ransom_rule + 32, load64(ransom_rule + 32));  # ensure assignment
+    yara_engine_add_rule(engine, ransom_rule);
+
+    # Rule: Detect embedded PE in non-PE file
+    var embedded_pe = yara_rule_new(str_from("EmbeddedPE"));
+    store64(embedded_pe + 8, str_from("Contains an embedded PE executable"));
+    store64(embedded_pe + 16, SEVERITY_HIGH);
+    vec_push(load64(embedded_pe + 24), str_from("embedded"));
+    vec_push(load64(embedded_pe + 24), str_from("pe"));
+    vec_push(load64(embedded_pe + 32), yara_pattern_from_hex(str_from("$mz"), str_from("4D 5A")));
+    vec_push(load64(embedded_pe + 32), yara_pattern_from_string(str_from("$pe"), str_from("This program cannot be run in DOS mode")));
+    store64(embedded_pe + 40, YARA_COND_ALL);
+    store64(load64(embedded_pe + 64), 512);
+    yara_engine_add_rule(engine, embedded_pe);
+}

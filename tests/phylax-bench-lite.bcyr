@@ -1,7 +1,7 @@
 # phylax-bench-lite — minimal benchmarks without bote/sigil deps
 # Includes only the core phylax library for benchmarking
 
-include "src/phylax.cyr"
+include "src/lib.cyr"
 
 fn bench_entropy_1k() {
     var data = alloc(1024);

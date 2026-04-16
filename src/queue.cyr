@@ -1,0 +1,158 @@
+# ================================================================
+# ================================================================
+#
+#   PART 3 — Priority Queue, Quarantine, Report, Hoosh, Daimon,
+#            AI Registration, CLI Entry Point
+#
+# ================================================================
+# ================================================================
+
+
+# ================================================================
+# Priority Queue — Constants
+# ================================================================
+
+var PRIORITY_CRITICAL = 3;
+var PRIORITY_HIGH     = 2;
+var PRIORITY_NORMAL   = 1;
+var PRIORITY_LOW      = 0;
+
+# ================================================================
+# Priority Queue — Structs
+# ================================================================
+
+struct ScanRequest {
+    target_kind;   # ScanTarget kind enum
+    target_path;   # Str
+    priority;      # i64 (PRIORITY_*)
+    id;            # i64 unique identifier
+}
+
+struct ScanQueue {
+    items;         # Vec of ScanRequest, kept sorted by priority (highest first)
+    capacity;      # i64 max items
+    next_id;       # i64 monotonic counter
+}
+
+# ================================================================
+# Priority Queue — Functions
+# ================================================================
+
+# Create a new scan queue with the given maximum capacity.
+fn scan_queue_new(capacity) {
+    var q = alloc(24);
+    store64(q, vec_new());
+    store64(q + 8, capacity);
+    store64(q + 16, 1);
+    return q;
+}
+
+# Return the number of items in the queue.
+fn scan_queue_len(q) {
+    return vec_len(load64(q));
+}
+
+# Return 1 if the queue is empty, 0 otherwise.
+fn scan_queue_is_empty(q) {
+    if (vec_len(load64(q)) == 0) { return 1; }
+    return 0;
+}
+
+# Heap comparison: returns 1 if a should be dequeued before b.
+# Higher priority first; at same priority, lower id (older) first.
+fn scan_req_heap_gt(a, b) {
+    var pa = load64(a + 16);
+    var pb = load64(b + 16);
+    if (pa > pb) { return 1; }
+    if (pa < pb) { return 0; }
+    # Same priority — lower id wins (older request)
+    return load64(a + 24) < load64(b + 24);
+}
+
+# Enqueue a scan request using binary heap (max-heap by priority).
+# Returns the assigned request id, or -1 if the queue is full.
+fn scan_queue_enqueue(q, target_kind, target_path, priority) {
+    if (vec_len(load64(q)) >= load64(q + 8)) {
+        return -1;
+    }
+
+    var req = alloc(32);
+    store64(req, target_kind);
+    store64(req + 8, target_path);
+    store64(req + 16, priority);
+    store64(req + 24, load64(q + 16));
+    store64(q + 16, load64(q + 16) + 1);
+
+    # Push to end and sift up
+    vec_push(load64(q), req);
+    var i = vec_len(load64(q)) - 1;
+    while (i > 0) {
+        var parent = (i - 1) / 2;
+        var pi = vec_get(load64(q), parent);
+        if (scan_req_heap_gt(req, pi)) {
+            vec_set(load64(q), i, pi);
+            vec_set(load64(q), parent, req);
+            i = parent;
+        } else {
+            i = 0;  # break — heap property satisfied
+        }
+    }
+
+    return load64(req + 24);
+}
+
+# Dequeue the highest-priority request (root of max-heap).
+# Returns the ScanRequest, or 0 if empty.
+fn scan_queue_dequeue(q) {
+    var len = vec_len(load64(q));
+    if (len == 0) { return 0; }
+
+    var root = vec_get(load64(q), 0);
+
+    if (len == 1) {
+        store64(q, vec_new());
+        return root;
+    }
+
+    # Move last element to root, rebuild vec without last, then sift down
+    var last = vec_get(load64(q), len - 1);
+    var new_items = vec_new();
+    vec_push(new_items, last);
+    for (var i = 1; i < len - 1; i = i + 1) {
+        vec_push(new_items, vec_get(load64(q), i));
+    }
+    store64(q, new_items);
+
+    # Sift down from root
+    var heap_len = vec_len(load64(q));
+    var i = 0;
+    while (1) {
+        var left = 2 * i + 1;
+        var right = 2 * i + 2;
+        var largest = i;
+
+        if (left < heap_len) {
+            if (scan_req_heap_gt(vec_get(load64(q), left), vec_get(load64(q), largest))) {
+                largest = left;
+            }
+        }
+        if (right < heap_len) {
+            if (scan_req_heap_gt(vec_get(load64(q), right), vec_get(load64(q), largest))) {
+                largest = right;
+            }
+        }
+
+        if (largest == i) {
+            return root;  # break — heap property satisfied
+        }
+
+        # Swap
+        var tmp = vec_get(load64(q), i);
+        vec_set(load64(q), i, vec_get(load64(q), largest));
+        vec_set(load64(q), largest, tmp);
+        i = largest;
+    }
+
+    return root;
+}
+

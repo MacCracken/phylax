@@ -1,0 +1,458 @@
+# ================================================================
+# Entropy analysis
+# ================================================================
+
+# Shannon entropy of a byte buffer (bits per byte, 0.0 .. 8.0)
+# data = address of bytes, len = byte count
+# Returns f64 as i64 bit pattern
+fn shannon_entropy(data, len) {
+    if (len == 0) { return F64_ZERO; }
+
+    # Build frequency table: 256 entries
+    var freq = alloc(256 * 8);
+    for (var i = 0; i < 256; i = i + 1) {
+        store64(freq + i * 8, 0);
+    }
+    for (var i = 0; i < len; i = i + 1) {
+        var b = load8(data + i);
+        var idx = b * 8;
+        var old = load64(freq + idx);
+        store64(freq + idx, old + 1);
+    }
+
+    var flen = f64_from(len);
+    var entropy = F64_ZERO;
+
+    for (var i = 0; i < 256; i = i + 1) {
+        var count = load64(freq + i * 8);
+        if (count > 0) {
+            var fc = f64_from(count);
+            var p = f64_div(fc, flen);
+            var log2p = f64_log2(p);
+            var term = f64_mul(p, log2p);
+            entropy = f64_sub(entropy, term);
+        }
+    }
+
+    return entropy;
+}
+
+# Compute entropy for successive blocks of block_size bytes
+# Returns a Vec of f64 bit patterns
+fn entropy_profile(data, len, block_size) {
+    var result = vec_new();
+    if (len == 0) { return result; }
+    if (block_size == 0) { return result; }
+
+    var offset = 0;
+    while (offset < len) {
+        var remaining = len - offset;
+        var chunk_size = block_size;
+        if (remaining < chunk_size) { chunk_size = remaining; }
+        var ent = shannon_entropy(data + offset, chunk_size);
+        vec_push(result, ent);
+        offset = offset + chunk_size;
+    }
+    return result;
+}
+
+# Heuristic: entropy > 7.5 bits/byte is suspicious
+fn is_suspicious_entropy(entropy_f64) {
+    return f64_gt(entropy_f64, F64_7_5);
+}
+
+# Chi-squared statistic for byte distribution
+fn chi_squared(data, len) {
+    if (len == 0) { return F64_ZERO; }
+
+    var freq = alloc(256 * 8);
+    for (var i = 0; i < 256; i = i + 1) {
+        store64(freq + i * 8, 0);
+    }
+    for (var i = 0; i < len; i = i + 1) {
+        var b = load8(data + i);
+        var idx = b * 8;
+        var old = load64(freq + idx);
+        store64(freq + idx, old + 1);
+    }
+
+    var expected = f64_div(f64_from(len), F64_256);
+    var chi2 = F64_ZERO;
+
+    for (var i = 0; i < 256; i = i + 1) {
+        var count = load64(freq + i * 8);
+        var fc = f64_from(count);
+        var diff = f64_sub(fc, expected);
+        var diff2 = f64_mul(diff, diff);
+        chi2 = f64_add(chi2, f64_div(diff2, expected));
+    }
+
+    return chi2;
+}
+
+# Classify data randomness based on chi-squared value
+fn classify_randomness(chi2) {
+    # chi2 <= 512 → encrypted, <= 4096 → compressed, else normal
+    if (f64_gt(chi2, F64_512) == 0) { return RANDOMNESS_ENCRYPTED; }
+    if (f64_gt(chi2, F64_4096) == 0) { return RANDOMNESS_COMPRESSED; }
+    return RANDOMNESS_NORMAL;
+}
+
+# ================================================================
+# File type detection (magic bytes)
+# ================================================================
+
+fn detect_file_type(data, len) {
+    if (len < 2) { return FILETYPE_UNKNOWN; }
+
+    # Optimized 4-byte magic check using single u32 comparison
+    if (len >= 4) {
+        var magic4 = read_u32_le(data, 0);
+        if (magic4 == 0x464C457F) { return FILETYPE_ELF; }      # \x7fELF
+        if (magic4 == 0x46445025) { return FILETYPE_PDF; }      # %PDF
+        if (magic4 == 0x04034B50) { return FILETYPE_ZIP; }      # PK\x03\x04
+        if (magic4 == 0x474E5089) { return FILETYPE_PNG; }      # \x89PNG
+        # Mach-O variants
+        if (magic4 == 0xCEFAEDFE) { return FILETYPE_MACHO; }
+        if (magic4 == 0xCFFAEDFE) { return FILETYPE_MACHO; }
+        if (magic4 == 0xFEEDFACE) { return FILETYPE_MACHO; }
+        if (magic4 == 0xFEEDFACF) { return FILETYPE_MACHO; }
+    }
+
+    # 2-byte magic check
+    var magic2 = load8(data) | (load8(data + 1) << 8);
+    if (magic2 == 0x5A4D) { return FILETYPE_PE; }        # MZ
+    if (magic2 == 0x8B1F) { return FILETYPE_GZIP; }      # \x1f\x8b
+    if (magic2 == 0x2123) { return FILETYPE_SCRIPT; }     # #!
+
+    # JPEG: ff d8 ff
+    if (len >= 3) {
+        if (load8(data) == 0xFF && load8(data + 1) == 0xD8 && load8(data + 2) == 0xFF) {
+            return FILETYPE_JPEG;
+        }
+    }
+
+    # TAR: check for "ustar" magic at offset 257
+    if (len >= 263) {
+        if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
+            load8(data + 259) == 116 && load8(data + 260) == 97 &&
+            load8(data + 261) == 114) {
+            return FILETYPE_TAR;
+        }
+    }
+
+    return FILETYPE_UNKNOWN;
+}
+
+# Detect TAR archive — returns 1 if data looks like a TAR file
+fn detect_tar(data, data_len) {
+    if (data_len < 512) { return 0; }
+
+    # Method 1: check for "ustar" magic at offset 257
+    if (data_len >= 263) {
+        if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
+            load8(data + 259) == 116 && load8(data + 260) == 97 &&
+            load8(data + 261) == 114) {
+            return 1;
+        }
+    }
+
+    # Method 2: heuristic — check if first entry looks valid
+    # Filename should start with a printable ASCII char and size should be parseable octal
+    var first_byte = load8(data);
+    if (first_byte >= 32 && first_byte < 127) {
+        # Check if size field (offset 124, 12 bytes) looks like octal ASCII
+        var valid_octal = 1;
+        for (var i = 0; i < 11; i = i + 1) {
+            var c = load8(data + 124 + i);
+            if (c == 0 || c == 32) {
+                var _skip = 0;  # null or space — acceptable
+            } elif (c >= 48 && c <= 55) {
+                var _skip2 = 0;  # octal digit 0-7
+            } else {
+                valid_octal = 0;
+                i = 11;
+            }
+        }
+        if (valid_octal == 1) {
+            # Check typeflag at offset 156 — should be 0, '0', '5', or other valid flags
+            var tf = load8(data + 156);
+            if (tf == 0 || tf == 48 || tf == 53 || tf == 49 || tf == 50 ||
+                tf == 54 || tf == 55 || tf == 103 || tf == 120) {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+# Detect polyglot files — returns a Vec of FileType constants
+fn detect_polyglot(data, len) {
+    var types = vec_new();
+    var primary = detect_file_type(data, len);
+    if (primary != FILETYPE_UNKNOWN) {
+        vec_push(types, primary);
+    }
+
+    # Embedded signature patterns (search after first 4 bytes)
+    if (len > 8) {
+        var search_start = data + 4;
+        var search_len = len - 4;
+
+        # ELF: 7f 45 4c 46
+        if (primary != FILETYPE_ELF) {
+            var sig_elf = alloc(4);
+            store8(sig_elf, 127); store8(sig_elf + 1, 69); store8(sig_elf + 2, 76); store8(sig_elf + 3, 70);
+            if (memmem(search_start, search_len, sig_elf, 4) >= 0) {
+                vec_push(types, FILETYPE_ELF);
+            }
+        }
+        # PE: 4d 5a
+        if (primary != FILETYPE_PE) {
+            var sig_pe = alloc(2);
+            store8(sig_pe, 77); store8(sig_pe + 1, 90);
+            if (memmem(search_start, search_len, sig_pe, 2) >= 0) {
+                vec_push(types, FILETYPE_PE);
+            }
+        }
+        # PDF: 25 50 44 46
+        if (primary != FILETYPE_PDF) {
+            var sig_pdf = alloc(4);
+            store8(sig_pdf, 37); store8(sig_pdf + 1, 80); store8(sig_pdf + 2, 68); store8(sig_pdf + 3, 70);
+            if (memmem(search_start, search_len, sig_pdf, 4) >= 0) {
+                vec_push(types, FILETYPE_PDF);
+            }
+        }
+        # ZIP: 50 4b 03 04
+        if (primary != FILETYPE_ZIP) {
+            var sig_zip = alloc(4);
+            store8(sig_zip, 80); store8(sig_zip + 1, 75); store8(sig_zip + 2, 3); store8(sig_zip + 3, 4);
+            if (memmem(search_start, search_len, sig_zip, 4) >= 0) {
+                vec_push(types, FILETYPE_ZIP);
+            }
+        }
+    }
+
+    return types;
+}
+
+# ================================================================
+# SHA-256 (via sigil extern)
+# ================================================================
+
+# Compute SHA-256 hash of data, returned as lowercase hex Str
+fn file_sha256(data, len) {
+    var hash_str = sha256_hex(data, len);
+    return hash_str;
+}
+
+# ================================================================
+# Binary analysis
+# ================================================================
+
+fn analyze(data, len) {
+    var a = alloc(32);
+    store64(a, detect_file_type(data, len));
+    store64(a + 8, shannon_entropy(data, len));
+    store64(a + 16, len);
+    store64(a + 24, file_sha256(data, len));
+    return a;
+}
+
+# Produce threat findings from a pre-computed analysis
+# Returns Vec of ThreatFinding ptrs
+fn findings_from_analysis(data, len, analysis, target) {
+    var findings = vec_new();
+
+    # High entropy check
+    if (is_suspicious_entropy(load64(analysis + 8))) {
+        var ent_str = str_from("high_entropy");
+        var desc = str_cat(str_from("High entropy detected (threshold: 7.5)"), str_from(""));
+        var f = finding_new(target, CATEGORY_SUSPICIOUS, SEVERITY_MEDIUM, ent_str, desc);
+        map_set(load64(f + 40), str_from("sha256"), load64(analysis + 24));
+        vec_push(findings, f);
+    }
+
+    # Polyglot check
+    var poly = detect_polyglot(data, len);
+    if (vec_len(poly) > 1) {
+        var poly_desc = str_from("Polyglot file detected");
+        var f = finding_new(target, CATEGORY_EMBEDDED_PAYLOAD, SEVERITY_HIGH,
+                           str_from("polyglot_file"), poly_desc);
+        vec_push(findings, f);
+    }
+
+    return findings;
+}
+
+# Convenience wrapper
+fn analyze_findings(data, len, target) {
+    var analysis = analyze(data, len);
+    return findings_from_analysis(data, len, analysis, target);
+}
+
+# ================================================================
+# Severity escalation
+# ================================================================
+
+fn escalate_severity(findings, analysis) {
+    var flen = vec_len(findings);
+    if (flen == 0) { return 0; }
+
+    var has_high_entropy = 0;
+    var has_polyglot = 0;
+    var is_exec = filetype_is_executable(load64(analysis));
+
+    for (var i = 0; i < flen; i = i + 1) {
+        var f = vec_get(findings, i);
+        if (str_eq(load64(f + 24), str_from("high_entropy"))) { has_high_entropy = 1; }
+        if (str_eq(load64(f + 24), str_from("polyglot_file"))) { has_polyglot = 1; }
+    }
+
+    # High entropy + polyglot = critical
+    if (has_high_entropy & has_polyglot) {
+        for (var i = 0; i < flen; i = i + 1) {
+            var f = vec_get(findings, i);
+            if (str_eq(load64(f + 24), str_from("polyglot_file"))) {
+                store64(f + 16, SEVERITY_CRITICAL);
+                map_set(load64(f + 40), str_from("escalated_polyglot"),
+                       str_from("high_entropy+polyglot"));
+            }
+        }
+    }
+
+    # Executable file type escalates Medium -> High
+    if (is_exec) {
+        for (var i = 0; i < flen; i = i + 1) {
+            var f = vec_get(findings, i);
+            if (load64(f + 16) == SEVERITY_MEDIUM) {
+                store64(f + 16, SEVERITY_HIGH);
+                map_set(load64(f + 40), str_from("escalated_executable"),
+                       str_from("executable_file_type"));
+            }
+        }
+    }
+
+    # Multiple Medium+ findings = escalate highest
+    var medium_plus = 0;
+    for (var i = 0; i < flen; i = i + 1) {
+        var f = vec_get(findings, i);
+        if (severity_gte(load64(f + 16), SEVERITY_MEDIUM)) {
+            medium_plus = medium_plus + 1;
+        }
+    }
+    if (medium_plus >= 2) {
+        var best_idx = 0;
+        var best_sev = SEVERITY_INFO;
+        for (var i = 0; i < flen; i = i + 1) {
+            var f = vec_get(findings, i);
+            if (severity_gt(load64(f + 16), best_sev)) {
+                best_sev = load64(f + 16);
+                best_idx = i;
+            }
+        }
+        var highest = vec_get(findings, best_idx);
+        if (load64(highest + 16) == SEVERITY_HIGH) {
+            store64(highest + 16, SEVERITY_CRITICAL);
+            map_set(load64(highest + 40), str_from("escalated_signals"),
+                   str_from("multiple_signals"));
+        }
+    }
+}
+
+# ================================================================
+# Section entropy analysis
+# ================================================================
+
+var CODE_SECTION_ENTROPY_THRESHOLD = F64_7_0;
+
+# Generate findings from per-section entropy analysis
+# sections = Vec of SectionEntropy ptrs, target = ScanTarget ptr
+fn section_entropy_findings(sections, target) {
+    var findings = vec_new();
+    var slen = vec_len(sections);
+    for (var i = 0; i < slen; i = i + 1) {
+        var sec = vec_get(sections, i);
+        var threshold = F64_7_5;
+        if (load64(sec + 24)) { threshold = CODE_SECTION_ENTROPY_THRESHOLD; }
+
+        if (f64_gt(load64(sec + 8), threshold)) {
+            var sev = SEVERITY_MEDIUM;
+            if (load64(sec + 24)) { sev = SEVERITY_HIGH; }
+            var desc = str_cat(str_from("Section has high entropy: "), load64(sec));
+            var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
+                               str_from("high_section_entropy"), desc);
+            map_set(load64(f + 40), str_from("section"), load64(sec));
+            var exec_str = str_from("false");
+            if (load64(sec + 24)) { exec_str = str_from("true"); }
+            map_set(load64(f + 40), str_from("executable"), exec_str);
+            vec_push(findings, f);
+        }
+    }
+    return findings;
+}
+
+# ================================================================
+# Overlay detection
+# ================================================================
+
+# Generate findings from PE overlay analysis
+fn overlay_findings(overlay, target) {
+    var findings = vec_new();
+    var sev = SEVERITY_LOW;
+    if (is_suspicious_entropy(load64(overlay + 16))) {
+        sev = SEVERITY_HIGH;
+    }
+    var desc = str_from("PE overlay detected");
+    var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
+                       str_from("pe_overlay"), desc);
+    map_set(load64(f + 40), str_from("overlay_size"),
+           str_from_int(load64(overlay + 8)));
+    vec_push(findings, f);
+    return findings;
+}
+
+# ================================================================
+# Packing heuristics
+# ================================================================
+
+# Known packer section names
+fn is_packer_section(name) {
+    if (str_eq(name, str_from("UPX0")))     { return 1; }
+    if (str_eq(name, str_from("UPX1")))     { return 1; }
+    if (str_eq(name, str_from("UPX2")))     { return 1; }
+    if (str_eq(name, str_from("UPX!")))     { return 1; }
+    if (str_eq(name, str_from(".aspack")))   { return 1; }
+    if (str_eq(name, str_from(".adata")))    { return 1; }
+    if (str_eq(name, str_from(".vmp0")))     { return 1; }
+    if (str_eq(name, str_from(".vmp1")))     { return 1; }
+    if (str_eq(name, str_from(".vmp2")))     { return 1; }
+    if (str_eq(name, str_from(".themida")))  { return 1; }
+    if (str_eq(name, str_from(".petite")))   { return 1; }
+    if (str_eq(name, str_from(".nsp0")))     { return 1; }
+    if (str_eq(name, str_from(".nsp1")))     { return 1; }
+    if (str_eq(name, str_from(".nsp2")))     { return 1; }
+    if (str_eq(name, str_from(".packed")))   { return 1; }
+    if (str_eq(name, str_from(".mpress1")))  { return 1; }
+    if (str_eq(name, str_from(".mpress2")))  { return 1; }
+    return 0;
+}
+
+# Generate findings from packing analysis
+fn packing_findings(signals, target) {
+    var count = packing_signal_count(signals);
+    if (count == 0) { return vec_new(); }
+
+    var sev = SEVERITY_LOW;
+    if (count == 2) { sev = SEVERITY_MEDIUM; }
+    if (count >= 3) { sev = SEVERITY_HIGH; }
+
+    var desc = str_from("Packed/encrypted binary detected");
+    var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
+                       str_from("packed_binary"), desc);
+    map_set(load64(f + 40), str_from("signal_count"), str_from_int(count));
+    var findings = vec_new();
+    vec_push(findings, f);
+    return findings;
+}

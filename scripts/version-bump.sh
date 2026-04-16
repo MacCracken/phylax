@@ -19,13 +19,13 @@ echo "  Updated VERSION"
 sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" "$REPO_ROOT/cyrius.cyml"
 echo "  Updated cyrius.cyml"
 
-sed -i "s/VERSION = str_from(\".*\");/VERSION = str_from(\"${NEW_VERSION}\");/" "$REPO_ROOT/src/phylax.cyr"
-echo "  Updated src/phylax.cyr"
+sed -i "s/VERSION = str_from(\".*\");/VERSION = str_from(\"${NEW_VERSION}\");/" "$REPO_ROOT/src/types.cyr"
+echo "  Updated src/types.cyr"
 
 # Verify
 FILE_VERSION=$(cat "$REPO_ROOT/VERSION" | tr -d '[:space:]')
 CYML_VERSION=$(grep '^version = ' "$REPO_ROOT/cyrius.cyml" | head -1 | sed 's/version = "\(.*\)"/\1/')
-SRC_VERSION=$(grep 'VERSION = str_from' "$REPO_ROOT/src/phylax.cyr" | sed 's/.*str_from("\(.*\)").*/\1/')
+SRC_VERSION=$(grep 'VERSION = str_from' "$REPO_ROOT/src/types.cyr" | sed 's/.*str_from("\(.*\)").*/\1/')
 
 if [ "$FILE_VERSION" != "$NEW_VERSION" ] || [ "$CYML_VERSION" != "$NEW_VERSION" ] || [ "$SRC_VERSION" != "$NEW_VERSION" ]; then
     echo "ERROR: Version mismatch after bump"

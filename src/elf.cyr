@@ -1,0 +1,638 @@
+# ================================================================
+# ================================================================
+# ELF Parser
+# ================================================================
+# ================================================================
+
+# ================================================================
+# ELF Parser — Constants
+# ================================================================
+
+# ELF magic: 0x7F 'E' 'L' 'F'
+var ELF_MAGIC_0 = 0x7F;
+var ELF_MAGIC_1 = 69;   # 'E'
+var ELF_MAGIC_2 = 76;   # 'L'
+var ELF_MAGIC_3 = 70;   # 'F'
+
+# EI_CLASS
+var ELF_CLASS_NONE = 0;
+var ELF_CLASS_32   = 1;
+var ELF_CLASS_64   = 2;
+
+# EI_DATA (endianness)
+var ELF_DATA_NONE = 0;
+var ELF_DATA_LSB  = 1;  # little-endian
+var ELF_DATA_MSB  = 2;  # big-endian
+
+# EI_OSABI
+var ELF_OSABI_NONE    = 0;
+var ELF_OSABI_LINUX   = 3;
+var ELF_OSABI_FREEBSD = 9;
+
+# e_type
+var ELF_ET_NONE = 0;
+var ELF_ET_REL  = 1;
+var ELF_ET_EXEC = 2;
+var ELF_ET_DYN  = 3;
+var ELF_ET_CORE = 4;
+
+# e_machine
+var ELF_EM_NONE    = 0;
+var ELF_EM_386     = 3;
+var ELF_EM_ARM     = 40;
+var ELF_EM_X86_64  = 62;
+var ELF_EM_AARCH64 = 183;
+var ELF_EM_RISCV   = 243;
+
+# Section types
+var ELF_SHT_NULL     = 0;
+var ELF_SHT_PROGBITS = 1;
+var ELF_SHT_SYMTAB   = 2;
+var ELF_SHT_STRTAB   = 3;
+var ELF_SHT_DYNAMIC  = 6;
+var ELF_SHT_NOTE     = 7;
+var ELF_SHT_NOBITS   = 8;
+var ELF_SHT_DYNSYM   = 11;
+
+# Section flags
+var ELF_SHF_WRITE     = 0x1;
+var ELF_SHF_ALLOC     = 0x2;
+var ELF_SHF_EXECINSTR = 0x4;
+
+# Segment types
+var ELF_PT_NULL    = 0;
+var ELF_PT_LOAD    = 1;
+var ELF_PT_DYNAMIC = 2;
+var ELF_PT_INTERP  = 3;
+var ELF_PT_NOTE    = 4;
+var ELF_PT_PHDR    = 6;
+var ELF_PT_GNU_EH_FRAME = 0x6474e550;
+var ELF_PT_GNU_STACK    = 0x6474e551;
+var ELF_PT_GNU_RELRO    = 0x6474e552;
+
+# Segment flags
+var ELF_PF_X = 0x1;  # Execute
+var ELF_PF_W = 0x2;  # Write
+var ELF_PF_R = 0x4;  # Read
+
+# Dynamic tags
+var ELF_DT_NULL   = 0;
+var ELF_DT_NEEDED = 1;
+var ELF_DT_STRTAB = 5;
+var ELF_DT_STRSZ  = 10;
+
+# Limits
+var ELF_MAX_SECTIONS = 1024;
+var ELF_MAX_SYMBOLS  = 4096;
+
+# ================================================================
+# ELF Parser — Endian-aware read helpers
+# ================================================================
+
+# Read u16 from data at offset, respecting endianness
+# little_endian: 1 = LE, 0 = BE
+fn elf_read_u16(data, offset, little_endian) {
+    if (little_endian) {
+        return load8(data + offset) | (load8(data + offset + 1) << 8);
+    }
+    return (load8(data + offset) << 8) | load8(data + offset + 1);
+}
+
+fn elf_read_u32(data, offset, little_endian) {
+    if (little_endian) {
+        return load8(data + offset)
+             | (load8(data + offset + 1) << 8)
+             | (load8(data + offset + 2) << 16)
+             | (load8(data + offset + 3) << 24);
+    }
+    return (load8(data + offset) << 24)
+         | (load8(data + offset + 1) << 16)
+         | (load8(data + offset + 2) << 8)
+         | load8(data + offset + 3);
+}
+
+fn elf_read_u64(data, offset, little_endian) {
+    if (little_endian) {
+        var lo = elf_read_u32(data, offset, 1);
+        var hi = elf_read_u32(data, offset + 4, 1);
+        return lo | (hi << 32);
+    }
+    var hi = elf_read_u32(data, offset, 0);
+    var lo = elf_read_u32(data, offset + 4, 0);
+    return (hi << 32) | lo;
+}
+
+# ================================================================
+# ELF Parser — String table lookup
+# ================================================================
+
+# Read a null-terminated string from the string table
+fn read_strtab_entry(data, data_len, strtab_offset, name_index) {
+    var off = strtab_offset + name_index;
+    if (off >= data_len) { return str_from(""); }
+    var max = 256;
+    if (off + max > data_len) { max = data_len - off; }
+    return read_ascii(data, off, max);
+}
+
+# ================================================================
+# ELF Parser — Structs
+# ================================================================
+
+struct ElfSection {
+    name;          # Str
+    section_type;  # i64
+    flags;         # i64
+    addr;          # i64
+    offset;        # i64
+    size;          # i64
+}
+
+fn elf_section_new() {
+    var s = alloc(48);
+    store64(s, str_from(""));
+    store64(s + 8, 0);
+    store64(s + 16, 0);
+    store64(s + 24, 0);
+    store64(s + 32, 0);
+    store64(s + 40, 0);
+    return s;
+}
+
+fn elf_section_is_executable(sec) {
+    return (load64(sec + 16) & ELF_SHF_EXECINSTR) != 0;
+}
+
+fn elf_section_is_writable(sec) {
+    return (load64(sec + 16) & ELF_SHF_WRITE) != 0;
+}
+
+struct ElfSegment {
+    seg_type;   # i64
+    flags;      # i64
+    vaddr;      # i64
+    offset;     # i64
+    file_size;  # i64
+    mem_size;   # i64
+}
+
+fn elf_segment_new() {
+    var s = alloc(48);
+    store64(s, 0);
+    store64(s + 8, 0);
+    store64(s + 16, 0);
+    store64(s + 24, 0);
+    store64(s + 32, 0);
+    store64(s + 40, 0);
+    return s;
+}
+
+struct ElfSecurity {
+    has_relro;         # i64 (0/1)
+    has_rwx_segment;   # i64 (0/1) — dangerous: read+write+execute
+    is_static;         # i64 (0/1)
+    executable_stack;  # i64 (0/1)
+}
+
+fn elf_security_new() {
+    var s = alloc(32);
+    store64(s, 0);
+    store64(s + 8, 0);
+    store64(s + 16, 1);  # assume static until we find PT_DYNAMIC
+    store64(s + 24, 0);
+    return s;
+}
+
+struct ElfInfo {
+    class;         # i64 — ELF_CLASS_32 or ELF_CLASS_64
+    endian;        # i64 — ELF_DATA_LSB or ELF_DATA_MSB
+    os_abi;        # i64
+    file_type;     # i64 — ET_EXEC, ET_DYN, etc.
+    machine;       # i64
+    entry_point;   # i64
+    sections;      # Vec of ElfSection
+    needed_libs;   # Vec of Str
+    symbols;       # Vec of Str
+    segments;      # Vec of ElfSegment
+    interpreter;   # Str or 0
+    security;      # ElfSecurity
+}
+
+fn elf_info_new() {
+    var e = alloc(96);
+    store64(e, 0);
+    store64(e + 8, 0);
+    store64(e + 16, 0);
+    store64(e + 24, 0);
+    store64(e + 32, 0);
+    store64(e + 40, 0);
+    store64(e + 48, vec_new());
+    store64(e + 56, vec_new());
+    store64(e + 64, vec_new());
+    store64(e + 72, vec_new());
+    store64(e + 80, 0);
+    store64(e + 88, elf_security_new());
+    return e;
+}
+
+# ================================================================
+# ELF Parser — Machine name
+# ================================================================
+
+fn elf_machine_name(machine) {
+    if (machine == ELF_EM_386)     { return str_from("i386"); }
+    if (machine == ELF_EM_X86_64)  { return str_from("x86_64"); }
+    if (machine == ELF_EM_ARM)     { return str_from("ARM"); }
+    if (machine == ELF_EM_AARCH64) { return str_from("AArch64"); }
+    if (machine == ELF_EM_RISCV)   { return str_from("RISC-V"); }
+    return str_from("Unknown");
+}
+
+fn elf_type_name(t) {
+    if (t == ELF_ET_REL)  { return str_from("Relocatable"); }
+    if (t == ELF_ET_EXEC) { return str_from("Executable"); }
+    if (t == ELF_ET_DYN)  { return str_from("Shared object"); }
+    if (t == ELF_ET_CORE) { return str_from("Core dump"); }
+    return str_from("Unknown");
+}
+
+# ================================================================
+# ELF Parser — Program headers (segments)
+# ================================================================
+
+fn parse_program_headers(data, data_len, elf, ph_offset, ph_entry_size, ph_num) {
+    var is64 = load64(elf) == ELF_CLASS_64;
+    var le = load64(elf + 8) == ELF_DATA_LSB;
+
+    for (var i = 0; i < ph_num; i = i + 1) {
+        var off = ph_offset + i * ph_entry_size;
+        if (off + ph_entry_size > data_len) { return 0; }
+
+        var seg = elf_segment_new();
+        store64(seg, elf_read_u32(data, off, le));
+
+        if (is64) {
+            store64(seg + 8, elf_read_u32(data, off + 4, le));
+            store64(seg + 24, elf_read_u64(data, off + 8, le));
+            store64(seg + 16, elf_read_u64(data, off + 16, le));
+            store64(seg + 32, elf_read_u64(data, off + 32, le));
+            store64(seg + 40, elf_read_u64(data, off + 40, le));
+        } else {
+            store64(seg + 24, elf_read_u32(data, off + 4, le));
+            store64(seg + 16, elf_read_u32(data, off + 8, le));
+            store64(seg + 32, elf_read_u32(data, off + 16, le));
+            store64(seg + 40, elf_read_u32(data, off + 20, le));
+            store64(seg + 8, elf_read_u32(data, off + 24, le));
+        }
+
+        vec_push(load64(elf + 72), seg);
+
+        # Extract interpreter string from PT_INTERP segment
+        if (load64(seg) == ELF_PT_INTERP) {
+            if (load64(seg + 24) + load64(seg + 32) <= data_len) {
+                if (load64(seg + 32) > 0) {
+                    var interp_len = load64(seg + 32);
+                    if (interp_len > 256) { interp_len = 256; }
+                    store64(elf + 80, read_ascii(data, load64(seg + 24), interp_len));
+                }
+            }
+        }
+
+        # Security: detect GNU_RELRO
+        if (load64(seg) == ELF_PT_GNU_RELRO) {
+            store64(load64(elf + 88), 1);
+        }
+
+        # Security: detect executable stack
+        if (load64(seg) == ELF_PT_GNU_STACK) {
+            if (load64(seg + 8) & ELF_PF_X) {
+                store64(load64(elf + 88) + 24, 1);
+            }
+        }
+
+        # Security: detect PT_DYNAMIC => not static
+        if (load64(seg) == ELF_PT_DYNAMIC) {
+            store64(load64(elf + 88) + 16, 0);
+        }
+
+        # Security: detect RWX segments
+        if (load64(seg) == ELF_PT_LOAD) {
+            var rwx = ELF_PF_R | ELF_PF_W | ELF_PF_X;
+            if ((load64(seg + 8) & rwx) == rwx) {
+                store64(load64(elf + 88) + 8, 1);
+            }
+        }
+    }
+}
+
+# ================================================================
+# ELF Parser — Section headers
+# ================================================================
+
+fn parse_elf_sections(data, data_len, elf, sh_offset, sh_entry_size, sh_num, shstrndx) {
+    var is64 = load64(elf) == ELF_CLASS_64;
+    var le = load64(elf + 8) == ELF_DATA_LSB;
+
+    # First, find the section header string table offset
+    var shstrtab_offset = 0;
+    if (shstrndx > 0) {
+        if (shstrndx < sh_num) {
+            var strtab_hdr = sh_offset + shstrndx * sh_entry_size;
+            if (strtab_hdr + sh_entry_size <= data_len) {
+                if (is64) {
+                    shstrtab_offset = elf_read_u64(data, strtab_hdr + 24, le);
+                } else {
+                    shstrtab_offset = elf_read_u32(data, strtab_hdr + 16, le);
+                }
+            }
+        }
+    }
+
+    var limit = sh_num;
+    if (limit > ELF_MAX_SECTIONS) { limit = ELF_MAX_SECTIONS; }
+
+    for (var i = 0; i < limit; i = i + 1) {
+        var off = sh_offset + i * sh_entry_size;
+        if (off + sh_entry_size > data_len) { return 0; }
+
+        var sec = elf_section_new();
+        var name_idx = elf_read_u32(data, off, le);
+        store64(sec + 8, elf_read_u32(data, off + 4, le));
+
+        if (is64) {
+            store64(sec + 16, elf_read_u64(data, off + 8, le));
+            store64(sec + 24, elf_read_u64(data, off + 16, le));
+            store64(sec + 32, elf_read_u64(data, off + 24, le));
+            store64(sec + 40, elf_read_u64(data, off + 32, le));
+        } else {
+            store64(sec + 16, elf_read_u32(data, off + 8, le));
+            store64(sec + 24, elf_read_u32(data, off + 12, le));
+            store64(sec + 32, elf_read_u32(data, off + 16, le));
+            store64(sec + 40, elf_read_u32(data, off + 20, le));
+        }
+
+        # Resolve section name from string table
+        if (shstrtab_offset > 0) {
+            store64(sec, read_strtab_entry(data, data_len, shstrtab_offset, name_idx));
+        }
+
+        vec_push(load64(elf + 48), sec);
+    }
+}
+
+# ================================================================
+# ELF Parser — Dynamic section (DT_NEEDED libs)
+# ================================================================
+
+fn extract_needed_libs(data, data_len, elf) {
+    var is64 = load64(elf) == ELF_CLASS_64;
+    var le = load64(elf + 8) == ELF_DATA_LSB;
+
+    # Find the .dynamic section (or PT_DYNAMIC segment)
+    var dyn_offset = 0;
+    var dyn_size = 0;
+
+    # Try sections first
+    var nsec = vec_len(load64(elf + 48));
+    for (var i = 0; i < nsec; i = i + 1) {
+        var sec = vec_get(load64(elf + 48), i);
+        if (load64(sec + 8) == ELF_SHT_DYNAMIC) {
+            dyn_offset = load64(sec + 32);
+            dyn_size = load64(sec + 40);
+            i = nsec;  # break
+        }
+    }
+
+    # Fall back to segments if no .dynamic section
+    if (dyn_offset == 0) {
+        var nseg = vec_len(load64(elf + 72));
+        for (var i = 0; i < nseg; i = i + 1) {
+            var seg = vec_get(load64(elf + 72), i);
+            if (load64(seg) == ELF_PT_DYNAMIC) {
+                dyn_offset = load64(seg + 24);
+                dyn_size = load64(seg + 32);
+                i = nseg;  # break
+            }
+        }
+    }
+
+    if (dyn_offset == 0 || dyn_size == 0) { return 0; }
+
+    # Find the dynamic string table (DT_STRTAB)
+    var dynstr_offset = 0;
+    var entry_size = 8;
+    if (is64) { entry_size = 16; }
+
+    # First pass: find DT_STRTAB
+    var pos = dyn_offset;
+    var end = dyn_offset + dyn_size;
+    if (end > data_len) { end = data_len; }
+
+    while (pos + entry_size <= end) {
+        var tag = 0;
+        var val = 0;
+        if (is64) {
+            tag = elf_read_u64(data, pos, le);
+            val = elf_read_u64(data, pos + 8, le);
+        } else {
+            tag = elf_read_u32(data, pos, le);
+            val = elf_read_u32(data, pos + 4, le);
+        }
+        if (tag == ELF_DT_NULL) { pos = end; }  # break
+        else {
+            if (tag == ELF_DT_STRTAB) {
+                # val is a virtual address; try to find it in loaded sections
+                # For files, try matching against section offsets
+                var nsec2 = vec_len(load64(elf + 48));
+                for (var i = 0; i < nsec2; i = i + 1) {
+                    var sec = vec_get(load64(elf + 48), i);
+                    if (load64(sec + 24) == val) {
+                        dynstr_offset = load64(sec + 32);
+                        i = nsec2;  # break
+                    }
+                }
+                # If that failed, try segments for VA-to-offset mapping
+                if (dynstr_offset == 0) {
+                    var nseg2 = vec_len(load64(elf + 72));
+                    for (var i = 0; i < nseg2; i = i + 1) {
+                        var seg = vec_get(load64(elf + 72), i);
+                        if (load64(seg) == ELF_PT_LOAD) {
+                            if (val >= load64(seg + 16)) {
+                                if (val < load64(seg + 16) + load64(seg + 32)) {
+                                    dynstr_offset = load64(seg + 24) + (val - load64(seg + 16));
+                                    i = nseg2;  # break
+                                }
+                            }
+                        }
+                    }
+                }
+                pos = end;  # break, we found strtab
+            } else {
+                pos = pos + entry_size;
+            }
+        }
+    }
+
+    if (dynstr_offset == 0) { return 0; }
+
+    # Second pass: collect DT_NEEDED entries
+    pos = dyn_offset;
+    while (pos + entry_size <= end) {
+        var tag = 0;
+        var val = 0;
+        if (is64) {
+            tag = elf_read_u64(data, pos, le);
+            val = elf_read_u64(data, pos + 8, le);
+        } else {
+            tag = elf_read_u32(data, pos, le);
+            val = elf_read_u32(data, pos + 4, le);
+        }
+        if (tag == ELF_DT_NULL) { pos = end; }  # break
+        else {
+            if (tag == ELF_DT_NEEDED) {
+                var lib_name = read_strtab_entry(data, data_len, dynstr_offset, val);
+                vec_push(load64(elf + 56), lib_name);
+            }
+            pos = pos + entry_size;
+        }
+    }
+}
+
+# ================================================================
+# ELF Parser — Symbol extraction
+# ================================================================
+
+fn extract_elf_symbols(data, data_len, elf) {
+    var is64 = load64(elf) == ELF_CLASS_64;
+    var le = load64(elf + 8) == ELF_DATA_LSB;
+
+    # Find .dynsym and its linked string table
+    var nsec = vec_len(load64(elf + 48));
+    for (var i = 0; i < nsec; i = i + 1) {
+        var sec = vec_get(load64(elf + 48), i);
+        if (load64(sec + 8) == ELF_SHT_DYNSYM || load64(sec + 8) == ELF_SHT_SYMTAB) {
+            # The linked string table index is stored in sh_link
+            # We need to re-read sh_link from the raw section header
+            # For simplicity, look for SHT_STRTAB sections
+            var strtab_off = 0;
+            for (var j = 0; j < nsec; j = j + 1) {
+                var strsec = vec_get(load64(elf + 48), j);
+                if (load64(strsec + 8) == ELF_SHT_STRTAB) {
+                    if (j != 0) {  # Skip null section
+                        # Use the first STRTAB that is not .shstrtab
+                        if (str_eq(load64(strsec), str_from(".shstrtab")) == 0) {
+                            strtab_off = load64(strsec + 32);
+                            j = nsec;  # break
+                        }
+                    }
+                }
+            }
+            if (strtab_off == 0) { return 0; }
+
+            var entry_size = 16;  # ELF32 sym entry
+            if (is64) { entry_size = 24; }  # ELF64 sym entry
+
+            var num_syms = load64(sec + 40) / entry_size;
+            if (num_syms > ELF_MAX_SYMBOLS) { num_syms = ELF_MAX_SYMBOLS; }
+
+            var sym_off = load64(sec + 32);
+            for (var k = 1; k < num_syms; k = k + 1) {  # skip index 0
+                var soff = sym_off + k * entry_size;
+                if (soff + entry_size > data_len) { k = num_syms; }  # break
+                else {
+                    var name_idx = elf_read_u32(data, soff, le);
+                    if (name_idx > 0) {
+                        var sym_name = read_strtab_entry(data, data_len, strtab_off, name_idx);
+                        if (str_len(sym_name) > 0) {
+                            vec_push(load64(elf + 64), sym_name);
+                        }
+                    }
+                }
+            }
+            return 0;  # done after first symbol table
+        }
+    }
+}
+
+# ================================================================
+# ELF Parser — Main parse function
+# ================================================================
+
+fn parse_elf(data, data_len) {
+    # Validate minimum size and magic
+    if (data_len < 52) { return 0; }  # Minimum ELF32 header
+    if (load8(data) != ELF_MAGIC_0) { return 0; }
+    if (load8(data + 1) != ELF_MAGIC_1) { return 0; }
+    if (load8(data + 2) != ELF_MAGIC_2) { return 0; }
+    if (load8(data + 3) != ELF_MAGIC_3) { return 0; }
+
+    var elf = elf_info_new();
+
+    # ELF identification
+    store64(elf, load8(data + 4));
+    store64(elf + 8, load8(data + 5));
+    store64(elf + 16, load8(data + 7));
+
+    var is64 = load64(elf) == ELF_CLASS_64;
+    var le = load64(elf + 8) == ELF_DATA_LSB;
+
+    if (is64) {
+        if (data_len < 64) { return 0; }  # Minimum ELF64 header
+    }
+
+    # Header fields
+    store64(elf + 24, elf_read_u16(data, 16, le));
+    store64(elf + 32, elf_read_u16(data, 18, le));
+
+    if (is64) {
+        store64(elf + 40, elf_read_u64(data, 24, le));
+        var ph_offset     = elf_read_u64(data, 32, le);
+        var sh_offset     = elf_read_u64(data, 40, le);
+        var ph_entry_size = elf_read_u16(data, 54, le);
+        var ph_num        = elf_read_u16(data, 56, le);
+        var sh_entry_size = elf_read_u16(data, 58, le);
+        var sh_num        = elf_read_u16(data, 60, le);
+        var shstrndx      = elf_read_u16(data, 62, le);
+
+        # Parse program headers (segments)
+        if (ph_offset > 0) {
+            if (ph_num > 0) {
+                parse_program_headers(data, data_len, elf, ph_offset, ph_entry_size, ph_num);
+            }
+        }
+
+        # Parse section headers
+        if (sh_offset > 0) {
+            if (sh_num > 0) {
+                parse_elf_sections(data, data_len, elf, sh_offset, sh_entry_size, sh_num, shstrndx);
+            }
+        }
+    } else {
+        store64(elf + 40, elf_read_u32(data, 24, le));
+        var ph_offset     = elf_read_u32(data, 28, le);
+        var sh_offset     = elf_read_u32(data, 32, le);
+        var ph_entry_size = elf_read_u16(data, 42, le);
+        var ph_num        = elf_read_u16(data, 44, le);
+        var sh_entry_size = elf_read_u16(data, 46, le);
+        var sh_num        = elf_read_u16(data, 48, le);
+        var shstrndx      = elf_read_u16(data, 50, le);
+
+        if (ph_offset > 0) {
+            if (ph_num > 0) {
+                parse_program_headers(data, data_len, elf, ph_offset, ph_entry_size, ph_num);
+            }
+        }
+
+        if (sh_offset > 0) {
+            if (sh_num > 0) {
+                parse_elf_sections(data, data_len, elf, sh_offset, sh_entry_size, sh_num, shstrndx);
+            }
+        }
+    }
+
+    # Extract dynamic libraries and symbols
+    extract_needed_libs(data, data_len, elf);
+    extract_elf_symbols(data, data_len, elf);
+
+    return elf;
+}

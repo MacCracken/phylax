@@ -1,0 +1,417 @@
+# ================================================================
+# Utility — stdlib shims (functions not in stdlib or named differently)
+# ================================================================
+
+# Create Str from raw pointer + length (stdlib has str_from_buf)
+fn str_from_raw(ptr, len) {
+    return str_from_buf(ptr, len);
+}
+
+# Lowercase a Str (allocate a new copy)
+fn str_lower(s) {
+    var slen = str_len(s);
+    var sd = str_data(s);
+    var buf = alloc(slen);
+    for (var i = 0; i < slen; i = i + 1) {
+        var c = load8(sd + i);
+        if (c >= 65) { if (c <= 90) { c = c + 32; } }
+        store8(buf + i, c);
+    }
+    return str_new(buf, slen);
+}
+
+# Print an integer to stdout
+fn print_int(n) {
+    str_print(str_from_int(n));
+}
+
+# Read an entire file into a Str. Returns 0 on failure.
+# Uses mmap for files > 64KB (zero-copy), alloc+read for small files.
+var PHYLAX_MAX_FILE_SIZE = 104857600;  # 100 MB hard limit
+var PHYLAX_MMAP_THRESHOLD = 65536;     # 64 KB — mmap above this
+
+# ================================================================
+# Smart allocator: heap for small, mmap for large
+# ================================================================
+
+var LARGE_ALLOC_THRESHOLD = 65536;  # 64KB
+
+fn phylax_alloc(size) {
+    if (size >= LARGE_ALLOC_THRESHOLD) {
+        return mmap_anon(size);
+    }
+    return alloc(size);
+}
+
+# ================================================================
+# Global YARA engine — reuse across scans to avoid heap exhaustion
+# ================================================================
+
+var G_YARA_ENGINE = 0;
+
+fn get_yara_engine() {
+    if (G_YARA_ENGINE == 0) {
+        G_YARA_ENGINE = yara_engine_new();
+        yara_engine_load_builtin_rules(G_YARA_ENGINE);
+    }
+    return G_YARA_ENGINE;
+}
+
+# Convert a Str to a null-terminated cstr for syscalls
+fn str_to_cstr(s) {
+    var slen = str_len(s);
+    var buf = alloc(slen + 1);
+    memcpy(buf, str_data(s), slen);
+    store8(buf + slen, 0);
+    return buf;
+}
+
+fn phylax_file_size(path) {
+    # stat(path, &statbuf) — st_size is at offset 48 on x86_64
+    # path is a cstr (null-terminated)
+    var statbuf[144];  # struct stat is 144 bytes on x86_64
+    var rc = syscall(4, path, &statbuf);  # SYS_STAT = 4
+    if (rc < 0) { return -1; }
+    return load64(&statbuf + 48);
+}
+
+fn phylax_read_file(path) {
+    var size = phylax_file_size(path);
+    if (size <= 0) { return 0; }
+    if (size > PHYLAX_MAX_FILE_SIZE) { return 0; }
+
+    # Per-scan allocation check
+    G_SCAN_ALLOC_TOTAL = G_SCAN_ALLOC_TOTAL + size;
+    if (G_SCAN_ALLOC_TOTAL > G_SCAN_ALLOC_LIMIT) { return 0; }
+
+    if (size > PHYLAX_MMAP_THRESHOLD) {
+        # mmap path with O_NOFOLLOW — reject symlinks, zero-copy
+        var fd = syscall(2, path, O_RDONLY | O_NOFOLLOW, 0);  # SYS_OPEN with O_NOFOLLOW
+        if (fd < 0) { return 0; }
+        # fstat to verify it's a regular file (mode & 0170000 == 0100000)
+        var statbuf[144];
+        var frc = syscall(SYS_FSTAT, fd, &statbuf);
+        if (frc < 0) { syscall(3, fd); return 0; }
+        var mode = load64(&statbuf + 24);  # st_mode at offset 24
+        if ((mode & 0170000) != 0100000) { syscall(3, fd); return 0; }  # not regular file
+        var addr = mmap_file_ro(fd, size);
+        file_close(fd);
+        if (addr == 0) { return 0; }
+        # Return a Str pointing directly into the mmap region
+        return str_new(addr, size);
+    }
+
+    # Small file — phylax_alloc + read (mmap for large, heap for small)
+    var buf = phylax_alloc(size + 1);
+    if (buf == 0) { return 0; }
+    var n = file_read_all(path, buf, size);
+    if (n <= 0) { return 0; }
+    return str_new(buf, n);
+}
+
+# http_post — POST request using raw TCP sockets
+# url: C string "http://host:port/path"
+# body: Str with the request body
+# content_type: C string like "application/json"
+# Returns: response struct (status at +0, body Str at +8, body_len at +16) or error
+fn http_post(url, body, content_type) {
+    var parsed = _http_parse_url(url);
+    if (parsed == 0) {
+        var bad = alloc(24);
+        store64(bad, 0);
+        return bad;
+    }
+    var host = load64(parsed);
+    var port = load64(parsed + 8);
+    var path = load64(parsed + 16);
+
+    # Build POST request headers
+    var req = alloc(4096);
+    var pos = 0;
+
+    # "POST /path HTTP/1.0\r\n"
+    memcpy(req, "POST ", 5); pos = 5;
+    var plen = strlen(path);
+    memcpy(req + pos, path, plen); pos = pos + plen;
+    memcpy(req + pos, " HTTP/1.0\r\n", 11); pos = pos + 11;
+
+    # "Host: host\r\n"
+    memcpy(req + pos, "Host: ", 6); pos = pos + 6;
+    var hlen = strlen(host);
+    memcpy(req + pos, host, hlen); pos = pos + hlen;
+    memcpy(req + pos, "\r\n", 2); pos = pos + 2;
+
+    # "Content-Type: ...\r\n"
+    memcpy(req + pos, "Content-Type: ", 14); pos = pos + 14;
+    var ctlen = strlen(content_type);
+    memcpy(req + pos, content_type, ctlen); pos = pos + ctlen;
+    memcpy(req + pos, "\r\n", 2); pos = pos + 2;
+
+    # "Content-Length: N\r\n"
+    var body_data = str_data(body);
+    var body_len = str_len(body);
+    var cl_str = str_from_int(body_len);
+    memcpy(req + pos, "Content-Length: ", 16); pos = pos + 16;
+    memcpy(req + pos, str_data(cl_str), str_len(cl_str)); pos = pos + str_len(cl_str);
+    memcpy(req + pos, "\r\n", 2); pos = pos + 2;
+
+    # "Connection: close\r\n\r\n"
+    memcpy(req + pos, "Connection: close\r\n\r\n", 21); pos = pos + 21;
+    store8(req + pos, 0);
+
+    # Connect
+    var fd = tcp_socket();
+    if (fd < 0) { var err = alloc(24); store64(err, 0); return err; }
+    var r = sock_connect(fd, host, port);
+    if (r < 0) { syscall(3, fd); var err = alloc(24); store64(err, 0); return err; }
+
+    # Send headers
+    sock_send(fd, req, pos);
+    # Send body
+    if (body_len > 0) {
+        sock_send(fd, body_data, body_len);
+    }
+
+    # Read response
+    var rbuf = alloc(65536);
+    var total = 0;
+    var rgo = 1;
+    while (rgo == 1) {
+        var n = sock_recv(fd, rbuf + total, 65536 - total);
+        if (n <= 0) { rgo = 0; }
+        else { total = total + n; if (total >= 65536) { rgo = 0; } }
+    }
+    syscall(3, fd);
+
+    return _http_parse_response(rbuf, total);
+}
+
+# str_to_int — parse a decimal integer string to i64
+# Returns 0 if the string is empty or non-numeric.
+fn str_to_int(s) {
+    if (s == 0) { return 0; }
+    var slen = str_len(s);
+    if (slen == 0) { return 0; }
+    var sd = str_data(s);
+    var result = 0;
+    var neg = 0;
+    var start = 0;
+    if (load8(sd) == 0x2D) {
+        neg = 1;
+        start = 1;
+    }
+    for (var i = start; i < slen; i = i + 1) {
+        var c = load8(sd + i);
+        if (c < 48) { return result; }
+        if (c > 57) { return result; }
+        result = result * 10 + (c - 48);
+    }
+    if (neg) { result = 0 - result; }
+    return result;
+}
+
+# ================================================================
+# Utility — ISO 8601 timestamp (replacement for stdlib iso8601 which hangs)
+# ================================================================
+
+# Format epoch seconds as "YYYY-MM-DD HH:MM:SS" Str
+fn phylax_timestamp(epoch) {
+    var secs_in_day = 86400;
+    var days = epoch / secs_in_day;
+    var remaining = epoch - days * secs_in_day;
+    if (remaining < 0) { remaining = remaining + secs_in_day; days = days - 1; }
+
+    var hours = remaining / 3600;
+    var mins = (remaining - hours * 3600) / 60;
+    var secs = remaining - hours * 3600 - mins * 60;
+
+    # Convert days since 1970-01-01 to Gregorian date
+    # Shift epoch to 2000-03-01 based cycle (simplifies leap year math)
+    var d = days + 719468;  # days from 0000-03-01 to 1970-01-01
+
+    var era = d / 146097;
+    if (d < 0) { era = (d - 146096) / 146097; }
+    var doe = d - era * 146097;  # day of era [0, 146096]
+    var yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    var y = yoe + era * 400;
+    var doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    var mp = (5 * doy + 2) / 153;
+    var day = doy - (153 * mp + 2) / 5 + 1;
+    var month = mp + 3;
+    if (mp >= 10) { month = mp - 9; }
+    if (month <= 2) { y = y + 1; }
+
+    # Build the string "YYYY-MM-DD HH:MM:SS"
+    var buf = alloc(19);
+    # Year (4 digits)
+    store8(buf, 48 + y / 1000);
+    store8(buf + 1, 48 + (y / 100) - (y / 1000) * 10);
+    store8(buf + 2, 48 + (y / 10) - (y / 100) * 10);
+    store8(buf + 3, 48 + y - (y / 10) * 10);
+    store8(buf + 4, 45);  # '-'
+    # Month (2 digits)
+    store8(buf + 5, 48 + month / 10);
+    store8(buf + 6, 48 + month - (month / 10) * 10);
+    store8(buf + 7, 45);  # '-'
+    # Day (2 digits)
+    store8(buf + 8, 48 + day / 10);
+    store8(buf + 9, 48 + day - (day / 10) * 10);
+    store8(buf + 10, 32);  # ' '
+    # Hours (2 digits)
+    store8(buf + 11, 48 + hours / 10);
+    store8(buf + 12, 48 + hours - (hours / 10) * 10);
+    store8(buf + 13, 58);  # ':'
+    # Minutes (2 digits)
+    store8(buf + 14, 48 + mins / 10);
+    store8(buf + 15, 48 + mins - (mins / 10) * 10);
+    store8(buf + 16, 58);  # ':'
+    # Seconds (2 digits)
+    store8(buf + 17, 48 + secs / 10);
+    store8(buf + 18, 48 + secs - (secs / 10) * 10);
+
+    return str_new(buf, 19);
+}
+
+# ================================================================
+# Utility — hex encoding
+# ================================================================
+
+fn hex_nibble(n) {
+    if (n < 10) { return 48 + n; }  # '0' = 48
+    return 97 + n - 10;             # 'a' = 97
+}
+
+# Encode a buffer of bytes at addr, len bytes, into a hex Str
+fn hex_encode(addr, len) {
+    var out = alloc(len * 2 + 1);
+    for (var i = 0; i < len; i = i + 1) {
+        var b = load8(addr + i);
+        store8(out + i * 2,     hex_nibble((b >> 4) & 15));
+        store8(out + i * 2 + 1, hex_nibble(b & 15));
+    }
+    store8(out + len * 2, 0);  # null terminator
+    return str_from_raw(out, len * 2);
+}
+
+fn hex_digit_value(ch) {
+    if (ch >= 48) { if (ch <= 57) { return ch - 48; } }       # '0'-'9'
+    if (ch >= 97) { if (ch <= 102) { return ch - 97 + 10; } } # 'a'-'f'
+    if (ch >= 65) { if (ch <= 70) { return ch - 65 + 10; } }  # 'A'-'F'
+    return -1;
+}
+
+# Decode hex string to raw buffer. Returns addr of bytes, sets *out_len.
+fn hex_decode(s, out_len_ptr) {
+    var slen = str_len(s);
+    if (slen & 1) { return 0; }  # odd length
+    var blen = slen >> 1;
+    var buf = alloc(blen);
+    var sdata = str_data(s);
+    for (var i = 0; i < blen; i = i + 1) {
+        var hi = hex_digit_value(load8(sdata + i * 2));
+        var lo = hex_digit_value(load8(sdata + i * 2 + 1));
+        if (hi < 0) { return 0; }
+        if (lo < 0) { return 0; }
+        store8(buf + i, (hi << 4) | lo);
+    }
+    store64(out_len_ptr, blen);
+    return buf;
+}
+
+# ================================================================
+# Utility — memmem (substring search in raw bytes)
+# ================================================================
+
+# Search for needle in haystack. Returns offset or -1.
+fn memmem(haystack, hlen, needle, nlen) {
+    if (nlen == 0) { return -1; }
+    if (nlen > hlen) { return -1; }
+    var limit = hlen - nlen;
+    for (var i = 0; i <= limit; i = i + 1) {
+        var found = 1;
+        for (var j = 0; j < nlen; j = j + 1) {
+            if (load8(haystack + i + j) != load8(needle + j)) {
+                found = 0;
+                j = nlen;  # break inner
+            }
+        }
+        if (found) { return i; }
+    }
+    return -1;
+}
+
+# Search for a Str needle inside a Str haystack
+fn str_contains(haystack, needle) {
+    var hdata = str_data(haystack);
+    var hlen  = str_len(haystack);
+    var ndata = str_data(needle);
+    var nlen  = str_len(needle);
+    return memmem(hdata, hlen, ndata, nlen) >= 0;
+}
+
+# Count occurrences of needle Str in haystack Str
+fn str_count(haystack, needle) {
+    var hdata = str_data(haystack);
+    var hlen  = str_len(haystack);
+    var ndata = str_data(needle);
+    var nlen  = str_len(needle);
+    if (nlen == 0) { return 0; }
+    var count = 0;
+    var pos = 0;
+    while (pos + nlen <= hlen) {
+        var found = memmem(hdata + pos, hlen - pos, ndata, nlen);
+        if (found < 0) { return count; }
+        count = count + 1;
+        pos = pos + found + nlen;
+    }
+    return count;
+}
+
+# ================================================================
+# Utility — f64 constants
+# ================================================================
+
+# f64 zero: 0x0000000000000000
+var F64_ZERO = 0;
+
+# f64 one: 0x3FF0000000000000
+var F64_ONE = 4607182418800017408;
+
+# f64 8.0: 0x4020000000000000
+var F64_EIGHT = 4620693217682128896;
+
+# f64 256.0: 0x4070000000000000
+var F64_256 = 4643211215818981376;
+
+# f64 100.0: 0x4059000000000000
+var F64_100 = 4636737291354636288;
+
+# f64 7.5: 0x401E000000000000
+var F64_7_5 = 4620130267728707584;
+
+# f64 7.0: 0x401C000000000000
+var F64_7_0 = 4619567317775286272;
+
+# f64 512.0: 0x4080000000000000
+var F64_512 = 4647714815446351872;
+
+# f64 4096.0: 0x40B0000000000000
+var F64_4096 = 4661225614328463360;
+
+# f64 15.0: 0x402E000000000000
+var F64_15 = 4624633867356078080;
+
+# f64 255.0: 0x406FE00000000000
+var F64_255 = 4643808755916185600;
+
+# f64 5.5: 0x4016000000000000
+var F64_5_5 = 4617878467915022336;
+
+# f64 0.9 (90%): 0x3FECCCCCCCCCCCCD
+var F64_0_9 = 4606281698874543309;
+
+# f64 40.0: 0x4044000000000000
+var F64_40 = 4630826316843712512;
+
+# f64 60.0: 0x404E000000000000
+var F64_60 = 4636175958903619584;

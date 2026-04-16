@@ -1,0 +1,669 @@
+# ================================================================
+# ssdeep — Context-Triggered Piecewise Hashing (CTPH)
+# ================================================================
+
+var ROLLING_WINDOW  = 7;
+var MIN_BLOCK_SIZE  = 3;
+var SPAMSUM_LENGTH  = 64;
+var HASH_INIT       = 671088487;     # 0x28021967
+var HASH_PRIME      = 16777619;      # 0x01000193
+
+# Base64 alphabet (stored as a 64-byte raw buffer)
+fn base64_char(idx) {
+    # ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/
+    if (idx < 26) { return 65 + idx; }      # A-Z
+    if (idx < 52) { return 97 + idx - 26; } # a-z
+    if (idx < 62) { return 48 + idx - 52; } # 0-9
+    if (idx == 62) { return 43; }            # +
+    return 47;                                # /
+}
+
+# Rolling hash state — stored as raw memory block
+# Layout: window (7 bytes at +0), pos (i64 at +8), h1 (i64 at +16),
+#         h2 (i64 at +24), h3 (i64 at +32)
+var ROLL_WINDOW_OFF = 0;
+var ROLL_POS_OFF    = 8;
+var ROLL_H1_OFF     = 16;
+var ROLL_H2_OFF     = 24;
+var ROLL_H3_OFF     = 32;
+var ROLL_SIZE       = 40;
+
+fn rolling_new() {
+    var r = alloc(ROLL_SIZE);
+    for (var i = 0; i < ROLLING_WINDOW; i = i + 1) {
+        store8(r + ROLL_WINDOW_OFF + i, 0);
+    }
+    store64(r + ROLL_POS_OFF, 0);
+    store64(r + ROLL_H1_OFF, 0);
+    store64(r + ROLL_H2_OFF, 0);
+    store64(r + ROLL_H3_OFF, 0);
+    return r;
+}
+
+# Update rolling hash with a byte, return combined hash (masked to u32)
+fn rolling_update(r, byte) {
+    var pos = load64(r + ROLL_POS_OFF);
+    var old = load8(r + ROLL_WINDOW_OFF + pos);
+    store8(r + ROLL_WINDOW_OFF + pos, byte);
+    var new_pos = pos + 1;
+    if (new_pos >= ROLLING_WINDOW) { new_pos = 0; }
+    store64(r + ROLL_POS_OFF, new_pos);
+
+    var h1 = load64(r + ROLL_H1_OFF);
+    var h2 = load64(r + ROLL_H2_OFF);
+    var h3 = load64(r + ROLL_H3_OFF);
+
+    h1 = (h1 + byte - old) & 4294967295;
+    h2 = (h2 + h1 - ROLLING_WINDOW * old) & 4294967295;
+    h3 = (((h3 << 5) + byte) ^ byte) & 4294967295;
+
+    store64(r + ROLL_H1_OFF, h1);
+    store64(r + ROLL_H2_OFF, h2);
+    store64(r + ROLL_H3_OFF, h3);
+
+    return (h1 + h2 + h3) & 4294967295;
+}
+
+# FNV-1 style hash update (masked to u32)
+fn fnv_update(h, byte) {
+    return ((h * HASH_PRIME) ^ byte) & 4294967295;
+}
+
+# Select initial block size based on data length
+fn select_block_size(data_len) {
+    var bs = MIN_BLOCK_SIZE;
+    while (bs * SPAMSUM_LENGTH < data_len) {
+        bs = bs * 2;
+    }
+    return bs;
+}
+
+# Compute both hash components for a given block size
+# Returns: stores hash1 Str at out_h1_ptr, hash2 Str at out_h2_ptr
+fn compute_ssdeep_hashes(data, len, block_size, out_h1_ptr, out_h2_ptr) {
+    var rolling = rolling_new();
+    var fnv1 = HASH_INIT;
+    var fnv2 = HASH_INIT;
+
+    # Build hash strings using byte buffers
+    var h1_buf = alloc(SPAMSUM_LENGTH + 1);
+    var h2_buf = alloc(SPAMSUM_LENGTH + 1);
+    var h1_len = 0;
+    var h2_len = 0;
+
+    var bs = block_size;
+    var bs2 = bs * 2;
+
+    for (var i = 0; i < len; i = i + 1) {
+        var byte = load8(data + i);
+        var roll = rolling_update(rolling, byte);
+        fnv1 = fnv_update(fnv1, byte);
+        fnv2 = fnv_update(fnv2, byte);
+
+        # Block boundary for block_size
+        if (roll & 4294967295) {
+            if ((roll % bs) == (bs - 1)) {
+                store8(h1_buf + h1_len, base64_char(fnv1 & 63));
+                h1_len = h1_len + 1;
+                fnv1 = HASH_INIT;
+            }
+        }
+
+        # Block boundary for block_size * 2
+        if ((roll % bs2) == (bs2 - 1)) {
+            store8(h2_buf + h2_len, base64_char(fnv2 & 63));
+            h2_len = h2_len + 1;
+            fnv2 = HASH_INIT;
+        }
+    }
+
+    # Finalize trailing partial blocks
+    if (fnv1 != HASH_INIT || h1_len == 0) {
+        store8(h1_buf + h1_len, base64_char(fnv1 & 63));
+        h1_len = h1_len + 1;
+    }
+    if (fnv2 != HASH_INIT || h2_len == 0) {
+        store8(h2_buf + h2_len, base64_char(fnv2 & 63));
+        h2_len = h2_len + 1;
+    }
+
+    store8(h1_buf + h1_len, 0);
+    store8(h2_buf + h2_len, 0);
+
+    store64(out_h1_ptr, str_from_raw(h1_buf, h1_len));
+    store64(out_h2_ptr, str_from_raw(h2_buf, h2_len));
+}
+
+# Compute the ssdeep hash of a byte slice
+# Returns SsdeepHash ptr, or 0 if data is empty
+fn ssdeep_hash(data, len) {
+    if (len == 0) { return 0; }
+
+    var block_size = select_block_size(len);
+
+    # Allocate space for output string pointers
+    var h1_ptr = alloc(8);
+    var h2_ptr = alloc(8);
+
+    while (1) {
+        compute_ssdeep_hashes(data, len, block_size, h1_ptr, h2_ptr);
+        var h1 = load64(h1_ptr);
+        var h2 = load64(h2_ptr);
+
+        var h1_len = str_len(h1);
+        var h2_len = str_len(h2);
+
+        # If hash1 fits or we are at minimum block size, done
+        if (h1_len <= SPAMSUM_LENGTH || block_size <= MIN_BLOCK_SIZE) {
+            # Truncate if needed
+            var h1_trunc = h1;
+            if (h1_len > SPAMSUM_LENGTH) {
+                h1_trunc = str_substr(h1, 0, SPAMSUM_LENGTH);
+            }
+            var h2_max = SPAMSUM_LENGTH / 2;
+            var h2_trunc = h2;
+            if (h2_len > h2_max) {
+                h2_trunc = str_substr(h2, 0, h2_max);
+            }
+
+            # Build digest: "block_size:hash1:hash2"
+            var digest = str_cat(str_from_int(block_size),
+                         str_cat(str_from(":"),
+                         str_cat(h1_trunc,
+                         str_cat(str_from(":"), h2_trunc))));
+
+            var result = alloc(16);
+            store64(result, digest);
+            store64(result + 8, block_size);
+            return result;
+        }
+
+        # Hash too long, double block size and retry
+        block_size = block_size * 2;
+    }
+    return 0;  # unreachable
+}
+
+# Eliminate runs of 3+ identical characters (reduce to 3)
+fn eliminate_sequences(s) {
+    var slen = str_len(s);
+    var sdata = str_data(s);
+    var out = alloc(slen + 1);
+    var out_len = 0;
+    var run = 0;
+    var prev = -1;
+
+    for (var i = 0; i < slen; i = i + 1) {
+        var b = load8(sdata + i);
+        if (b == prev) {
+            run = run + 1;
+        } else {
+            run = 1;
+            prev = b;
+        }
+        if (run <= 3) {
+            store8(out + out_len, b);
+            out_len = out_len + 1;
+        }
+    }
+    store8(out + out_len, 0);
+    return str_from_raw(out, out_len);
+}
+
+# Levenshtein edit distance between two raw byte buffers
+fn edit_distance(a, alen, b, blen) {
+    if (alen == 0) { return blen; }
+    if (blen == 0) { return alen; }
+
+    # Single-row DP
+    var prev = alloc((blen + 1) * 8);
+    var curr = alloc((blen + 1) * 8);
+
+    for (var j = 0; j <= blen; j = j + 1) {
+        store64(prev + j * 8, j);
+    }
+
+    for (var i = 1; i <= alen; i = i + 1) {
+        store64(curr, i);
+        for (var j = 1; j <= blen; j = j + 1) {
+            var cost = 1;
+            if (load8(a + i - 1) == load8(b + j - 1)) { cost = 0; }
+            var del = load64(prev + j * 8) + 1;
+            var ins = load64(curr + (j - 1) * 8) + 1;
+            var sub = load64(prev + (j - 1) * 8) + cost;
+            var best = del;
+            if (ins < best) { best = ins; }
+            if (sub < best) { best = sub; }
+            store64(curr + j * 8, best);
+        }
+        # Swap prev and curr
+        var tmp = prev;
+        prev = curr;
+        curr = tmp;
+    }
+
+    return load64(prev + blen * 8);
+}
+
+# Parse an ssdeep digest into (block_size, hash1, hash2)
+# Stores results at bs_ptr, h1_ptr, h2_ptr. Returns 1 on success, 0 on failure.
+fn parse_ssdeep_digest(digest, bs_ptr, h1_ptr, h2_ptr) {
+    var ddata = str_data(digest);
+    var dlen = str_len(digest);
+
+    # Find first ':'
+    var colon1 = -1;
+    for (var i = 0; i < dlen; i = i + 1) {
+        if (load8(ddata + i) == 58) { colon1 = i; i = dlen; }
+    }
+    if (colon1 < 0) { return 0; }
+
+    # Find second ':'
+    var colon2 = -1;
+    for (var i = colon1 + 1; i < dlen; i = i + 1) {
+        if (load8(ddata + i) == 58) { colon2 = i; i = dlen; }
+    }
+    if (colon2 < 0) { return 0; }
+
+    # Parse block size
+    var bs = 0;
+    for (var i = 0; i < colon1; i = i + 1) {
+        var d = load8(ddata + i) - 48;
+        if (d < 0 || d > 9) { return 0; }
+        bs = bs * 10 + d;
+    }
+
+    store64(bs_ptr, bs);
+    store64(h1_ptr, str_substr(digest, colon1 + 1, colon2 - colon1 - 1));
+    store64(h2_ptr, str_substr(digest, colon2 + 1, dlen - colon2 - 1));
+    return 1;
+}
+
+# Score two hash strings using weighted edit distance
+fn score_strings(a, b, block_size) {
+    if (str_len(a) == 0 || str_len(b) == 0) { return 0; }
+
+    var ae = eliminate_sequences(a);
+    var be = eliminate_sequences(b);
+
+    if (str_len(ae) == 0 || str_len(be) == 0) { return 0; }
+
+    var dist = edit_distance(str_data(ae), str_len(ae), str_data(be), str_len(be));
+    var max_len = str_len(ae);
+    if (str_len(be) > max_len) { max_len = str_len(be); }
+
+    if (dist >= max_len) { return 0; }
+
+    var score = (max_len - dist) * 100 / max_len;
+
+    # Adjust by block size (log2 approximation)
+    var bs_log = 0;
+    var tmp_bs = block_size;
+    while (tmp_bs > 1) {
+        bs_log = bs_log + 1;
+        tmp_bs = tmp_bs >> 1;
+    }
+    if (bs_log < 1) { bs_log = 1; }
+    if (bs_log > score) { bs_log = score; }
+    score = score - bs_log;
+    if (score > 100) { score = 100; }
+
+    return score;
+}
+
+# Compare two ssdeep hashes and return a similarity score (0-100)
+# Returns -1 if block sizes are incompatible
+fn ssdeep_compare(a, b) {
+    var a_bs_ptr = alloc(8);
+    var a_h1_ptr = alloc(8);
+    var a_h2_ptr = alloc(8);
+    var b_bs_ptr = alloc(8);
+    var b_h1_ptr = alloc(8);
+    var b_h2_ptr = alloc(8);
+
+    if (parse_ssdeep_digest(load64(a), a_bs_ptr, a_h1_ptr, a_h2_ptr) == 0) { return -1; }
+    if (parse_ssdeep_digest(load64(b), b_bs_ptr, b_h1_ptr, b_h2_ptr) == 0) { return -1; }
+
+    var a_bs = load64(a_bs_ptr);
+    var a_h1 = load64(a_h1_ptr);
+    var a_h2 = load64(a_h2_ptr);
+    var b_bs = load64(b_bs_ptr);
+    var b_h1 = load64(b_h1_ptr);
+    var b_h2 = load64(b_h2_ptr);
+
+    if (a_bs == b_bs) {
+        var s1 = score_strings(a_h1, b_h1, a_bs);
+        var s2 = score_strings(a_h2, b_h2, a_bs * 2);
+        if (s1 > s2) { return s1; }
+        return s2;
+    } elif (a_bs == b_bs * 2) {
+        return score_strings(a_h2, b_h1, a_bs);
+    } elif (b_bs == a_bs * 2) {
+        return score_strings(b_h2, a_h1, b_bs);
+    }
+
+    return -1;  # incompatible block sizes
+}
+
+# ================================================================
+# TLSH — Trend Micro Locality Sensitive Hash
+# ================================================================
+
+var TLSH_NUM_BUCKETS = 256;
+var TLSH_WINDOW_SIZE = 5;
+var TLSH_MIN_DATA_LEN = 50;
+
+# Pearson hash table (random permutation of 0..255)
+# Stored as a 256-byte raw buffer, allocated once
+var PEARSON_TABLE_PTR = 0;
+
+fn init_pearson_table() {
+    PEARSON_TABLE_PTR = alloc(256);
+    var t = PEARSON_TABLE_PTR;
+    # The exact values from the Rust source
+    store8(t + 0, 1);     store8(t + 1, 87);    store8(t + 2, 49);    store8(t + 3, 12);
+    store8(t + 4, 176);   store8(t + 5, 178);   store8(t + 6, 102);   store8(t + 7, 166);
+    store8(t + 8, 121);   store8(t + 9, 193);   store8(t + 10, 6);    store8(t + 11, 84);
+    store8(t + 12, 249);  store8(t + 13, 230);  store8(t + 14, 44);   store8(t + 15, 163);
+    store8(t + 16, 14);   store8(t + 17, 197);  store8(t + 18, 213);  store8(t + 19, 181);
+    store8(t + 20, 161);  store8(t + 21, 85);   store8(t + 22, 218);  store8(t + 23, 80);
+    store8(t + 24, 64);   store8(t + 25, 239);  store8(t + 26, 24);   store8(t + 27, 226);
+    store8(t + 28, 236);  store8(t + 29, 142);  store8(t + 30, 38);   store8(t + 31, 200);
+    store8(t + 32, 110);  store8(t + 33, 177);  store8(t + 34, 104);  store8(t + 35, 103);
+    store8(t + 36, 141);  store8(t + 37, 253);  store8(t + 38, 255);  store8(t + 39, 50);
+    store8(t + 40, 77);   store8(t + 41, 101);  store8(t + 42, 81);   store8(t + 43, 18);
+    store8(t + 44, 45);   store8(t + 45, 96);   store8(t + 46, 31);   store8(t + 47, 156);
+    store8(t + 48, 11);   store8(t + 49, 26);   store8(t + 50, 17);   store8(t + 51, 201);
+    store8(t + 52, 185);  store8(t + 53, 232);  store8(t + 54, 135);  store8(t + 55, 98);
+    store8(t + 56, 89);   store8(t + 57, 131);  store8(t + 58, 122);  store8(t + 59, 211);
+    store8(t + 60, 46);   store8(t + 61, 206);  store8(t + 62, 52);   store8(t + 63, 188);
+    store8(t + 64, 57);   store8(t + 65, 83);   store8(t + 66, 53);   store8(t + 67, 241);
+    store8(t + 68, 144);  store8(t + 69, 172);  store8(t + 70, 115);  store8(t + 71, 55);
+    store8(t + 72, 70);   store8(t + 73, 118);  store8(t + 74, 71);   store8(t + 75, 240);
+    store8(t + 76, 228);  store8(t + 77, 234);  store8(t + 78, 97);   store8(t + 79, 137);
+    store8(t + 80, 9);    store8(t + 81, 125);  store8(t + 82, 207);  store8(t + 83, 109);
+    store8(t + 84, 237);  store8(t + 85, 0);    store8(t + 86, 60);   store8(t + 87, 247);
+    store8(t + 88, 220);  store8(t + 89, 136);  store8(t + 90, 233);  store8(t + 91, 58);
+    store8(t + 92, 40);   store8(t + 93, 127);  store8(t + 94, 119);  store8(t + 95, 195);
+    store8(t + 96, 243);  store8(t + 97, 153);  store8(t + 98, 37);   store8(t + 99, 155);
+    store8(t + 100, 32);  store8(t + 101, 246); store8(t + 102, 245); store8(t + 103, 165);
+    store8(t + 104, 254); store8(t + 105, 61);  store8(t + 106, 138); store8(t + 107, 124);
+    store8(t + 108, 221); store8(t + 109, 147); store8(t + 110, 132); store8(t + 111, 4);
+    store8(t + 112, 2);   store8(t + 113, 34);  store8(t + 114, 116); store8(t + 115, 190);
+    store8(t + 116, 170); store8(t + 117, 105); store8(t + 118, 90);  store8(t + 119, 100);
+    store8(t + 120, 205); store8(t + 121, 202); store8(t + 122, 117); store8(t + 123, 95);
+    store8(t + 124, 54);  store8(t + 125, 93);  store8(t + 126, 16);  store8(t + 127, 76);
+    store8(t + 128, 92);  store8(t + 129, 248); store8(t + 130, 123); store8(t + 131, 111);
+    store8(t + 132, 219); store8(t + 133, 146); store8(t + 134, 27);  store8(t + 135, 15);
+    store8(t + 136, 171); store8(t + 137, 244); store8(t + 138, 183); store8(t + 139, 222);
+    store8(t + 140, 157); store8(t + 141, 187); store8(t + 142, 175); store8(t + 143, 250);
+    store8(t + 144, 214); store8(t + 145, 198); store8(t + 146, 73);  store8(t + 147, 160);
+    store8(t + 148, 59);  store8(t + 149, 78);  store8(t + 150, 174); store8(t + 151, 203);
+    store8(t + 152, 99);  store8(t + 153, 143); store8(t + 154, 215); store8(t + 155, 108);
+    store8(t + 156, 189); store8(t + 157, 180); store8(t + 158, 79);  store8(t + 159, 196);
+    store8(t + 160, 204); store8(t + 161, 112); store8(t + 162, 120); store8(t + 163, 167);
+    store8(t + 164, 199); store8(t + 165, 139); store8(t + 166, 162); store8(t + 167, 47);
+    store8(t + 168, 148); store8(t + 169, 152); store8(t + 170, 33);  store8(t + 171, 3);
+    store8(t + 172, 5);   store8(t + 173, 128); store8(t + 174, 154); store8(t + 175, 10);
+    store8(t + 176, 22);  store8(t + 177, 39);  store8(t + 178, 56);  store8(t + 179, 75);
+    store8(t + 180, 223); store8(t + 181, 62);  store8(t + 182, 36);  store8(t + 183, 106);
+    store8(t + 184, 67);  store8(t + 185, 91);  store8(t + 186, 191); store8(t + 187, 126);
+    store8(t + 188, 113); store8(t + 189, 13);  store8(t + 190, 216); store8(t + 191, 238);
+    store8(t + 192, 7);   store8(t + 193, 169); store8(t + 194, 68);  store8(t + 195, 145);
+    store8(t + 196, 184); store8(t + 197, 186); store8(t + 198, 43);  store8(t + 199, 114);
+    store8(t + 200, 242); store8(t + 201, 235); store8(t + 202, 251); store8(t + 203, 23);
+    store8(t + 204, 28);  store8(t + 205, 130); store8(t + 206, 133); store8(t + 207, 168);
+    store8(t + 208, 150); store8(t + 209, 66);  store8(t + 210, 158); store8(t + 211, 48);
+    store8(t + 212, 173); store8(t + 213, 133); store8(t + 214, 107); store8(t + 215, 164);
+    store8(t + 216, 182); store8(t + 217, 149); store8(t + 218, 30);  store8(t + 219, 41);
+    store8(t + 220, 82);  store8(t + 221, 35);  store8(t + 222, 63);  store8(t + 223, 225);
+    store8(t + 224, 252); store8(t + 225, 74);  store8(t + 226, 227); store8(t + 227, 208);
+    store8(t + 228, 140); store8(t + 229, 65);  store8(t + 230, 229); store8(t + 231, 69);
+    store8(t + 232, 8);   store8(t + 233, 129); store8(t + 234, 94);  store8(t + 235, 134);
+    store8(t + 236, 231); store8(t + 237, 86);  store8(t + 238, 21);  store8(t + 239, 42);
+    store8(t + 240, 25);  store8(t + 241, 20);  store8(t + 242, 159); store8(t + 243, 51);
+    store8(t + 244, 88);  store8(t + 245, 179); store8(t + 246, 194); store8(t + 247, 29);
+    store8(t + 248, 19);  store8(t + 249, 192); store8(t + 250, 72);  store8(t + 251, 217);
+    store8(t + 252, 210); store8(t + 253, 151); store8(t + 254, 209); store8(t + 255, 0);
+}
+
+fn pearson_lookup(idx) {
+    return load8(PEARSON_TABLE_PTR + (idx & 255));
+}
+
+# Pearson hash of 3 values: table[table[a ^ b] ^ c]
+fn pearson_hash2(a, b, c) {
+    return pearson_lookup(pearson_lookup(a ^ b) ^ c);
+}
+
+# Log-based length encoding to 8 bits
+fn tlsh_length_encode(len) {
+    if (len == 0) { return 0; }
+    # Approximate log2(len) * 8 using integer arithmetic
+    var log2 = 0;
+    var tmp = len;
+    while (tmp > 1) {
+        log2 = log2 + 1;
+        tmp = tmp >> 1;
+    }
+    # Fractional part approximation: use f64
+    var flen = f64_from(len);
+    var flog = f64_log2(flen);
+    var result = f64_to(f64_mul(flog, f64_from(8)));
+    if (result > 255) { result = 255; }
+    if (result < 0) { result = 0; }
+    return result;
+}
+
+fn tlsh_diff_byte(a, b) {
+    var d = a - b;
+    if (d < 0) { d = 0 - d; }
+    return d;
+}
+
+fn tlsh_diff_nibble(a, b) {
+    var lo_a = a & 15;
+    var lo_b = b & 15;
+    var hi_a = (a >> 4) & 15;
+    var hi_b = (b >> 4) & 15;
+    var lo_diff = lo_a - lo_b;
+    if (lo_diff < 0) { lo_diff = 0 - lo_diff; }
+    var hi_diff = hi_a - hi_b;
+    if (hi_diff < 0) { hi_diff = 0 - hi_diff; }
+    return lo_diff + hi_diff;
+}
+
+# Compute the TLSH hash of a byte slice
+# Returns TlshHash ptr, or 0 if data is too short or insufficient variance
+fn tlsh_hash(data, len) {
+    if (len < TLSH_MIN_DATA_LEN) { return 0; }
+
+    # Ensure Pearson table is initialized
+    if (PEARSON_TABLE_PTR == 0) { init_pearson_table(); }
+
+    # Step 1: Fill buckets using sliding window Pearson hash
+    var buckets = alloc(TLSH_NUM_BUCKETS * 8);
+    for (var i = 0; i < TLSH_NUM_BUCKETS; i = i + 1) {
+        store64(buckets + i * 8, 0);
+    }
+    var checksum = 0;
+
+    if (len >= TLSH_WINDOW_SIZE) {
+        for (var i = TLSH_WINDOW_SIZE - 1; i < len; i = i + 1) {
+            # Window: data[i+1-WINDOW_SIZE .. i]
+            var w0 = load8(data + i + 1 - TLSH_WINDOW_SIZE);
+            var w1 = load8(data + i + 2 - TLSH_WINDOW_SIZE);
+            var w2 = load8(data + i + 3 - TLSH_WINDOW_SIZE);
+            var w3 = load8(data + i + 4 - TLSH_WINDOW_SIZE);
+            var w4 = load8(data + i);
+
+            # Update checksum
+            checksum = pearson_lookup(checksum ^ w0);
+
+            # Hash triplets into bucket indices
+            var h1 = pearson_hash2(w0, w1, w2);
+            var h2 = pearson_hash2(w0, w1, w3);
+            var h3 = pearson_hash2(w0, w2, w3);
+            var h4 = pearson_hash2(w0, w1, w4);
+            var h5 = pearson_hash2(w0, w2, w4);
+            var h6 = pearson_hash2(w0, w3, w4);
+
+            store64(buckets + h1 * 8, load64(buckets + h1 * 8) + 1);
+            store64(buckets + h2 * 8, load64(buckets + h2 * 8) + 1);
+            store64(buckets + h3 * 8, load64(buckets + h3 * 8) + 1);
+            store64(buckets + h4 * 8, load64(buckets + h4 * 8) + 1);
+            store64(buckets + h5 * 8, load64(buckets + h5 * 8) + 1);
+            store64(buckets + h6 * 8, load64(buckets + h6 * 8) + 1);
+        }
+    }
+
+    # Step 2: Compute quartile boundaries
+    # Collect non-zero bucket values and sort
+    var sorted = vec_new();
+    for (var i = 0; i < TLSH_NUM_BUCKETS; i = i + 1) {
+        var val = load64(buckets + i * 8);
+        if (val > 0) { vec_push(sorted, val); }
+    }
+    var slen = vec_len(sorted);
+    if (slen < 4) { return 0; }  # insufficient variance
+
+    # Insertion sort (N <= 256, fast enough)
+    for (var i = 1; i < slen; i = i + 1) {
+        var key = vec_get(sorted, i);
+        var j = i - 1;
+        while (j >= 0) {
+            if (vec_get(sorted, j) <= key) {
+                j = -1;  # break
+            } else {
+                vec_set(sorted, j + 1, vec_get(sorted, j));
+                j = j - 1;
+            }
+        }
+        if (j == -1) {
+            vec_set(sorted, 0, key);
+        } else {
+            vec_set(sorted, j + 1, key);
+        }
+    }
+
+    var q1 = vec_get(sorted, slen / 4);
+    var q2 = vec_get(sorted, slen / 2);
+    var q3 = vec_get(sorted, slen * 3 / 4);
+
+    # Step 3: Encode buckets as 2-bit quartile values (4 buckets per byte)
+    var body_len = TLSH_NUM_BUCKETS / 4;  # 64 bytes
+    var body = alloc(body_len);
+    for (var i = 0; i < body_len; i = i + 1) {
+        store8(body + i, 0);
+    }
+
+    for (var i = 0; i < TLSH_NUM_BUCKETS; i = i + 1) {
+        var bval = load64(buckets + i * 8);
+        var code = 0;
+        if (bval > q1) { code = 1; }
+        if (bval > q2) { code = 2; }
+        if (bval > q3) { code = 3; }
+        var byte_idx = i / 4;
+        var bit_shift = (i & 3) * 2;
+        var old_byte = load8(body + byte_idx);
+        store8(body + byte_idx, old_byte | (code << bit_shift));
+    }
+
+    # Step 4: Encode header
+    var lvalue = tlsh_length_encode(len);
+    var q1_ratio = 0;
+    if (q2 > 0) { q1_ratio = (q1 * 100) / q2; }
+    if (q1_ratio > 15) { q1_ratio = 15; }
+    var q2_ratio = 0;
+    if (q3 > 0) { q2_ratio = (q2 * 100) / q3; }
+    if (q2_ratio > 15) { q2_ratio = 15; }
+
+    # Step 5: Build hex digest: "T1" + checksum(2) + length(2) + qratios(2) + body(128)
+    # Total: 2 + 2 + 2 + 2 + 128 = 136 chars
+    var dlen_total = 2 + 2 + 2 + 2 + body_len * 2;
+    var dbuf = alloc(dlen_total + 1);
+    store8(dbuf, 84);       # 'T'
+    store8(dbuf + 1, 49);   # '1'
+    var pos = 2;
+
+    # Checksum (2 hex chars)
+    store8(dbuf + pos, hex_nibble((checksum >> 4) & 15));
+    store8(dbuf + pos + 1, hex_nibble(checksum & 15));
+    pos = pos + 2;
+
+    # Length (2 hex chars)
+    store8(dbuf + pos, hex_nibble((lvalue >> 4) & 15));
+    store8(dbuf + pos + 1, hex_nibble(lvalue & 15));
+    pos = pos + 2;
+
+    # Q-ratios (1 hex nibble each = 2 chars)
+    store8(dbuf + pos, hex_nibble(q1_ratio & 15));
+    store8(dbuf + pos + 1, hex_nibble(q2_ratio & 15));
+    pos = pos + 2;
+
+    # Body (64 bytes = 128 hex chars)
+    for (var i = 0; i < body_len; i = i + 1) {
+        var b = load8(body + i);
+        store8(dbuf + pos, hex_nibble((b >> 4) & 15));
+        store8(dbuf + pos + 1, hex_nibble(b & 15));
+        pos = pos + 2;
+    }
+
+    store8(dbuf + pos, 0);  # null terminator
+
+    var result = alloc(8);
+    store64(result, str_from_raw(dbuf, pos));
+    return result;
+}
+
+# Compute the TLSH distance between two hashes (lower = more similar)
+# Returns -1 if either hash is invalid
+fn tlsh_distance(a, b) {
+    var a_dig = load64(a);
+    var b_dig = load64(b);
+    var a_len = str_len(a_dig);
+    var b_len = str_len(b_dig);
+
+    if (a_len != b_len) { return -1; }
+
+    # Check T1 prefix
+    var a_data = str_data(a_dig);
+    var b_data = str_data(b_dig);
+    if (load8(a_data) != 84 || load8(a_data + 1) != 49) { return -1; }
+    if (load8(b_data) != 84 || load8(b_data + 1) != 49) { return -1; }
+
+    # Decode hex bytes after "T1" prefix
+    var hex_a = str_substr(a_dig, 2, a_len - 2);
+    var hex_b = str_substr(b_dig, 2, b_len - 2);
+    var alen_ptr = alloc(8);
+    var blen_ptr = alloc(8);
+    var a_bytes = hex_decode(hex_a, alen_ptr);
+    var b_bytes = hex_decode(hex_b, blen_ptr);
+    if (a_bytes == 0 || b_bytes == 0) { return -1; }
+    var ablen = load64(alen_ptr);
+    var bblen = load64(blen_ptr);
+    if (ablen != bblen || ablen < 3) { return -1; }
+
+    var dist = 0;
+
+    # Header distance
+    dist = dist + tlsh_diff_byte(load8(a_bytes), load8(b_bytes));           # checksum
+    dist = dist + tlsh_diff_byte(load8(a_bytes + 1), load8(b_bytes + 1));   # length
+    dist = dist + tlsh_diff_nibble(load8(a_bytes + 2), load8(b_bytes + 2)); # q-ratio
+
+    # Body distance (hamming-like on quartile codes)
+    for (var i = 3; i < ablen; i = i + 1) {
+        var ab = load8(a_bytes + i);
+        var bb = load8(b_bytes + i);
+        for (var shift = 0; shift < 8; shift = shift + 2) {
+            var qa = (ab >> shift) & 3;
+            var qb = (bb >> shift) & 3;
+            var d = qa - qb;
+            if (d < 0) { d = 0 - d; }
+            if (d == 3) { d = 6; }
+            dist = dist + d;
+        }
+    }
+
+    return dist;
+}

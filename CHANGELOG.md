@@ -2,6 +2,34 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.0.0] - 2026-04-16
+
+Phylax 1.0 — threat detection engine for AGNOS.
+
+### Modular Source Layout
+- **Split monolith into 17 files** — `types.cyr`, `utils.cyr`, `analyze.cyr`, `strings.cyr`, `script.cyr`, `hashing.cyr`, `pe.cyr`, `elf.cyr`, `archive.cyr`, `yara.cyr`, `queue.cyr`, `quarantine.cyr`, `report.cyr`, `integration.cyr`, `cli.cyr`, `lib.cyr`, `main.cyr`
+- `lib.cyr` includes all modules in dependency order (no entry point) — used by tests, benchmarks, fuzz
+- `main.cyr` includes `lib.cyr` + entry point
+- Follows ark project structure pattern
+
+### Toolchain
+- **Cyrius 5.1.12**
+- `cyrius fmt` and `cyrius lint` clean
+
+### Quality
+- 178 tests / 31 groups / 0 failures
+- 17 source modules, 8,582 lines total
+- 850KB static binary
+- Security audit: 0 critical
+- Full documentation: CLI reference, integration guide, architecture overview
+
+### Release History
+- v0.7.5: Full Rust→Cyrius port (14,133 → 7,098 lines)
+- v0.8.0–0.8.3: Feature parity (YARA modules, mmap, parallel, archives)
+- v0.9.0–0.9.6: Hardening, daemon, STIX, TAR, heap fix, tests
+- v0.98.0: Pre-release, security audit, 178 tests, docs
+- v1.0.0: Modular layout, fmt/lint clean, Cyrius 5.1.12
+
 ## [0.98.0] - 2026-04-16
 
 Pre-release. Security audit complete, 178 tests, full documentation, cc5 bug attribution corrected.

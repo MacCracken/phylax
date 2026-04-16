@@ -1,0 +1,374 @@
+# ================================================================
+# Script classification (script.rs)
+# ================================================================
+
+# Count how many indicator strings appear in text
+fn count_indicators(text, indicators, num_indicators) {
+    var count = 0;
+    for (var i = 0; i < num_indicators; i = i + 1) {
+        var ind = vec_get(indicators, i);
+        if (str_contains(text, ind)) {
+            count = count + 1;
+        }
+    }
+    return count;
+}
+
+fn classify_script(data, len) {
+    # Check shebang first
+    if (len >= 2) {
+        if (load8(data) == 35) {   # '#'
+            if (load8(data + 1) == 33) {  # '!'
+                # Find end of first line
+                var line_end = len;
+                for (var i = 0; i < len; i = i + 1) {
+                    if (load8(data + i) == 10) {
+                        line_end = i;
+                        i = len;  # break
+                    }
+                }
+                var shebang = str_from_raw(data, line_end);
+                if (str_contains(shebang, str_from("python")))     { return SCRIPT_PYTHON; }
+                if (str_contains(shebang, str_from("bash")))       { return SCRIPT_SHELL; }
+                if (str_contains(shebang, str_from("/sh")))        { return SCRIPT_SHELL; }
+                if (str_contains(shebang, str_from("zsh")))        { return SCRIPT_SHELL; }
+                if (str_contains(shebang, str_from("node")))       { return SCRIPT_JAVASCRIPT; }
+                if (str_contains(shebang, str_from("pwsh")))       { return SCRIPT_POWERSHELL; }
+                if (str_contains(shebang, str_from("powershell"))) { return SCRIPT_POWERSHELL; }
+            }
+        }
+    }
+
+    # Content-based classification on the first 8KB
+    var sample_len = len;
+    if (sample_len > 8192) { sample_len = 8192; }
+    var text = str_from_raw(data, sample_len);
+    # Note: Cyrius str_from_raw does not lowercase; we do case-insensitive
+    # matching by including lowercase indicators. The original Rust lowercases
+    # the text first. We approximate by checking common patterns.
+    var lower = str_lower(text);
+
+    # PowerShell indicators
+    var ps_inds = vec_new();
+    vec_push(ps_inds, str_from("$env:"));
+    vec_push(ps_inds, str_from("get-"));
+    vec_push(ps_inds, str_from("set-"));
+    vec_push(ps_inds, str_from("invoke-"));
+    vec_push(ps_inds, str_from("new-object"));
+    vec_push(ps_inds, str_from("write-host"));
+    vec_push(ps_inds, str_from("[system."));
+    vec_push(ps_inds, str_from("[convert]::"));
+    vec_push(ps_inds, str_from("param("));
+    vec_push(ps_inds, str_from("-executionpolicy"));
+    vec_push(ps_inds, str_from("import-module"));
+    vec_push(ps_inds, str_from("add-type"));
+    vec_push(ps_inds, str_from("[reflection."));
+    var ps_score = count_indicators(lower, ps_inds, 13);
+
+    # VBScript indicators
+    var vbs_inds = vec_new();
+    vec_push(vbs_inds, str_from("dim "));
+    vec_push(vbs_inds, str_from("sub "));
+    vec_push(vbs_inds, str_from("function "));
+    vec_push(vbs_inds, str_from("wscript."));
+    vec_push(vbs_inds, str_from("createobject("));
+    vec_push(vbs_inds, str_from("msgbox"));
+    vec_push(vbs_inds, str_from("on error resume"));
+    vec_push(vbs_inds, str_from("chr("));
+    vec_push(vbs_inds, str_from("cstr("));
+    vec_push(vbs_inds, str_from("set "));
+    var vbs_score = count_indicators(lower, vbs_inds, 10);
+
+    # JavaScript indicators
+    var js_inds = vec_new();
+    vec_push(js_inds, str_from("var "));
+    vec_push(js_inds, str_from("let "));
+    vec_push(js_inds, str_from("const "));
+    vec_push(js_inds, str_from("function "));
+    vec_push(js_inds, str_from("=>"));
+    vec_push(js_inds, str_from("document."));
+    vec_push(js_inds, str_from("window."));
+    vec_push(js_inds, str_from("require("));
+    vec_push(js_inds, str_from("load64(module + 80)"));
+    vec_push(js_inds, str_from("console.log"));
+    vec_push(js_inds, str_from("settimeout"));
+    vec_push(js_inds, str_from("addeventlistener"));
+    vec_push(js_inds, str_from("json.parse"));
+    var js_score = count_indicators(lower, js_inds, 13);
+
+    # Python indicators
+    var py_inds = vec_new();
+    vec_push(py_inds, str_from("import "));
+    vec_push(py_inds, str_from("from "));
+    vec_push(py_inds, str_from("def "));
+    vec_push(py_inds, str_from("class "));
+    vec_push(py_inds, str_from("print("));
+    vec_push(py_inds, str_from("if __name__"));
+    vec_push(py_inds, str_from("self."));
+    vec_push(py_inds, str_from("elif "));
+    vec_push(py_inds, str_from("except:"));
+    vec_push(py_inds, str_from("with open("));
+    var py_score = count_indicators(lower, py_inds, 10);
+
+    # Batch indicators
+    var bat_inds = vec_new();
+    vec_push(bat_inds, str_from("@echo"));
+    vec_push(bat_inds, str_from("echo "));
+    vec_push(bat_inds, str_from("set "));
+    vec_push(bat_inds, str_from("goto "));
+    vec_push(bat_inds, str_from("if exist"));
+    vec_push(bat_inds, str_from("%~"));
+    vec_push(bat_inds, str_from("errorlevel"));
+    vec_push(bat_inds, str_from("call "));
+    vec_push(bat_inds, str_from("rem "));
+    vec_push(bat_inds, str_from("pause"));
+    var bat_score = count_indicators(lower, bat_inds, 10);
+
+    # Shell indicators
+    var sh_inds = vec_new();
+    vec_push(sh_inds, str_from("#!/"));
+    vec_push(sh_inds, str_from("fi\n"));
+    vec_push(sh_inds, str_from("done\n"));
+    vec_push(sh_inds, str_from("esac"));
+    vec_push(sh_inds, str_from("elif "));
+    vec_push(sh_inds, str_from("then\n"));
+    vec_push(sh_inds, str_from("export "));
+    vec_push(sh_inds, str_from("alias "));
+    vec_push(sh_inds, str_from("source "));
+    var sh_score = count_indicators(lower, sh_inds, 9);
+
+    # Find the best match (minimum 2 indicators)
+    var best_lang = SCRIPT_UNKNOWN;
+    var best_score = 1;  # threshold: must be >= 2
+
+    if (ps_score > best_score)  { best_score = ps_score;  best_lang = SCRIPT_POWERSHELL; }
+    if (vbs_score > best_score) { best_score = vbs_score; best_lang = SCRIPT_VBSCRIPT; }
+    if (js_score > best_score)  { best_score = js_score;  best_lang = SCRIPT_JAVASCRIPT; }
+    if (py_score > best_score)  { best_score = py_score;  best_lang = SCRIPT_PYTHON; }
+    if (bat_score > best_score) { best_score = bat_score; best_lang = SCRIPT_BATCH; }
+    if (sh_score > best_score)  { best_score = sh_score;  best_lang = SCRIPT_SHELL; }
+
+    return best_lang;
+}
+
+# ================================================================
+# Obfuscation detection (script.rs)
+# ================================================================
+
+fn is_base64_like(s) {
+    var slen = str_len(s);
+    if (slen == 0) { return 0; }
+    var sdata = str_data(s);
+    var b64_count = 0;
+    for (var i = 0; i < slen; i = i + 1) {
+        var b = load8(sdata + i);
+        # A-Z: 65-90, a-z: 97-122, 0-9: 48-57, +: 43, /: 47, =: 61
+        if (b >= 65) { if (b <= 90)  { b64_count = b64_count + 1; } }
+        if (b >= 97) { if (b <= 122) { b64_count = b64_count + 1; } }
+        if (b >= 48) { if (b <= 57)  { b64_count = b64_count + 1; } }
+        if (b == 43) { b64_count = b64_count + 1; }
+        if (b == 47) { b64_count = b64_count + 1; }
+        if (b == 61) { b64_count = b64_count + 1; }
+    }
+    return (b64_count * 100 / slen) > 90;
+}
+
+fn detect_obfuscation(data, len, language) {
+    var signals = obfuscation_signals_new();
+    var text = str_from_raw(data, len);
+    var lower = str_lower(text);
+
+    # Per-line entropy analysis
+    # Split text by newline and analyze each line
+    var tdata = str_data(text);
+    var tlen = str_len(text);
+    var line_start = 0;
+    var line_count = 0;
+    var high_ent_lines = 0;
+
+    for (var i = 0; i <= tlen; i = i + 1) {
+        var is_end = (i == tlen);
+        if (is_end == 0) { is_end = (load8(tdata + i) == 10); }
+
+        if (is_end) {
+            var line_len = i - line_start;
+            line_count = line_count + 1;
+
+            # Skip leading whitespace for trimmed length check
+            var trim_start = line_start;
+            while (trim_start < i) {
+                var c = load8(tdata + trim_start);
+                if (c != 32 && c != 9) {
+                    trim_start = i;  # done trimming; break
+                } else {
+                    trim_start = trim_start + 1;
+                }
+            }
+            # Re-derive trimmed length from original approach
+            var trimmed_len = i - line_start;
+            if (trimmed_len > 40) {
+                var ent = shannon_entropy(tdata + line_start, line_len);
+                if (f64_gt(ent, F64_5_5)) {
+                    high_ent_lines = high_ent_lines + 1;
+                }
+            }
+
+            line_start = i + 1;
+        }
+    }
+
+    store64(signals + 8, line_count);
+    store64(signals, high_ent_lines);
+
+    if (line_count > 5) {
+        if (high_ent_lines * 3 > line_count) {
+            vec_push(load64(signals + 16), str_from("high per-line entropy (>33% of lines)"));
+            store64(signals + 24, load64(signals + 24) + 2);
+        }
+    }
+
+    # Base64 decode function references
+    if (str_contains(lower, str_from("base64"))) {
+        vec_push(load64(signals + 16), str_from("base64 decode function"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    } elif (str_contains(lower, str_from("frombase64"))) {
+        vec_push(load64(signals + 16), str_from("base64 decode function"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    } elif (str_contains(lower, str_from("atob("))) {
+        vec_push(load64(signals + 16), str_from("base64 decode function"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    }
+
+    # Long base64-like strings (check each line)
+    line_start = 0;
+    var found_b64_block = 0;
+    for (var i = 0; i <= tlen; i = i + 1) {
+        var is_end = (i == tlen);
+        if (is_end == 0) { is_end = (load8(tdata + i) == 10); }
+        if (is_end && (found_b64_block == 0)) {
+            var ll = i - line_start;
+            if (ll >= 60) {
+                var line_str = str_from_raw(tdata + line_start, ll);
+                if (is_base64_like(line_str)) {
+                    vec_push(load64(signals + 16), str_from("long base64-like string detected"));
+                    store64(signals + 24, load64(signals + 24) + 2);
+                    found_b64_block = 1;
+                }
+            }
+            line_start = i + 1;
+        }
+    }
+
+    # Language-specific obfuscation patterns
+    if (language == SCRIPT_POWERSHELL) {
+        detect_powershell_obfuscation(lower, signals);
+    } elif (language == SCRIPT_VBSCRIPT) {
+        detect_vbscript_obfuscation(lower, signals);
+    } elif (language == SCRIPT_JAVASCRIPT) {
+        detect_javascript_obfuscation(lower, signals);
+    }
+
+    # Excessive string concatenation (generic)
+    var concat_count = str_count(text, str_from("+")) + str_count(text, str_from("&"));
+    if (line_count > 0) {
+        if (concat_count > line_count * 3) {
+            vec_push(load64(signals + 16), str_from("excessive string concatenation"));
+            store64(signals + 24, load64(signals + 24) + 1);
+        }
+    }
+
+    return signals;
+}
+
+fn detect_powershell_obfuscation(lower, signals) {
+    # [char] casting chains
+    if (str_count(lower, str_from("[char]")) >= 3) {
+        vec_push(load64(signals + 16), str_from("PowerShell [char] casting chain"));
+        store64(signals + 24, load64(signals + 24) + 2);
+    }
+    # Invoke-Expression / IEX
+    if (str_contains(lower, str_from("invoke-expression"))) {
+        vec_push(load64(signals + 16), str_from("PowerShell Invoke-Expression/IEX"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    } elif (str_contains(lower, str_from("iex ")) | str_contains(lower, str_from("iex("))) {
+        vec_push(load64(signals + 16), str_from("PowerShell Invoke-Expression/IEX"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    }
+    # -EncodedCommand
+    if (str_contains(lower, str_from("-encodedcommand")) | str_contains(lower, str_from("-enc "))) {
+        vec_push(load64(signals + 16), str_from("PowerShell -EncodedCommand"));
+        store64(signals + 24, load64(signals + 24) + 2);
+    }
+    # Excessive -replace chains
+    if (str_count(lower, str_from("-replace")) >= 3) {
+        vec_push(load64(signals + 16), str_from("PowerShell excessive -replace chains"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    }
+    # Hidden window
+    if (str_contains(lower, str_from("-windowstyle hidden"))) {
+        vec_push(load64(signals + 16), str_from("PowerShell hidden window"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    }
+}
+
+fn detect_vbscript_obfuscation(lower, signals) {
+    # Chr() concatenation chains
+    if (str_count(lower, str_from("chr(")) >= 5) {
+        vec_push(load64(signals + 16), str_from("VBScript Chr() concatenation chain"));
+        store64(signals + 24, load64(signals + 24) + 2);
+    }
+    # Execute/ExecuteGlobal
+    if (str_contains(lower, str_from("execute(")) | str_contains(lower, str_from("executeglobal"))) {
+        vec_push(load64(signals + 16), str_from("VBScript Execute/ExecuteGlobal"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    }
+    # WScript.Shell
+    if (str_contains(lower, str_from("wscript.shell"))) {
+        vec_push(load64(signals + 16), str_from("VBScript WScript.Shell"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    }
+}
+
+fn detect_javascript_obfuscation(lower, signals) {
+    # eval() usage
+    if (str_contains(lower, str_from("eval("))) {
+        vec_push(load64(signals + 16), str_from("JavaScript eval()"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    }
+    # String.fromCharCode chains
+    if (str_count(lower, str_from("fromcharcode")) >= 2) {
+        vec_push(load64(signals + 16), str_from("JavaScript fromCharCode chain"));
+        store64(signals + 24, load64(signals + 24) + 2);
+    }
+    # document.write + unescape
+    if (str_contains(lower, str_from("document.write")) & str_contains(lower, str_from("unescape"))) {
+        vec_push(load64(signals + 16), str_from("JavaScript document.write+unescape"));
+        store64(signals + 24, load64(signals + 24) + 2);
+    }
+    # Hex escape sequences
+    if (str_count(lower, str_from("\\x")) >= 10) {
+        vec_push(load64(signals + 16), str_from("JavaScript excessive hex escapes"));
+        store64(signals + 24, load64(signals + 24) + 1);
+    }
+}
+
+# Generate findings from script analysis
+fn script_findings(language, obfuscation, target) {
+    if (load64(obfuscation + 24) == 0) { return vec_new(); }
+
+    var sev = SEVERITY_HIGH;
+    if (load64(obfuscation + 24) == 1)                     { sev = SEVERITY_LOW; }
+    if (load64(obfuscation + 24) >= 2 && load64(obfuscation + 24) <= 3) { sev = SEVERITY_MEDIUM; }
+
+    var desc = str_cat(str_from("Obfuscated "),
+               str_cat(script_language_name(language), str_from(" script detected")));
+    var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
+                       str_from("script_obfuscation"), desc);
+    map_set(load64(f + 40), str_from("script_language"), script_language_name(language));
+    map_set(load64(f + 40), str_from("obfuscation_score"), str_from_int(load64(obfuscation + 24)));
+    map_set(load64(f + 40), str_from("high_entropy_lines"), str_from_int(load64(obfuscation)));
+
+    var findings = vec_new();
+    vec_push(findings, f);
+    return findings;
+}

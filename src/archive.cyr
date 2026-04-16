@@ -1,0 +1,201 @@
+# ================================================================
+# Archive Scanning — Constants
+# ================================================================
+
+var ARCHIVE_MAX_DEPTH = 3;           # max recursion depth
+var ARCHIVE_MAX_ENTRIES = 1024;      # max entries per archive
+var ARCHIVE_MAX_EXPAND = 104857600;  # 100 MB max total expanded size
+
+# ================================================================
+# Archive Scanning — ZIP (local file headers, stored entries only)
+# ================================================================
+
+fn zip_scan_entries(data, data_len, rules_path, max_depth) {
+    var findings = vec_new();
+    if (max_depth <= 0) { return findings; }
+
+    var offset = 0;
+    var entry_count = 0;
+
+    while (offset + 30 < data_len && entry_count < ARCHIVE_MAX_ENTRIES) {
+        # Check for local file header signature PK\x03\x04
+        if (read_u32_le(data, offset) != 0x04034B50) { break; }
+
+        var method = read_u16_le(data, offset + 8);
+        var comp_size = read_u32_le(data, offset + 18);
+        var uncomp_size = read_u32_le(data, offset + 22);
+        var name_len = read_u16_le(data, offset + 26);
+        var extra_len = read_u16_le(data, offset + 28);
+
+        var data_offset = offset + 30 + name_len + extra_len;
+
+        if (method == 0 && uncomp_size > 0 && data_offset + uncomp_size <= data_len) {
+            # Stored (uncompressed) — scan the embedded file
+            if (uncomp_size <= ARCHIVE_MAX_EXPAND) {
+                var entry_data = data + data_offset;
+                var entry_findings = analyze_findings(entry_data, uncomp_size,
+                    scan_target_new(SCAN_TARGET_FILE, str_from("embedded")));
+                # Also run YARA on embedded content (reuse global engine)
+                var engine = get_yara_engine();
+                var yf = yara_engine_scan(engine, entry_data, uncomp_size);
+                # Merge analysis findings
+                var nef = vec_len(entry_findings);
+                for (var i = 0; i < nef; i = i + 1) {
+                    vec_push(findings, vec_get(entry_findings, i));
+                }
+                # Merge YARA findings
+                var nyf = vec_len(yf);
+                for (var i = 0; i < nyf; i = i + 1) {
+                    vec_push(findings, vec_get(yf, i));
+                }
+                # Recursive: check if embedded file is also an archive
+                var etype = detect_file_type(entry_data, uncomp_size);
+                if (etype == FILETYPE_ZIP) {
+                    var sub = zip_scan_entries(entry_data, uncomp_size, rules_path, max_depth - 1);
+                    var nsub = vec_len(sub);
+                    for (var i = 0; i < nsub; i = i + 1) {
+                        vec_push(findings, vec_get(sub, i));
+                    }
+                }
+            }
+        }
+
+        # Move to next entry
+        offset = data_offset + comp_size;
+        entry_count = entry_count + 1;
+    }
+    return findings;
+}
+
+# ================================================================
+# Archive Scanning — GZIP (header detection, decompression pending)
+# ================================================================
+
+fn gzip_scan(data, data_len, rules_path) {
+    var findings = vec_new();
+    # GZIP magic check
+    if (data_len < 10) { return findings; }
+    if (load8(data) != 0x1F || load8(data + 1) != 0x8B) { return findings; }
+
+    var method = load8(data + 2);
+    if (method != 8) {
+        # Not deflate — non-standard gzip, note but cannot decompress
+    }
+
+    # Add informational finding about compressed archive
+    var f = finding_new(
+        scan_target_new(SCAN_TARGET_FILE, str_from("archive")),
+        CATEGORY_SUSPICIOUS, SEVERITY_INFO,
+        str_from("compressed_archive"),
+        str_from("File is a GZIP compressed archive (embedded content not scanned — deflate decompression pending)")
+    );
+    vec_push(findings, f);
+    return findings;
+}
+
+# ================================================================
+# Archive Scanning — TAR (POSIX ustar format)
+# ================================================================
+
+# Parse an ASCII octal string to integer.
+# data = pointer to octal bytes, len = number of bytes to parse.
+# Stops at null byte or space. Returns parsed integer value.
+fn parse_octal(data, len) {
+    var result = 0;
+    for (var i = 0; i < len; i = i + 1) {
+        var c = load8(data + i);
+        if (c == 0 || c == 32) { return result; }  # null or space terminates
+        if (c < 48 || c > 55) { return result; }    # non-octal digit terminates
+        result = result * 8 + (c - 48);
+    }
+    return result;
+}
+
+fn tar_scan_entries(data, data_len, rules_path, max_depth) {
+    var findings = vec_new();
+    if (max_depth <= 0) { return findings; }
+
+    var offset = 0;
+    var entry_count = 0;
+
+    while (offset + 512 <= data_len && entry_count < ARCHIVE_MAX_ENTRIES) {
+        var header = data + offset;
+
+        # Check if header block is all zeros (end of archive)
+        var all_zero = 1;
+        for (var z = 0; z < 512; z = z + 8) {
+            if (load64(header + z) != 0) { all_zero = 0; z = 512; }
+        }
+        if (all_zero == 1) { break; }
+
+        # Parse size from octal ASCII at offset 124, 12 bytes
+        var size = parse_octal(header + 124, 12);
+
+        # Parse typeflag at offset 156
+        var typeflag = load8(header + 156);
+
+        # Regular file: typeflag '0' (ASCII 48) or '\0' (0)
+        if (typeflag == 48 || typeflag == 0) {
+            var file_start = offset + 512;
+            if (size > 0 && file_start + size <= data_len && size <= ARCHIVE_MAX_EXPAND) {
+                var entry_data = data + file_start;
+
+                # Run analysis on embedded file
+                var entry_findings = analyze_findings(entry_data, size,
+                    scan_target_new(SCAN_TARGET_FILE, str_from("tar-embedded")));
+
+                # Run YARA on embedded content (reuse global engine)
+                var engine = get_yara_engine();
+                var yf = yara_engine_scan(engine, entry_data, size);
+
+                # Merge analysis findings
+                var nef = vec_len(entry_findings);
+                for (var i = 0; i < nef; i = i + 1) {
+                    vec_push(findings, vec_get(entry_findings, i));
+                }
+
+                # Merge YARA findings
+                var nyf = vec_len(yf);
+                for (var i = 0; i < nyf; i = i + 1) {
+                    vec_push(findings, vec_get(yf, i));
+                }
+
+                # Recursive: check if embedded file is also an archive
+                var etype = detect_file_type(entry_data, size);
+                if (etype == FILETYPE_ZIP) {
+                    var sub = zip_scan_entries(entry_data, size, rules_path, max_depth - 1);
+                    var nsub = vec_len(sub);
+                    for (var i = 0; i < nsub; i = i + 1) {
+                        vec_push(findings, vec_get(sub, i));
+                    }
+                }
+                if (etype == FILETYPE_TAR) {
+                    var sub = tar_scan_entries(entry_data, size, rules_path, max_depth - 1);
+                    var nsub = vec_len(sub);
+                    for (var i = 0; i < nsub; i = i + 1) {
+                        vec_push(findings, vec_get(sub, i));
+                    }
+                }
+                if (etype == FILETYPE_GZIP) {
+                    var sub = gzip_scan(entry_data, size, rules_path);
+                    var nsub = vec_len(sub);
+                    for (var i = 0; i < nsub; i = i + 1) {
+                        vec_push(findings, vec_get(sub, i));
+                    }
+                }
+            }
+        }
+
+        # Advance to next entry: header (512) + file data rounded up to 512
+        var padded_size = size;
+        if (size > 0) {
+            var remainder = size % 512;
+            if (remainder != 0) {
+                padded_size = size + (512 - remainder);
+            }
+        }
+        offset = offset + 512 + padded_size;
+        entry_count = entry_count + 1;
+    }
+    return findings;
+}

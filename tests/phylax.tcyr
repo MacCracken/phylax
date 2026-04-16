@@ -1,7 +1,7 @@
 # phylax test suite
 # Ported from 235+ Rust tests
 
-include "src/phylax.cyr"
+include "src/lib.cyr"
 
 # ================================================================
 # Severity and Category tests

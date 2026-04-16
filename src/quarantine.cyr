@@ -1,0 +1,244 @@
+# ================================================================
+# Quarantine — Structs
+# ================================================================
+
+struct QuarantineEntry {
+    id;              # Str — UUID-like identifier
+    original_path;   # Str — where the file came from
+    quarantine_path; # Str — where it lives now
+    reason;          # Str — why it was quarantined
+    timestamp;       # i64 — unix epoch seconds
+    sha256;          # Str — hash of the file at quarantine time
+    size;            # i64 — file size in bytes
+}
+
+struct QuarantineManager {
+    dir;             # Str — quarantine directory path
+    entries;         # Vec of QuarantineEntry
+    index_path;      # Str — path to index.json
+    next_counter;    # i64 — monotonic counter for ID generation
+}
+
+# ================================================================
+# Quarantine — ID generation
+# ================================================================
+
+# Generate a UUID-like identifier from timestamp and counter.
+# Format: hex(timestamp)-hex(counter) — not a true UUID but unique enough.
+fn quarantine_gen_id(mgr) {
+    var ts = clock_epoch_secs();
+    var ctr = load64(mgr + 24);
+    store64(mgr + 24, load64(mgr + 24) + 1);
+
+    var id_str = str_cat(fmt_hex(ts), str_from("-"));
+    id_str = str_cat(id_str, fmt_hex(ctr));
+    return id_str;
+}
+
+# ================================================================
+# Quarantine — Path validation
+# ================================================================
+
+# Validate an ID string: reject path separators and directory traversal.
+# Returns 1 if valid, 0 if the ID contains dangerous characters.
+fn quarantine_validate_id(id) {
+    var len = str_len(id);
+    if (len == 0) { return 0; }
+
+    # Check for forbidden substrings
+    var s = id;
+    var data = str_data(s);
+
+    for (var i = 0; i < len; i = i + 1) {
+        var ch = load8(data + i);
+        # Reject '/' (0x2F), '\' (0x5C)
+        if (ch == 0x2F) { return 0; }
+        if (ch == 0x5C) { return 0; }
+    }
+
+    # Reject ".." anywhere in the string
+    if (len >= 2) {
+        for (var i = 0; i < len - 1; i = i + 1) {
+            var c0 = load8(data + i);
+            var c1 = load8(data + i + 1);
+            if (c0 == 0x2E) {
+                if (c1 == 0x2E) {
+                    return 0;
+                }
+            }
+        }
+    }
+
+    return 1;
+}
+
+# ================================================================
+# Quarantine — Core functions
+# ================================================================
+
+# Create a new quarantine manager. Creates the directory if needed,
+# and attempts to load an existing index.json.
+fn quarantine_new(dir) {
+    var mgr = alloc(32);
+    store64(mgr, dir);
+    store64(mgr + 8, vec_new());
+    store64(mgr + 24, 1);
+    store64(mgr + 16, path_join(dir, str_from("index.json")));
+
+    # Create quarantine directory (mode 0700 = 448 decimal)
+    syscall(SYS_MKDIR, dir, 448);
+
+    # Try to load existing index — if file doesn't exist, start fresh
+    # (file_read_all returns empty string on failure)
+    var idx_data = phylax_read_file(load64(mgr + 16));
+    if (str_len(idx_data) > 0) {
+        # Parse the JSON index to restore entries
+        # For simplicity, we count entries from stored counter hints
+        var parsed = json_parse(idx_data);
+        if (parsed != 0) {
+            var count = vec_len(parsed);
+            for (var i = 0; i < count; i = i + 1) {
+                var item = vec_get(parsed, i);
+                var entry = alloc(56);
+                store64(entry, map_get(item, "id"));
+                store64(entry + 8, map_get(item, "original_path"));
+                store64(entry + 16, map_get(item, "quarantine_path"));
+                store64(entry + 24, map_get(item, "reason"));
+                store64(entry + 32, map_get(item, "timestamp"));
+                store64(entry + 40, map_get(item, "sha256"));
+                store64(entry + 48, map_get(item, "size"));
+                vec_push(load64(mgr + 8), entry);
+            }
+            store64(mgr + 24, count + 1);
+        }
+    }
+
+    return mgr;
+}
+
+# Save the current index to disk as JSON.
+fn quarantine_save_index(mgr) {
+    var items = vec_new();
+    var count = vec_len(load64(mgr + 8));
+    for (var i = 0; i < count; i = i + 1) {
+        var e = vec_get(load64(mgr + 8), i);
+        var m = map_new();
+        map_set(m, "id", load64(e));
+        map_set(m, "original_path", load64(e + 8));
+        map_set(m, "quarantine_path", load64(e + 16));
+        map_set(m, "reason", load64(e + 24));
+        map_set(m, "timestamp", load64(e + 32));
+        map_set(m, "sha256", load64(e + 40));
+        map_set(m, "size", load64(e + 48));
+        vec_push(items, m);
+    }
+    var json_str = json_build(items);
+    file_write(load64(mgr + 16), json_str);
+}
+
+# Quarantine a file: move it into the quarantine directory, record metadata.
+# Returns the QuarantineEntry on success, or 0 on failure.
+fn quarantine_file(mgr, source_path, reason) {
+    var id = quarantine_gen_id(mgr);
+    var dest_path = path_join(load64(mgr), id);
+
+    # Read file to compute size and sha256
+    var data = phylax_read_file(source_path);
+    var data_len = str_len(data);
+    if (data_len == 0) {
+        var msg = str_from("quarantine: cannot read source file");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    # Compute SHA-256 of the file data
+    var hash = sha256_hex(str_data(data), data_len);
+
+    # Move the file via rename syscall
+    var rc = syscall(SYS_RENAME, source_path, dest_path);
+    if (rc < 0) {
+        var msg = str_from("quarantine: rename failed");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    # Build entry
+    var entry = alloc(56);
+    store64(entry, id);
+    store64(entry + 8, source_path);
+    store64(entry + 16, dest_path);
+    store64(entry + 24, reason);
+    store64(entry + 32, clock_epoch_secs());
+    store64(entry + 40, hash);
+    store64(entry + 48, data_len);
+
+    vec_push(load64(mgr + 8), entry);
+    quarantine_save_index(mgr);
+
+    var msg = str_cat(str_from("quarantined: "), source_path);
+    sakshi_info(str_data(msg), str_len(msg));
+
+    return entry;
+}
+
+# Release a quarantined file back to its original location.
+# Returns 1 on success, 0 on failure.
+fn quarantine_release(mgr, id) {
+    if (quarantine_validate_id(id) == 0) {
+        var msg = str_from("quarantine_release: invalid id");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    var count = vec_len(load64(mgr + 8));
+    var found_idx = -1;
+    var entry = 0;
+
+    for (var i = 0; i < count; i = i + 1) {
+        var e = vec_get(load64(mgr + 8), i);
+        if (str_eq(load64(e), id)) {
+            found_idx = i;
+            entry = e;
+            i = count;  # break
+        }
+    }
+
+    if (found_idx < 0) {
+        var msg = str_from("quarantine_release: id not found");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    # Move file back to original location
+    var rc = syscall(SYS_RENAME, load64(entry + 16), load64(entry + 8));
+    if (rc < 0) {
+        var msg = str_from("quarantine_release: rename failed");
+        sakshi_error(str_data(msg), str_len(msg));
+        return 0;
+    }
+
+    # Remove from entries — rebuild vec without found_idx
+    var new_entries = vec_new();
+    for (var i = 0; i < count; i = i + 1) {
+        if (i != found_idx) {
+            vec_push(new_entries, vec_get(load64(mgr + 8), i));
+        }
+    }
+    store64(mgr + 8, new_entries);
+    quarantine_save_index(mgr);
+
+    var msg = str_cat(str_from("released: "), load64(entry + 8));
+    sakshi_info(str_data(msg), str_len(msg));
+
+    return 1;
+}
+
+# Return the vec of quarantine entries.
+fn quarantine_list(mgr) {
+    return load64(mgr + 8);
+}
+
+# Return the number of quarantined files.
+fn quarantine_count(mgr) {
+    return vec_len(load64(mgr + 8));
+}
