@@ -2,6 +2,27 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.8.3] - 2026-04-16
+
+Archive scanning for ZIP and GZIP files.
+
+### Archive Scanning
+- **ZIP stored entry scanning** — walks local file headers, scans uncompressed (method 0) entries through full analysis + YARA pipeline
+- **Recursive archive detection** — nested ZIP-in-ZIP scanned up to 3 levels deep
+- **GZIP detection** — identifies GZIP archives, notes deflate decompression pending (v0.9)
+- **Bomb protection** — max depth (3), max entries per archive (1024), max expanded size (100 MB)
+- Wired into `run_scan` pipeline as Step 4 (after YARA, before result return)
+
+### Tested
+- Stored ZIP with clean content → 0 findings (correct)
+- Stored ZIP with embedded ELF → 2 findings (polyglot + archive detection)
+- GZIP file → 1 finding (compressed_archive informational)
+- 86 tests passing
+
+### Limitations
+- Only stored (uncompressed) ZIP entries scanned — deflate decompression deferred to v0.9
+- TAR format not yet supported
+
 ## [0.8.2] - 2026-04-16
 
 Parallel file scanning for multi-file operations.
