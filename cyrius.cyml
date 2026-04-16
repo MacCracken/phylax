@@ -27,4 +27,9 @@ modules = ["sakshi.cyr", "sakshi_full.cyr"]
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
 tag = "2.1.2"
-modules = ["sigil.cyr"]
+modules = ["dist/sigil.cyr"]
+
+[deps.bote]
+git = "https://github.com/MacCracken/bote.git"
+tag = "2.5.1"
+modules = ["src/registry.cyr", "src/dispatch.cyr", "src/error.cyr", "src/schema.cyr", "src/audit.cyr", "src/content.cyr"]

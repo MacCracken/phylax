@@ -55,6 +55,12 @@ Full port from Rust to Cyrius. 14,133 lines of Rust → 7,098 lines of Cyrius (5
 - Daimon agent lifecycle: register, heartbeat, deregister with ID validation
 - Agent capabilities (11 items)
 
+**Bote MCP Tools** (bote_tools — NEW in Cyrius port)
+- 5 MCP tool definitions: phylax_scan, phylax_rules, phylax_status, phylax_quarantine, phylax_report
+- 2 tool handlers: scan (file analysis → JSON response), status (engine info)
+- Full JSON-RPC schema definitions with required/optional parameters
+- Uses bote 2.5.1 registry + dispatcher API (was feature-gated in Rust, now always available)
+
 **CLI** (main)
 - Subcommands: scan, report, watch, rules list, rules validate, status
 - Recursive file collection with symlink skip
@@ -63,6 +69,7 @@ Full port from Rust to Cyrius. 14,133 lines of Rust → 7,098 lines of Cyrius (5
 ### Dependencies (Cyrius)
 - **stdlib** (25 modules): string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, json, toml, regex, fs, net, tagged, fnptr, callback, thread, bench, bounds, math, process, chrono, base64, csv
 - **sakshi** 1.0.0 — structured logging (replaces tracing/tracing-subscriber)
+- **bote** 2.5.1 — MCP tool registry and dispatch (was feature-gated `bote` in Rust, now always included)
 - **sigil** 2.1.2 — SHA-256 (replaces sha2)
 
 ### Removed (Rust-only dependencies no longer needed)

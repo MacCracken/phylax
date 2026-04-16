@@ -1,16 +1,50 @@
 # phylax fuzz harness
 
+include "src/phylax.cyr"
+
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }
+
+    # Fuzz entropy calculation
+    shannon_entropy(data, len);
+
+    # Fuzz file type detection
+    detect_file_type(data, len);
+
+    # Fuzz PE parser (won't crash on random data)
+    parse_pe(data, len);
+
+    # Fuzz ELF parser
+    parse_elf(data, len);
+
+    # Fuzz string extraction
+    extract_ascii(data, len, 4);
+
     return 0;
 }
 
-fn main() {
-    alloc_init();
+fn fuzz_entry() {
+    phylax_init();
     fuzz_main("test", 4);
+
+    # Fuzz with some binary-like data
+    var data = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) {
+        store8(data + i, (i * 37 + 13) & 0xff);
+    }
+    fuzz_main(data, 256);
+
+    # Fuzz with ELF-like header
+    store8(data, 0x7f); store8(data + 1, 0x45); store8(data + 2, 0x4c); store8(data + 3, 0x46);
+    fuzz_main(data, 256);
+
+    # Fuzz with PE-like header
+    store8(data, 0x4d); store8(data + 1, 0x5a);
+    fuzz_main(data, 256);
+
     println("fuzz: ok");
     return 0;
 }
 
-var r = main();
+var r = fuzz_entry();
 syscall(60, r);

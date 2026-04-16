@@ -99,6 +99,7 @@ tests/phylax.fcyr     — Fuzz harness
 | Report | ~300 | JSON, Markdown, SARIF v2.1.0 output |
 | Hoosh Client | ~150 | LLM triage (synchronous HTTP) |
 | Daimon Client | ~120 | Agent orchestrator registration |
+| Bote MCP Tools | ~120 | 5 MCP tool definitions + 2 handlers |
 | CLI | ~500 | Argument parsing, subcommands, scan pipeline |
 
 ## Dependencies (cyrius.cyml)
@@ -106,6 +107,7 @@ tests/phylax.fcyr     — Fuzz harness
 - **stdlib**: string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, json, toml, regex, fs, net, tagged, fnptr, callback, thread, bench, bounds, math, process, chrono, base64, csv
 - **sakshi** 1.0.0 — structured logging
 - **sigil** 2.1.2 — cryptographic primitives (SHA-256)
+- **bote** 2.5.1 — MCP tool registry and dispatch
 
 ## Documentation Structure
 

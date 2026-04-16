@@ -1,6 +1,8 @@
 # phylax benchmarks
 # Ported from 16 Rust benchmark groups
 
+include "src/phylax.cyr"
+
 fn bench_entropy_1k() {
     var data = alloc(1024);
     for (var i = 0; i < 1024; i = i + 1) { store8(data + i, i & 0xff); }
