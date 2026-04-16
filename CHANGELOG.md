@@ -2,6 +2,27 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.9.6] - 2026-04-16
+
+Toolchain update, cc5 bug investigation, and exit code diagnosis.
+
+### Toolchain
+- **Cyrius 5.1.10** (was 5.1.7) — includes toml_get crash fix from 5.1.10
+
+### cc5 Bug Investigation
+- Filed detailed bug report at `docs/bugs/cc5-register-spill.md`
+- Received upstream response: **not a compiler bug** per isolated repro testing
+- Root cause narrowed: global variables read as 0 in function-call argument positions within functions with 15+ locals and heavy loop bodies
+- One-time success with stderr syscall barrier suggests binary-layout-dependent codegen issue
+- Workaround: `scan_finish` helper function receives globals via locals (partially effective)
+- `--severity-threshold` / `--exit-code` feature fully implemented, exit propagation unreliable
+- See `docs/bugs/cc5-register-spill-response.md` for upstream analysis
+
+### Quality
+- 110 tests passing across 23 groups
+- 850KB static binary, 8,573 lines
+- Toolchain pinned to 5.1.10
+
 ## [0.9.5] - 2026-04-16
 
 Heap management, engine reuse, expanded tests, architecture docs — pre-1.0 quality release.
