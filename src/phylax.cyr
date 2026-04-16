@@ -9,7 +9,7 @@
 var VERSION = 0;
 
 fn _init_version() {
-    VERSION = str_from("0.9.1");
+    VERSION = str_from("0.9.5");
 }
 
 # ================================================================
@@ -584,6 +584,33 @@ fn print_int(n) {
 var PHYLAX_MAX_FILE_SIZE = 104857600;  # 100 MB hard limit
 var PHYLAX_MMAP_THRESHOLD = 65536;     # 64 KB — mmap above this
 
+# ================================================================
+# Smart allocator: heap for small, mmap for large
+# ================================================================
+
+var LARGE_ALLOC_THRESHOLD = 65536;  # 64KB
+
+fn phylax_alloc(size) {
+    if (size >= LARGE_ALLOC_THRESHOLD) {
+        return mmap_anon(size);
+    }
+    return alloc(size);
+}
+
+# ================================================================
+# Global YARA engine — reuse across scans to avoid heap exhaustion
+# ================================================================
+
+var G_YARA_ENGINE = 0;
+
+fn get_yara_engine() {
+    if (G_YARA_ENGINE == 0) {
+        G_YARA_ENGINE = yara_engine_new();
+        yara_engine_load_builtin_rules(G_YARA_ENGINE);
+    }
+    return G_YARA_ENGINE;
+}
+
 # Convert a Str to a null-terminated cstr for syscalls
 fn str_to_cstr(s) {
     var slen = str_len(s);
@@ -628,8 +655,8 @@ fn phylax_read_file(path) {
         return str_new(addr, size);
     }
 
-    # Small file — alloc + read (stays on heap)
-    var buf = alloc(size + 1);
+    # Small file — phylax_alloc + read (mmap for large, heap for small)
+    var buf = phylax_alloc(size + 1);
     if (buf == 0) { return 0; }
     var n = file_read_all(path, buf, size);
     if (n <= 0) { return 0; }
@@ -2652,9 +2679,8 @@ fn zip_scan_entries(data, data_len, rules_path, max_depth) {
                 var entry_data = data + data_offset;
                 var entry_findings = analyze_findings(entry_data, uncomp_size,
                     scan_target_new(SCAN_TARGET_FILE, str_from("embedded")));
-                # Also run YARA on embedded content
-                var engine = yara_engine_new();
-                yara_engine_load_builtin_rules(engine);
+                # Also run YARA on embedded content (reuse global engine)
+                var engine = get_yara_engine();
                 var yf = yara_engine_scan(engine, entry_data, uncomp_size);
                 # Merge analysis findings
                 var nef = vec_len(entry_findings);
@@ -2762,9 +2788,8 @@ fn tar_scan_entries(data, data_len, rules_path, max_depth) {
                 var entry_findings = analyze_findings(entry_data, size,
                     scan_target_new(SCAN_TARGET_FILE, str_from("tar-embedded")));
 
-                # Run YARA on embedded content
-                var engine = yara_engine_new();
-                yara_engine_load_builtin_rules(engine);
+                # Run YARA on embedded content (reuse global engine)
+                var engine = get_yara_engine();
                 var yf = yara_engine_scan(engine, entry_data, size);
 
                 # Merge analysis findings
@@ -7324,9 +7349,8 @@ fn run_scan(path, rules_path) {
         vec_push(load64(result + 8), vec_get(analysis_findings, i));
     }
 
-    # Step 2: YARA engine scan
-    var engine = yara_engine_new();
-    yara_engine_load_builtin_rules(engine);
+    # Step 2: YARA engine scan (reuse global engine)
+    var engine = get_yara_engine();
 
     # Load custom rules file if specified
     if (rules_path != 0) {
@@ -7770,8 +7794,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
 # ================================================================
 
 fn cmd_rules_list(file) {
-    var engine = yara_engine_new();
-    yara_engine_load_builtin_rules(engine);
+    var engine = get_yara_engine();
 
     # Load from file if specified
     if (file != 0) {
@@ -7919,7 +7942,7 @@ fn cmd_rules_fetch(url, output_path) {
     str_println(str_cat(str_from(" bytes to "), str_from(output_path)));
 
     # Validate the downloaded rules
-    var engine = yara_engine_new();
+    var engine = get_yara_engine();
     var content = str_new(body, body_len);
     var ext_yar = 0;
     var plen = strlen(output_path);
@@ -8045,8 +8068,7 @@ fn cmd_status() {
     str_println(str_from(""));
 
     # Show default rule count
-    var engine = yara_engine_new();
-    yara_engine_load_builtin_rules(engine);
+    var engine = get_yara_engine();
     var nrules = vec_len(load64(engine));
     str_println(str_cat(str_from("Default rules loaded: "), str_from_int(nrules)));
 

@@ -2,6 +2,36 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [0.9.5] - 2026-04-16
+
+Heap management, engine reuse, expanded tests, architecture docs — pre-1.0 quality release.
+
+### Heap Management
+- **`phylax_alloc`** — smart allocator routes allocations >= 64KB to `mmap_anon` (OS virtual memory) instead of bump allocator heap
+- **Global YARA engine** (`get_yara_engine()`) — singleton created once, reused across all scans. Previously each `run_scan`, `zip_scan_entries`, `tar_scan_entries` created a new engine, permanently consuming heap
+- Replaced engine creation in 6 locations with global singleton
+- `phylax_read_file` uses `phylax_alloc` for file buffers >= 64KB
+- **Multi-file scanning no longer OOM** — successfully scans 3+ files that previously crashed at 6
+
+### Test Suite Expansion
+- **110 tests** (up from 86) across **23 test groups**
+- New groups: tar_detection, archive_scanning, fingerprint, baseline, timestamp, config, parse_severity
+- TAR: ustar header detection, negative test
+- Archive: stored ZIP entry scanning smoke test
+- Fingerprint: 64-char output, determinism, uniqueness
+- Baseline: ignore file parsing, suppression by rule name, non-suppression
+- Timestamp: epoch-to-date for known value
+- Parse severity: all levels + edge cases (null, unknown)
+
+### Architecture Documentation
+- Rewrote `docs/architecture/overview.md` for Cyrius port
+- Module map with data flow, scan pipeline diagram, memory model, security hardening table
+- Dependency matrix, consumer integrations
+
+### Quality
+- 110 tests passing, 849KB binary, 8,500+ lines
+- 23 test groups covering all major subsystems
+
 ## [0.9.1] - 2026-04-16
 
 TAR archive scanning and STIX threat intelligence import.

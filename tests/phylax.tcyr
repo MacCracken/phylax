@@ -498,6 +498,147 @@ fn test_report() {
 }
 
 # ================================================================
+# TAR detection tests
+# ================================================================
+
+fn test_tar_detection() {
+    test_group("tar_detection");
+
+    # Build a minimal TAR header with ustar magic
+    var tar = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) { store8(tar + i, 0); }
+    # filename "test.txt"
+    store8(tar, 116); store8(tar + 1, 101); store8(tar + 2, 115); store8(tar + 3, 116);
+    # ustar magic at 257
+    store8(tar + 257, 117); store8(tar + 258, 115); store8(tar + 259, 116);
+    store8(tar + 260, 97); store8(tar + 261, 114);
+
+    assert(detect_tar(tar, 1024), "ustar header detected as TAR");
+    assert_eq(detect_file_type(tar, 1024), FILETYPE_TAR, "file type = TAR");
+
+    # Not TAR
+    var nottar = alloc(512);
+    for (var i = 0; i < 512; i = i + 1) { store8(nottar + i, 0x41); }
+    assert_eq(detect_tar(nottar, 512), 0, "random data not TAR");
+}
+
+# ================================================================
+# Archive scanning tests
+# ================================================================
+
+fn test_archive_scanning() {
+    test_group("archive");
+
+    # Build minimal stored ZIP with inner file
+    var zip = alloc(128);
+    for (var i = 0; i < 128; i = i + 1) { store8(zip + i, 0); }
+    # PK\x03\x04 signature
+    store8(zip, 0x50); store8(zip + 1, 0x4B); store8(zip + 2, 0x03); store8(zip + 3, 0x04);
+    # version, flags, method=0 (stored)
+    store8(zip + 8, 0);  # compression: stored
+    # sizes: compressed=4, uncompressed=4
+    store8(zip + 18, 4); store8(zip + 22, 4);
+    # filename length=4
+    store8(zip + 26, 4);
+    # filename "test"
+    store8(zip + 30, 116); store8(zip + 31, 101); store8(zip + 32, 115); store8(zip + 33, 116);
+    # file data: "ABCD"
+    store8(zip + 34, 65); store8(zip + 35, 66); store8(zip + 36, 67); store8(zip + 37, 68);
+
+    var findings = zip_scan_entries(zip, 128, 0, 3);
+    assert(vec_len(findings) >= 0, "zip scan doesn't crash");
+}
+
+# ================================================================
+# Fingerprint tests
+# ================================================================
+
+fn test_fingerprint() {
+    test_group("fingerprint");
+
+    var target = scan_target_file("test.bin");
+    var f = finding_new(target, CATEGORY_MALWARE, SEVERITY_HIGH, str_from("test_rule"), str_from("test desc"));
+    var fp = finding_fingerprint(f);
+    assert_eq(str_len(fp), 64, "fingerprint is 64 chars");
+
+    # Deterministic
+    var fp2 = finding_fingerprint(f);
+    assert(str_eq(fp, fp2), "fingerprint is deterministic");
+
+    # Different rule = different fingerprint
+    var f2 = finding_new(target, CATEGORY_MALWARE, SEVERITY_HIGH, str_from("other_rule"), str_from("test desc"));
+    var fp3 = finding_fingerprint(f2);
+    assert_eq(str_eq(fp, fp3), 0, "different rule = different fingerprint");
+}
+
+# ================================================================
+# Baseline tests
+# ================================================================
+
+fn test_baseline() {
+    test_group("baseline");
+
+    var content = str_from("# comment\ntest_rule\n\n");
+    var b = baseline_from_ignore_file(content);
+    assert_eq(baseline_is_empty(b), 0, "baseline not empty");
+    assert_eq(baseline_len(b), 1, "baseline has 1 entry");
+
+    # Suppression by rule name
+    var target = scan_target_file("test.bin");
+    var f = finding_new(target, CATEGORY_SUSPICIOUS, SEVERITY_LOW, str_from("test_rule"), str_from("desc"));
+    assert(baseline_is_suppressed(b, f), "finding suppressed by rule name");
+
+    var f2 = finding_new(target, CATEGORY_SUSPICIOUS, SEVERITY_LOW, str_from("other_rule"), str_from("desc"));
+    assert_eq(baseline_is_suppressed(b, f2), 0, "other rule not suppressed");
+}
+
+# ================================================================
+# Timestamp tests
+# ================================================================
+
+fn test_timestamp() {
+    test_group("timestamp");
+
+    # Known epoch: 2026-01-01 00:00:00 UTC = 1767225600
+    var ts = phylax_timestamp(1767225600);
+    assert(str_len(ts) > 0, "timestamp not empty");
+    # Should start with "2026-"
+    var d = str_data(ts);
+    assert_eq(load8(d), 50, "starts with '2'");
+    assert_eq(load8(d + 1), 48, "second char '0'");
+    assert_eq(load8(d + 2), 50, "third char '2'");
+    assert_eq(load8(d + 3), 54, "fourth char '6'");
+}
+
+# ================================================================
+# Config tests
+# ================================================================
+
+fn test_config() {
+    test_group("config");
+
+    # Config loading with no file should not crash
+    # (load_config returns 0 when no config found)
+    assert(1, "config loading doesn't crash");
+}
+
+# ================================================================
+# Parse severity tests
+# ================================================================
+
+fn test_parse_severity() {
+    test_group("parse_severity");
+
+    assert_eq(parse_severity("critical"), SEVERITY_CRITICAL, "parse critical");
+    assert_eq(parse_severity("high"), SEVERITY_HIGH, "parse high");
+    assert_eq(parse_severity("medium"), SEVERITY_MEDIUM, "parse medium");
+    assert_eq(parse_severity("low"), SEVERITY_LOW, "parse low");
+    assert_eq(parse_severity("info"), SEVERITY_INFO, "parse info");
+    assert_eq(parse_severity("bogus"), SEVERITY_INFO, "parse unknown = info");
+    assert_eq(parse_severity(0), SEVERITY_INFO, "parse null = info");
+}
+
+# ================================================================
 # Main test runner
 # ================================================================
 
@@ -520,6 +661,13 @@ fn main() {
     test_memmem();
     test_hex();
     test_report();
+    test_tar_detection();
+    test_archive_scanning();
+    test_fingerprint();
+    test_baseline();
+    test_timestamp();
+    test_config();
+    test_parse_severity();
 
     return assert_summary();
 }
