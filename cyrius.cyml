@@ -1,6 +1,6 @@
 [package]
 name = "phylax"
-version = "0.9.6"
+version = "1.0.0-rc1"
 description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF parsing, binary classification"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"

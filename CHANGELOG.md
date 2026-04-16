@@ -2,6 +2,38 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.0.0-rc1] - 2026-04-16
+
+Release candidate. Security audit, expanded tests, complete documentation.
+
+### Security Audit
+- Full code review of 8,577 lines — `docs/audit/2026-04-16-security-audit.md`
+- **0 critical issues**, 5 WARN (defense-in-depth improvements), 8 INFO (acceptable risks)
+- All input validation paths verified: O_NOFOLLOW, fstat, size caps, bounds checks, path traversal rejection
+- PE/ELF parsers: all RVA/offset calculations bounded
+- Archive scanning: bomb protection limits confirmed (depth 3, 1024 entries, 100MB expand)
+
+### Test Suite — 178 Assertions
+- **31 test groups**, up from 23 (0.9.5) and 16 (0.7.5)
+- New groups: pe_detection, elf_security, yara_engine, scan_pipeline, hex_decode, memmem_variants, severity_names, category_names
+- Covers all major subsystems: types, errors, entropy, chi-squared, file detection, SHA-256, strings, PE, ELF, YARA, queue, ssdeep, tlsh, memmem, hex, report, TAR, archives, fingerprint, baseline, timestamp, config, severity parsing
+
+### Documentation
+- **CLI Reference** — `docs/guides/cli-reference.md` (328 lines): all 8 commands, all flags, exit codes, pipeline description, config format, built-in rules table
+- **Integration Guide** — `docs/guides/integration.md` (379 lines): hoosh triage, daimon orchestrator, bote MCP tools (full schemas), daemon socket protocol, CI/CD pipeline with GitHub Actions/GitLab CI/Jenkins examples
+- **Architecture** — previously updated in 0.9.5
+
+### Quality
+- 178 tests, 31 groups, 0 failures
+- 850KB static binary, 8,577 source lines, 974 test lines
+- Toolchain: Cyrius 5.1.10
+- Benchmark compilation limited by cc5 fixup table (16384) with full deps — data from 0.8.0 run still valid
+
+### Known Limitations
+- `--exit-code` propagation: globals read as 0 in large function — root cause under investigation
+- Benchmark suite exceeds fixup table limit (16384) with full deps — data from 0.8.0 run valid
+- Deflate decompression not implemented (ZIP/GZIP compressed entries not scanned)
+
 ## [0.9.6] - 2026-04-16
 
 Toolchain update, cc5 bug investigation, and exit code diagnosis.

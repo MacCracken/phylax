@@ -1,0 +1,59 @@
+# phylax-bench-lite — minimal benchmarks without bote/sigil deps
+# Includes only the core phylax library for benchmarking
+
+include "src/phylax.cyr"
+
+fn bench_entropy_1k() {
+    var data = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) { store8(data + i, i & 0xff); }
+    shannon_entropy(data, 1024);
+    return 0;
+}
+
+fn bench_file_detection() {
+    var data = alloc(16);
+    store8(data, 0x7f); store8(data + 1, 0x45); store8(data + 2, 0x4c); store8(data + 3, 0x46);
+    detect_file_type(data, 16);
+    return 0;
+}
+
+fn bench_memmem() {
+    var hay = alloc(4096);
+    for (var i = 0; i < 4096; i = i + 1) { store8(hay + i, i & 0xff); }
+    var needle = alloc(4);
+    store8(needle, 0xfe); store8(needle + 1, 0xff); store8(needle + 2, 0x00); store8(needle + 3, 0x01);
+    memmem(hay, 4096, needle, 4);
+    return 0;
+}
+
+fn bench_hex_encode() {
+    var data = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) { store8(data + i, i); }
+    hex_encode(data, 256);
+    return 0;
+}
+
+fn bench_extract_ascii() {
+    var data = alloc(4096);
+    for (var i = 0; i < 4096; i = i + 1) { store8(data + i, 0x41 + (i % 26)); }
+    for (var i = 0; i < 4096; i = i + 64) { store8(data + i, 0); }
+    extract_ascii(data, 4096, 4);
+    return 0;
+}
+
+fn main() {
+    phylax_init();
+    var benches = vec_new();
+
+    var b1 = bench_new("entropy_1k"); bench_run(b1, &bench_entropy_1k, 10000); vec_push(benches, b1);
+    var b2 = bench_new("file_detection"); bench_run(b2, &bench_file_detection, 100000); vec_push(benches, b2);
+    var b3 = bench_new("memmem_4k"); bench_run(b3, &bench_memmem, 50000); vec_push(benches, b3);
+    var b4 = bench_new("hex_encode_256"); bench_run(b4, &bench_hex_encode, 50000); vec_push(benches, b4);
+    var b5 = bench_new("extract_ascii"); bench_run(b5, &bench_extract_ascii, 10000); vec_push(benches, b5);
+
+    bench_report_all(benches);
+    return 0;
+}
+
+var r = main();
+syscall(60, r);

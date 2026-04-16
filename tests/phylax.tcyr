@@ -639,6 +639,294 @@ fn test_parse_severity() {
 }
 
 # ================================================================
+# PE detection tests
+# ================================================================
+
+fn test_pe_detection() {
+    test_group("pe_detection");
+
+    # Minimal PE data → detect_file_type returns FILETYPE_PE
+    var pe_data = alloc(4);
+    store8(pe_data, 0x4d); store8(pe_data + 1, 0x5a);
+    store8(pe_data + 2, 0x90); store8(pe_data + 3, 0x00);
+    assert_eq(detect_file_type(pe_data, 4), FILETYPE_PE, "detect PE from MZ");
+
+    # Verify filetype_is_executable for PE
+    assert(filetype_is_executable(FILETYPE_PE), "PE is executable");
+    assert(filetype_is_executable(FILETYPE_ELF), "ELF is executable");
+    assert(filetype_is_executable(FILETYPE_MACHO), "Mach-O is executable");
+    assert_eq(filetype_is_executable(FILETYPE_PDF), 0, "PDF not executable");
+    assert_eq(filetype_is_executable(FILETYPE_ZIP), 0, "ZIP not executable");
+
+    # parse_pe handles truncated data — too short for PE header
+    var short_mz = alloc(64);
+    for (var i = 0; i < 64; i = i + 1) { store8(short_mz + i, 0); }
+    store8(short_mz, 0x4d); store8(short_mz + 1, 0x5a);
+    # e_lfanew pointing past data
+    store8(short_mz + 0x3C, 0xFF);
+    assert_eq(parse_pe(short_mz, 64), 0, "PE truncated e_lfanew");
+
+    # parse_pe with invalid PE signature
+    var bad_pe = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) { store8(bad_pe + i, 0); }
+    store8(bad_pe, 0x4d); store8(bad_pe + 1, 0x5a);
+    store8(bad_pe + 0x3C, 0x80);
+    # Write wrong PE signature (not "PE\0\0")
+    store8(bad_pe + 0x80, 0x50); store8(bad_pe + 0x81, 0x00);
+    assert_eq(parse_pe(bad_pe, 256), 0, "PE bad signature");
+
+    # PE section flags — test the flag check functions
+    var sec = pe_section_new();
+    store64(sec + 40, PE_SCN_MEM_EXECUTE | PE_SCN_MEM_READ);
+    assert(pe_section_is_executable(sec), "section is executable");
+    assert_eq(pe_section_is_writable(sec), 0, "section not writable");
+    store64(sec + 40, PE_SCN_MEM_WRITE);
+    assert(pe_section_is_writable(sec), "section is writable");
+    assert_eq(pe_section_is_executable(sec), 0, "section not executable");
+    store64(sec + 40, PE_SCN_CNT_CODE);
+    assert(pe_section_contains_code(sec), "section contains code");
+}
+
+# ================================================================
+# ELF security feature tests
+# ================================================================
+
+fn test_elf_security() {
+    test_group("elf_security");
+
+    # Build a minimal ELF64 with program headers
+    var size = 512;
+    var data = alloc(size);
+    for (var i = 0; i < size; i = i + 1) { store8(data + i, 0); }
+    # ELF magic
+    store8(data, 0x7f); store8(data + 1, 0x45); store8(data + 2, 0x4c); store8(data + 3, 0x46);
+    store8(data + 4, 2);  # 64-bit
+    store8(data + 5, 1);  # little-endian
+    store8(data + 6, 1);  # version
+    store8(data + 16, 2); # ET_EXEC
+    store8(data + 18, 62); # x86_64
+    # entry point
+    store8(data + 24, 0x00); store8(data + 25, 0x10);
+
+    # Program header table at offset 64
+    store8(data + 32, 64);  # ph_offset (low byte)
+    # ph_entry_size = 56 (ELF64)
+    store8(data + 54, 56);
+    # ph_num = 2
+    store8(data + 56, 2);
+
+    # Program header 0: PT_GNU_STACK (no exec flag → safe)
+    var ph0 = 64;
+    # p_type = PT_GNU_STACK (0x6474e551)
+    store8(data + ph0, 0x51); store8(data + ph0 + 1, 0xe5);
+    store8(data + ph0 + 2, 0x74); store8(data + ph0 + 3, 0x64);
+    # p_flags = PF_R | PF_W (no PF_X) = 6
+    store8(data + ph0 + 4, 6);
+
+    # Program header 1: PT_GNU_RELRO
+    var ph1 = 64 + 56;
+    store8(data + ph1, 0x52); store8(data + ph1 + 1, 0xe5);
+    store8(data + ph1 + 2, 0x74); store8(data + ph1 + 3, 0x64);
+    store8(data + ph1 + 4, 4);  # PF_R
+
+    var elf = parse_elf(data, size);
+    assert(elf != 0, "ELF with program headers parsed");
+
+    # Check security features
+    var sec = load64(elf + 88);
+    assert(load64(sec), "has RELRO");
+    assert_eq(load64(sec + 24), 0, "no executable stack");
+    assert_eq(load64(sec + 8), 0, "no RWX segment");
+}
+
+# ================================================================
+# YARA engine singleton tests
+# ================================================================
+
+fn test_yara_engine() {
+    test_group("yara_engine");
+
+    # get_yara_engine returns same pointer twice (singleton)
+    var e1 = get_yara_engine();
+    var e2 = get_yara_engine();
+    assert_eq(e1, e2, "yara engine is singleton");
+    assert(e1 != 0, "yara engine not null");
+
+    # Engine has built-in rules loaded
+    var nrules = yara_engine_rule_count(e1);
+    assert(nrules >= 7, "at least 7 built-in rules");
+
+    # yara_engine_scan on clean data returns 0 findings
+    var clean = alloc(64);
+    for (var i = 0; i < 64; i = i + 1) {
+        store8(clean + i, 0x41);  # fill with 'A'
+    }
+    var findings = yara_engine_scan(e1, clean, 64);
+    assert_eq(vec_len(findings), 0, "clean data has 0 findings");
+}
+
+# ================================================================
+# Scan pipeline tests
+# ================================================================
+
+fn test_scan_pipeline() {
+    test_group("scan_pipeline");
+
+    # scan_result_new creates valid result
+    var target = scan_target_file("test.bin");
+    var result = scan_result_new(target);
+    assert(result != 0, "scan_result created");
+    assert_eq(scan_result_has_threats(result), 0, "new result has no threats");
+    assert_eq(scan_result_finding_count(result), 0, "new result count = 0");
+
+    # scan_result_highest_severity on empty returns None (tagged union — skip pointer check)
+
+    # Add a finding and check
+    var f = finding_new(target, CATEGORY_MALWARE, SEVERITY_HIGH,
+                        str_from("test"), str_from("desc"));
+    vec_push(load64(result + 8), f);
+    assert(scan_result_has_threats(result), "result has threats");
+    assert_eq(scan_result_finding_count(result), 1, "result count = 1");
+
+    # finding_is_critical
+    assert_eq(finding_is_critical(f), 0, "HIGH is not critical");
+    var fc = finding_new(target, CATEGORY_MALWARE, SEVERITY_CRITICAL,
+                         str_from("crit"), str_from("desc"));
+    assert(finding_is_critical(fc), "CRITICAL is critical");
+}
+
+# ================================================================
+# Hex decode tests
+# ================================================================
+
+fn test_hex_decode() {
+    test_group("hex_decode");
+
+    # Basic roundtrip: encode then decode
+    var orig = alloc(4);
+    store8(orig, 0xDE); store8(orig + 1, 0xAD);
+    store8(orig + 2, 0xBE); store8(orig + 3, 0xEF);
+    var hex = hex_encode(orig, 4);
+    assert(str_eq(hex, str_from("deadbeef")), "hex_encode deadbeef");
+
+    var out_len = alloc(8);
+    var decoded = hex_decode(hex, out_len);
+    assert(decoded != 0, "hex_decode succeeds");
+    assert_eq(load64(out_len), 4, "decoded length = 4");
+    assert_eq(load8(decoded), 0xDE, "decoded[0] = 0xDE");
+    assert_eq(load8(decoded + 1), 0xAD, "decoded[1] = 0xAD");
+    assert_eq(load8(decoded + 2), 0xBE, "decoded[2] = 0xBE");
+    assert_eq(load8(decoded + 3), 0xEF, "decoded[3] = 0xEF");
+
+    # Odd-length hex string → failure
+    var bad = str_from("abc");
+    assert_eq(hex_decode(bad, out_len), 0, "odd length hex fails");
+
+    # Invalid hex char → failure
+    var bad2 = str_from("zz");
+    assert_eq(hex_decode(bad2, out_len), 0, "invalid hex char fails");
+
+    # Empty hex string → 0 bytes decoded
+    var empty = str_from("");
+    var dempty = hex_decode(empty, out_len);
+    # empty hex input: alloc(0) may return 0 — just check length
+    assert_eq(load64(out_len), 0, "empty hex decoded length = 0");
+}
+
+# ================================================================
+# Memmem variant tests
+# ================================================================
+
+fn test_memmem_variants() {
+    test_group("memmem_variants");
+
+    # Needle at start
+    var hay = str_from("abcdefghij");
+    var needle = str_from("abc");
+    assert_eq(memmem(str_data(hay), str_len(hay), str_data(needle), str_len(needle)), 0, "needle at start");
+
+    # Needle at end
+    var needle2 = str_from("hij");
+    assert_eq(memmem(str_data(hay), str_len(hay), str_data(needle2), str_len(needle2)), 7, "needle at end");
+
+    # Needle at middle
+    var needle3 = str_from("def");
+    assert_eq(memmem(str_data(hay), str_len(hay), str_data(needle3), str_len(needle3)), 3, "needle at middle");
+
+    # Single-byte needle
+    var needle4 = str_from("a");
+    assert_eq(memmem(str_data(hay), str_len(hay), str_data(needle4), str_len(needle4)), 0, "single byte at start");
+
+    # Needle longer than haystack
+    var short_hay = str_from("ab");
+    var long_needle = str_from("abcde");
+    assert_eq(memmem(str_data(short_hay), str_len(short_hay), str_data(long_needle), str_len(long_needle)), 0 - 1, "needle longer than haystack");
+
+    # Overlapping pattern: needle "aa" in "aaaa"
+    var overlap_hay = str_from("aaaa");
+    var overlap_needle = str_from("aa");
+    assert_eq(memmem(str_data(overlap_hay), str_len(overlap_hay), str_data(overlap_needle), str_len(overlap_needle)), 0, "overlapping at start");
+}
+
+# ================================================================
+# Severity name roundtrip tests
+# ================================================================
+
+fn test_severity_names() {
+    test_group("severity_names");
+
+    # Every severity name is non-empty and distinct
+    var s_info = severity_name(SEVERITY_INFO);
+    var s_low = severity_name(SEVERITY_LOW);
+    var s_med = severity_name(SEVERITY_MEDIUM);
+    var s_high = severity_name(SEVERITY_HIGH);
+    var s_crit = severity_name(SEVERITY_CRITICAL);
+
+    assert(str_len(s_info) > 0, "INFO name not empty");
+    assert(str_len(s_low) > 0, "LOW name not empty");
+    assert(str_len(s_med) > 0, "MEDIUM name not empty");
+    assert(str_len(s_high) > 0, "HIGH name not empty");
+    assert(str_len(s_crit) > 0, "CRITICAL name not empty");
+
+    # Names are distinct
+    assert_eq(str_eq(s_info, s_low), 0, "INFO != LOW");
+    assert_eq(str_eq(s_low, s_med), 0, "LOW != MEDIUM");
+    assert_eq(str_eq(s_med, s_high), 0, "MEDIUM != HIGH");
+    assert_eq(str_eq(s_high, s_crit), 0, "HIGH != CRITICAL");
+
+    # gte comparisons
+    assert(severity_gte(SEVERITY_HIGH, SEVERITY_HIGH), "high >= high");
+    assert(severity_gte(SEVERITY_CRITICAL, SEVERITY_INFO), "critical >= info");
+    assert_eq(severity_gte(SEVERITY_LOW, SEVERITY_HIGH), 0, "low not >= high");
+}
+
+# ================================================================
+# Category name tests
+# ================================================================
+
+fn test_category_names() {
+    test_group("category_names");
+
+    # All category names are non-empty
+    assert(str_len(category_name(CATEGORY_MALWARE)) > 0, "malware name");
+    assert(str_len(category_name(CATEGORY_RANSOMWARE)) > 0, "ransomware name");
+    assert(str_len(category_name(CATEGORY_SUSPICIOUS)) > 0, "suspicious name");
+    assert(str_len(category_name(CATEGORY_EMBEDDED_PAYLOAD)) > 0, "embedded name");
+    assert(str_len(category_name(CATEGORY_VULNERABLE_DEPENDENCY)) > 0, "vuln dep name");
+    assert(str_len(category_name(CATEGORY_BEHAVIOR_ANOMALY)) > 0, "behavior name");
+    assert(str_len(category_name(CATEGORY_CUSTOM_RULE)) > 0, "custom rule name");
+
+    # Unknown category
+    assert(str_eq(category_name(99), str_from("Unknown")), "unknown category = Unknown");
+
+    # Category names match expected values
+    assert(str_eq(category_name(CATEGORY_RANSOMWARE), str_from("Ransomware")), "ransomware exact");
+    assert(str_eq(category_name(CATEGORY_EMBEDDED_PAYLOAD), str_from("Embedded Payload")), "embedded exact");
+    assert(str_eq(category_name(CATEGORY_BEHAVIOR_ANOMALY), str_from("Behavior Anomaly")), "behavior exact");
+    assert(str_eq(category_name(CATEGORY_VULNERABLE_DEPENDENCY), str_from("Vulnerable Dependency")), "vuln dep exact");
+}
+
+# ================================================================
 # Main test runner
 # ================================================================
 
@@ -668,6 +956,14 @@ fn main() {
     test_timestamp();
     test_config();
     test_parse_severity();
+    test_pe_detection();
+    test_elf_security();
+    test_yara_engine();
+    test_scan_pipeline();
+    test_hex_decode();
+    test_memmem_variants();
+    test_severity_names();
+    test_category_names();
 
     return assert_summary();
 }
