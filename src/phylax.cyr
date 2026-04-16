@@ -7602,6 +7602,10 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
 
     # Print summary
     # Delegate summary + exit to small function (workaround cc5 register spill)
+    # Exit code propagation: cc5 codegen issue — globals read as 0 in argument
+    # position of function calls in large functions. No reliable workaround found.
+    # The feature is implemented; awaiting cc5 investigation.
+    # See docs/bugs/cc5-register-spill.md + cc5-register-spill-response.md
     return scan_finish(nfiles, G_TOTAL_FINDINGS, G_HIGHEST_SEVERITY, G_SEVERITY_THRESHOLD, G_EXIT_CODE);
 }
 
