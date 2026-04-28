@@ -1,0 +1,109 @@
+# phylax-core — smoke test for the [lib.core] profile
+# Proves the detection-only surface compiles standalone (no queue/quarantine,
+# no bote/daimon/hoosh dependencies) and the core primitives behave correctly.
+# Mirrors a focused subset of phylax.tcyr; the full test suite still lives in
+# phylax.tcyr.
+
+include "src/lib_core.cyr"
+
+# ================================================================
+# Severity / category — pure types, no runtime
+# ================================================================
+
+fn test_core_severity() {
+    test_group("core_severity");
+    assert(severity_gt(SEVERITY_CRITICAL, SEVERITY_INFO), "critical > info");
+    assert(str_eq(severity_name(SEVERITY_HIGH), str_from("HIGH")), "high name");
+    assert(str_eq(category_name(CATEGORY_MALWARE), str_from("Malware")), "malware name");
+}
+
+# ================================================================
+# Entropy / file detection — analyze.cyr
+# ================================================================
+
+fn test_core_analyze() {
+    test_group("core_analyze");
+
+    # Zero-entropy buffer
+    var zeros = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) { store8(zeros + i, 0); }
+    var e = shannon_entropy(zeros, 1024);
+    assert(e < 1, "zeros: entropy near 0");
+
+    # ELF magic detection
+    var elf = alloc(16);
+    store8(elf, 0x7f); store8(elf + 1, 0x45); store8(elf + 2, 0x4c); store8(elf + 3, 0x46);
+    assert_eq(detect_file_type(elf, 16), FILETYPE_ELF, "ELF magic");
+
+    # PE magic detection
+    var pe = alloc(64);
+    store8(pe, 0x4d); store8(pe + 1, 0x5a);
+    assert_eq(detect_file_type(pe, 64), FILETYPE_PE, "PE magic");
+}
+
+# ================================================================
+# SHA-256 — sigil dep, exercised through analyze.cyr
+# ================================================================
+
+fn test_core_sha256() {
+    test_group("core_sha256");
+    var empty_hash = file_sha256(alloc(1), 0);
+    assert(str_eq(empty_hash, str_from("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")),
+        "sha256 empty matches FIPS 180-4");
+}
+
+# ================================================================
+# Memmem — utils.cyr substring search used by yara
+# ================================================================
+
+fn test_core_memmem() {
+    test_group("core_memmem");
+    var hay = "hello world";
+    var needle = "world";
+    assert_eq(memmem(hay, 11, needle, 5), 6, "memmem finds substring");
+    assert_eq(memmem(hay, 11, "xyz", 3), -1, "memmem misses absent substring");
+}
+
+# ================================================================
+# Strings extraction — strings.cyr (extract_ascii)
+# ================================================================
+
+fn test_core_strings() {
+    test_group("core_strings");
+    var data = alloc(24);
+    store8(data, 0); store8(data + 1, 0);
+    var hello = "hello world";
+    for (var i = 0; i < 11; i = i + 1) {
+        store8(data + 2 + i, load8(hello + i));
+    }
+    store8(data + 13, 0); store8(data + 14, 0);
+    var got = extract_ascii(data, 14, 4);
+    assert(vec_len(got) >= 1, "extract_ascii: at least one string");
+}
+
+# ================================================================
+# Report scaffolding — report.cyr (no rendering, just struct paths)
+# ================================================================
+
+fn test_core_report() {
+    test_group("core_report");
+    var t = scan_target_file(str_from("/tmp/x"));
+    var r = scan_result_new(t);
+    assert_eq(scan_result_finding_count(r), 0, "empty result, zero findings");
+}
+
+fn main() {
+    phylax_init();
+
+    test_core_severity();
+    test_core_analyze();
+    test_core_sha256();
+    test_core_memmem();
+    test_core_strings();
+    test_core_report();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

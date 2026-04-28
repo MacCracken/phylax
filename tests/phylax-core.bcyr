@@ -1,7 +1,8 @@
-# phylax-bench-lite — minimal benchmarks without bote/sigil deps
-# Includes only the core phylax library for benchmarking
+# phylax-core — benchmarks for the [lib.core] profile.
+# Includes src/lib_core.cyr (no queue/quarantine/integration), so this also
+# acts as a smoke check that the detection-only surface compiles standalone.
 
-include "src/lib.cyr"
+include "src/lib_core.cyr"
 
 fn bench_entropy_1k() {
     var data = alloc(1024);

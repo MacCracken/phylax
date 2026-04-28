@@ -95,7 +95,14 @@ jobs:
           if [ -f build/phylax-aarch64 ]; then
             cp build/phylax-aarch64 "phylax-${TAG}-aarch64-linux"
           fi
-          sha256sum phylax-*.tar.gz phylax-*-linux 2>/dev/null > SHA256SUMS
+          # Versioned dist bundles for downstream consumers (daimon, aegis, t-ron).
+          if [ -f dist/phylax.cyr ]; then
+            cp dist/phylax.cyr      "phylax-${TAG}.cyr"
+          fi
+          if [ -f dist/phylax-core.cyr ]; then
+            cp dist/phylax-core.cyr "phylax-${TAG}-core.cyr"
+          fi
+          sha256sum phylax-*.tar.gz phylax-*-linux phylax-*.cyr 2>/dev/null > SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
@@ -103,6 +110,7 @@ jobs:
           path: |
             phylax-*.tar.gz
             phylax-*-linux
+            phylax-*.cyr
             cyrius.lock
             SHA256SUMS
 
@@ -131,5 +139,6 @@ jobs:
           files: |
             phylax-*.tar.gz
             phylax-*-linux
+            phylax-*.cyr
             cyrius.lock
             SHA256SUMS

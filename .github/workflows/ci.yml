@@ -95,6 +95,23 @@ jobs:
             echo "ERROR: phylax-aarch64 is not aarch64 ELF"; exit 1; }
           echo "phylax-aarch64: $(wc -c < build/phylax-aarch64) bytes"
 
+      - name: dist/ bundles are up-to-date
+        # `cyrius distlib` emits dist/phylax.cyr from [lib] modules and
+        # `cyrius distlib core` emits dist/phylax-core.cyr from [lib.core].
+        # The unresolved-symbols warning is expected — consumers supply
+        # their own stdlib (same pattern as majra, sakshi, libro).
+        run: |
+          cyrius distlib || true
+          cyrius distlib core || true
+          test -s dist/phylax.cyr      || { echo "FAIL: dist/phylax.cyr not produced"; exit 1; }
+          test -s dist/phylax-core.cyr || { echo "FAIL: dist/phylax-core.cyr not produced"; exit 1; }
+          echo "dist/phylax.cyr:      $(wc -l < dist/phylax.cyr) lines, $(wc -c < dist/phylax.cyr) bytes"
+          echo "dist/phylax-core.cyr: $(wc -l < dist/phylax-core.cyr) lines, $(wc -c < dist/phylax-core.cyr) bytes"
+          if ! git diff --exit-code dist/; then
+            echo "FAIL: committed dist/ bundles are stale. Run 'cyrius distlib && cyrius distlib core' and commit."
+            exit 1
+          fi
+
       - name: Test
         run: |
           fail=0
@@ -187,7 +204,8 @@ jobs:
         run: |
           MISSING=0
           for f in README.md CHANGELOG.md VERSION CONTRIBUTING.md SECURITY.md \
-                   CODE_OF_CONDUCT.md LICENSE CLAUDE.md cyrius.cyml; do
+                   CODE_OF_CONDUCT.md LICENSE CLAUDE.md cyrius.cyml \
+                   dist/phylax.cyr dist/phylax-core.cyr; do
             if [ -f "$f" ]; then echo "  OK: $f"
             else echo "  MISSING: $f"; MISSING=1; fi
           done

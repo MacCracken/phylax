@@ -43,6 +43,11 @@ var SYS_FSTAT = 5;
 var G_SCAN_ALLOC_TOTAL = 0;
 var G_SCAN_ALLOC_LIMIT = 209715200;  # 200 MB per scan
 
+# Agent identity — populated by phylax_init(). Lives in types.cyr so the
+# [lib.core] profile (which omits integration.cyr) can still init cleanly;
+# integration.cyr reads this value when registering with daimon.
+var AGENT_NAME = 0;
+
 # ================================================================
 # Enum constants — ScanTarget kind
 # ================================================================

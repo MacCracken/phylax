@@ -295,8 +295,7 @@ fn daimon_deregister(base_url, agent_id) {
 # ================================================================
 # AI Registration — Constants
 # ================================================================
-
-var AGENT_NAME = 0;
+# AGENT_NAME lives in types.cyr so the [lib.core] profile inits cleanly.
 
 var AGENT_CAPABILITIES = 0;
 # Populated lazily by phylax_ai_capabilities() below.

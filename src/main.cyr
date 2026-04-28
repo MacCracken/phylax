@@ -1,5 +1,6 @@
 # phylax — Threat detection engine
 include "src/lib.cyr"
+include "src/cli.cyr"
 
 var r = main();
 syscall(SYS_EXIT, r);

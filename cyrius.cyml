@@ -11,6 +11,50 @@ cyrius = "5.7.26"
 entry = "src/main.cyr"
 output = "build/phylax"
 
+# `[lib]` defines what `cyrius distlib` concatenates into
+# `dist/phylax.cyr` for downstream consumers (daimon, aegis, t-ron).
+# Order mirrors `src/lib.cyr` — load-bearing for the single-pass
+# forward-reference resolver.
+#
+# Profiles:
+#   cyrius distlib       → dist/phylax.cyr       (default [lib], full surface w/o CLI)
+#   cyrius distlib core  → dist/phylax-core.cyr  ([lib.core], detection primitives only)
+[lib]
+modules = [
+    "src/types.cyr",
+    "src/utils.cyr",
+    "src/analyze.cyr",
+    "src/strings.cyr",
+    "src/script.cyr",
+    "src/hashing.cyr",
+    "src/pe.cyr",
+    "src/elf.cyr",
+    "src/archive.cyr",
+    "src/yara.cyr",
+    "src/queue.cyr",
+    "src/quarantine.cyr",
+    "src/report.cyr",
+    "src/integration.cyr",
+]
+
+# Detection-only profile — no queue/quarantine runtime, no bote MCP
+# tools, no daimon/hoosh clients. Consumers pulling `dist/phylax-core.cyr`
+# avoid the bote/majra/http transitive dep surface entirely.
+[lib.core]
+modules = [
+    "src/types.cyr",
+    "src/utils.cyr",
+    "src/analyze.cyr",
+    "src/strings.cyr",
+    "src/script.cyr",
+    "src/hashing.cyr",
+    "src/pe.cyr",
+    "src/elf.cyr",
+    "src/archive.cyr",
+    "src/yara.cyr",
+    "src/report.cyr",
+]
+
 [deps]
 stdlib = [
     "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args",
@@ -22,17 +66,17 @@ stdlib = [
 
 [deps.sakshi]
 git = "https://github.com/MacCracken/sakshi.git"
-tag = "1.0.0"
-modules = ["sakshi.cyr", "sakshi_full.cyr"]
+tag = "2.1.0"
+modules = ["dist/sakshi.cyr"]
 
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
-tag = "2.1.2"
+tag = "2.9.4"
 modules = ["dist/sigil.cyr"]
 
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
-tag = "2.2.0"
+tag = "2.4.1"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
 [deps.bote]
