@@ -9,7 +9,7 @@
 var VERSION = 0;
 
 fn _init_version() {
-    VERSION = str_from("1.0.0");
+    VERSION = str_from("1.1.0");
 }
 
 # ================================================================

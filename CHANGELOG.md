@@ -2,6 +2,130 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.1.0] - 2026-04-28
+
+Toolchain + dep refresh, library split, and CI modernization. No
+behavioral changes to detection or scan output. Additive surface for
+downstream consumers (daimon, aegis, t-ron) via the new `[lib]` /
+`[lib.core]` profiles.
+
+### Added
+
+- **`[lib]` and `[lib.core]` profiles** in `cyrius.cyml`. `cyrius distlib`
+  emits `dist/phylax.cyr` (full library, 7,230 lines / 253,950 B,
+  matches `src/lib.cyr` minus CLI). `cyrius distlib core` emits
+  `dist/phylax-core.cyr` (detection-only, 6,398 lines / 225,171 B —
+  drops `queue.cyr` / `quarantine.cyr` / `integration.cyr` so consumers
+  avoid the `bote` / `majra` / `http` transitive dep surface entirely).
+  Targets: daimon picks up the full bundle for orchestrator+MCP
+  integration; aegis and t-ron pick up the core bundle for detection
+  primitives only.
+- **`src/lib_core.cyr`** — companion include list to `src/lib.cyr` for
+  the `[lib.core]` profile. Lets `tests/phylax-core.tcyr` and
+  `tests/phylax-core.bcyr` smoke-test the core surface in isolation;
+  if any future change leaks an integration symbol into a core module,
+  these compile and break before downstream consumers do.
+- **`tests/phylax-core.tcyr`** — 11 assertions across 6 groups
+  (severity, analyze, sha256, memmem, strings, report) exercising the
+  core profile. All pass on Cyrius 5.7.26.
+- **`tests/phylax-core.bcyr`** — replaces the misnamed
+  `tests/phylax-bench-lite.bcyr` (which still pulled `src/lib.cyr`
+  despite its "lite" label). Five benchmarks that actually compile
+  against `src/lib_core.cyr`: `entropy_1k 16µs`, `file_detection 1µs`,
+  `memmem_4k 9µs`, `hex_encode_256 5µs`, `extract_ascii 43µs` (Cyrius
+  5.7.26, dev host).
+- **Distlib freshness gate** in `.github/workflows/ci.yml` — runs
+  `cyrius distlib` + `cyrius distlib core`, then `git diff --exit-code
+  dist/`. Same pattern as majra, sakshi, libro. Prevents the bundles
+  from drifting out of sync with `src/`.
+
+### Changed
+
+- **Cyrius toolchain** pinned to **5.7.26** (was 5.1.12). Manifest pin
+  is now the single source of truth — `.cyrius-toolchain` removed.
+  Picks up the full 5.2.x → 5.7.x stdlib + frontend deltas (notable
+  for phylax: heap-grow rounding fix from 5.6.34, `lib/hashmap.cyr`
+  Str-key fix from 5.4.14, sandhi folded into stdlib at 5.7.0).
+- **`cyrius.cyml` `[package].version`** uses `${file:VERSION}`
+  substitution — VERSION file is now the canonical version, manifest
+  reads from it (matches kybernet, daimon, vidya pattern).
+- **`[build].output`** standardized to `build/phylax` (was
+  `phylax`).
+- **Dependency bumps** (all backward-compatible at the API surface
+  phylax uses):
+  - **sakshi 1.0.0 → 2.1.0** — bundle path moved from
+    `sakshi.cyr` / `sakshi_full.cyr` (removed in sakshi 2.0.0) to
+    `dist/sakshi.cyr`. Public API (`sakshi_info` / `_warn` / `_error`)
+    unchanged.
+  - **sigil 2.1.2 → 2.9.4** — adds SHA-NI hardware dispatch
+    (sigil 2.9.2 probe + 2.9.3 compress, ≈21–44× SHA-256 speedup
+    on capable hosts; sigil bench reports 64 KB at 5.32 ms software
+    vs 157 µs SHA-NI). `sha256_hex` API unchanged. Phylax-side bench
+    `sha256_4k` measures 19–20 µs on the dev host (software path —
+    SHA-NI gains land on larger inputs / batched flows).
+  - **majra 2.2.0 → 2.4.1** — `src/pubsub.cyr` and `src/counter.cyr`
+    still standalone-includable; phylax pulls them transitively for
+    `bote_events_majra.cyr`. No phylax-side API change.
+  - **bote** unchanged at 2.5.1.
+- **`src/main.cyr`** now includes `src/lib.cyr` + `src/cli.cyr`
+  separately. `src/lib.cyr` no longer includes `cli.cyr` so the
+  `[lib]` profile is consumable as a pure library.
+- **`var AGENT_NAME`** moved from `src/integration.cyr` to
+  `src/types.cyr`. Was declared in integration.cyr but written by
+  `phylax_init()` in types.cyr — broke `[lib.core]` compilation
+  because the core profile omits integration.cyr. Now lives where
+  it is initialized; integration.cyr reads it for daimon registration.
+- **CLAUDE.md Source Structure section** rewritten — module map shows
+  per-file profile membership (core / full / binary).
+- **CI workflow** rewritten end-to-end to match the kybernet / daimon
+  pattern — `cyrius deps` + lockfile verify, `cyrius fmt --check`
+  drift detection, `cyrius vet`, `CYRIUS_DCE=1 cyrius build`, ELF
+  magic check, aarch64 cross-build (best-effort), looped test +
+  bench, security scan tuned for phylax (no shell-out, no system-
+  path writes, ≥64 KB stack-buffer review).
+- **Release workflow** — DCE build + aarch64 cross + dist bundle
+  packaging. Tag-driven (`vX.Y.Z` or `X.Y.Z`); GitHub release
+  attaches versioned `phylax-<TAG>.cyr` and `phylax-<TAG>-core.cyr`
+  bundles alongside the binaries and `cyrius.lock`.
+
+### Removed
+
+- **`.cyrius-toolchain`** — superseded by `cyrius.cyml [package].cyrius`.
+- **`tests/phylax-bench-lite.bcyr`** — renamed to
+  `tests/phylax-core.bcyr` (`git mv`).
+- **Stale `lib/` symlinks** — `lib/sakshi_full.cyr`,
+  `lib/sakshi_sakshi.cyr`, `lib/sakshi_sakshi_full.cyr`,
+  `lib/sigil_sigil.cyr`. Held over from older bundle naming /
+  namespace schemes; not in the new `[deps.*] modules` lists.
+
+### Verification
+
+- `CYRIUS_DCE=1 cyrius build src/main.cyr build/phylax` — clean,
+  1,237,176 B ELF (`xxd -l 4` confirms `7f 45 4c 46`).
+- `cyrius test tests/phylax.tcyr` — **178 passed, 0 failed**.
+- `cyrius test tests/phylax-core.tcyr` — **11 passed, 0 failed**.
+- `cyrius bench tests/phylax.bcyr` — full suite runs (entropy_1k 16 µs,
+  sha256_4k 20 µs, ssdeep_4k 113 µs, tlsh_1k 404 µs).
+- `cyrius bench tests/phylax-core.bcyr` — core suite runs.
+- `cyrius distlib && cyrius distlib core` — both bundles emitted;
+  `git diff --exit-code dist/` clean post-commit.
+- `cyrius deps --verify` — 29 entries in `cyrius.lock` (6 first-party
+  + 23 transitive via sigil/bote → agnosys, libro).
+
+### Migration notes for downstream consumers
+
+Existing consumers that depend on phylax via `[deps.phylax] modules =
+["src/lib.cyr"]` continue to work unchanged (the `src/lib.cyr` entry
+point is still present and now precisely matches the `[lib]` profile).
+New consumers should prefer the bundled form:
+
+- Full integration:  `modules = ["dist/phylax.cyr"]`
+- Detection-only:    `modules = ["dist/phylax-core.cyr"]`
+
+The bundled form is faster to resolve (one symlink vs many) and
+removes the requirement that the consumer transitively include phylax-
+internal modules in the right order.
+
 ## [1.0.0] - 2026-04-16
 
 Phylax 1.0 — threat detection engine for AGNOS.
