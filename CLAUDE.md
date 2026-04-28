@@ -4,7 +4,7 @@
 
 **Phylax** (Greek: guardian/watchman) — Threat detection — YARA rules, entropy, magic bytes, PE/ELF parsing, binary classification
 
-- **Language**: Cyrius 5.1.3
+- **Language**: Cyrius 5.7.26
 - **Type**: Flat binary (single src/main.cyr)
 - **License**: GPL-3.0-only
 - **Version**: SemVer 0.D.M pre-1.0

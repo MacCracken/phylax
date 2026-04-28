@@ -1,15 +1,15 @@
 [package]
 name = "phylax"
-version = "1.0.0"
+version = "${file:VERSION}"
 description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF parsing, binary classification"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "5.1.12"
+cyrius = "5.7.26"
 
 [build]
 entry = "src/main.cyr"
-output = "phylax"
+output = "build/phylax"
 
 [deps]
 stdlib = [
