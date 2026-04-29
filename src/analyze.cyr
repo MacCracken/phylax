@@ -135,8 +135,8 @@ fn detect_file_type(data, len) {
     # TAR: check for "ustar" magic at offset 257
     if (len >= 263) {
         if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
-            load8(data + 259) == 116 && load8(data + 260) == 97 &&
-            load8(data + 261) == 114) {
+        load8(data + 259) == 116 && load8(data + 260) == 97 &&
+        load8(data + 261) == 114) {
             return FILETYPE_TAR;
         }
     }
@@ -151,8 +151,8 @@ fn detect_tar(data, data_len) {
     # Method 1: check for "ustar" magic at offset 257
     if (data_len >= 263) {
         if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
-            load8(data + 259) == 116 && load8(data + 260) == 97 &&
-            load8(data + 261) == 114) {
+        load8(data + 259) == 116 && load8(data + 260) == 97 &&
+        load8(data + 261) == 114) {
             return 1;
         }
     }
@@ -178,7 +178,7 @@ fn detect_tar(data, data_len) {
             # Check typeflag at offset 156 — should be 0, '0', '5', or other valid flags
             var tf = load8(data + 156);
             if (tf == 0 || tf == 48 || tf == 53 || tf == 49 || tf == 50 ||
-                tf == 54 || tf == 55 || tf == 103 || tf == 120) {
+            tf == 54 || tf == 55 || tf == 103 || tf == 120) {
                 return 1;
             }
         }
@@ -279,7 +279,7 @@ fn findings_from_analysis(data, len, analysis, target) {
     if (vec_len(poly) > 1) {
         var poly_desc = str_from("Polyglot file detected");
         var f = finding_new(target, CATEGORY_EMBEDDED_PAYLOAD, SEVERITY_HIGH,
-                           str_from("polyglot_file"), poly_desc);
+        str_from("polyglot_file"), poly_desc);
         vec_push(findings, f);
     }
 
@@ -317,7 +317,7 @@ fn escalate_severity(findings, analysis) {
             if (str_eq(load64(f + 24), str_from("polyglot_file"))) {
                 store64(f + 16, SEVERITY_CRITICAL);
                 map_set(load64(f + 40), str_from("escalated_polyglot"),
-                       str_from("high_entropy+polyglot"));
+                str_from("high_entropy+polyglot"));
             }
         }
     }
@@ -329,7 +329,7 @@ fn escalate_severity(findings, analysis) {
             if (load64(f + 16) == SEVERITY_MEDIUM) {
                 store64(f + 16, SEVERITY_HIGH);
                 map_set(load64(f + 40), str_from("escalated_executable"),
-                       str_from("executable_file_type"));
+                str_from("executable_file_type"));
             }
         }
     }
@@ -356,7 +356,7 @@ fn escalate_severity(findings, analysis) {
         if (load64(highest + 16) == SEVERITY_HIGH) {
             store64(highest + 16, SEVERITY_CRITICAL);
             map_set(load64(highest + 40), str_from("escalated_signals"),
-                   str_from("multiple_signals"));
+            str_from("multiple_signals"));
         }
     }
 }
@@ -382,7 +382,7 @@ fn section_entropy_findings(sections, target) {
             if (load64(sec + 24)) { sev = SEVERITY_HIGH; }
             var desc = str_cat(str_from("Section has high entropy: "), load64(sec));
             var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-                               str_from("high_section_entropy"), desc);
+            str_from("high_section_entropy"), desc);
             map_set(load64(f + 40), str_from("section"), load64(sec));
             var exec_str = str_from("false");
             if (load64(sec + 24)) { exec_str = str_from("true"); }
@@ -406,9 +406,9 @@ fn overlay_findings(overlay, target) {
     }
     var desc = str_from("PE overlay detected");
     var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-                       str_from("pe_overlay"), desc);
+    str_from("pe_overlay"), desc);
     map_set(load64(f + 40), str_from("overlay_size"),
-           str_from_int(load64(overlay + 8)));
+    str_from_int(load64(overlay + 8)));
     vec_push(findings, f);
     return findings;
 }
@@ -450,7 +450,7 @@ fn packing_findings(signals, target) {
 
     var desc = str_from("Packed/encrypted binary detected");
     var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-                       str_from("packed_binary"), desc);
+    str_from("packed_binary"), desc);
     map_set(load64(f + 40), str_from("signal_count"), str_from_int(count));
     var findings = vec_new();
     vec_push(findings, f);

@@ -168,9 +168,9 @@ fn ssdeep_hash(data, len) {
 
             # Build digest: "block_size:hash1:hash2"
             var digest = str_cat(str_from_int(block_size),
-                         str_cat(str_from(":"),
-                         str_cat(h1_trunc,
-                         str_cat(str_from(":"), h2_trunc))));
+            str_cat(str_from(":"),
+            str_cat(h1_trunc,
+            str_cat(str_from(":"), h2_trunc))));
 
             var result = alloc(16);
             store64(result, digest);

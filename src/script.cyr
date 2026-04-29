@@ -361,9 +361,9 @@ fn script_findings(language, obfuscation, target) {
     if (load64(obfuscation + 24) >= 2 && load64(obfuscation + 24) <= 3) { sev = SEVERITY_MEDIUM; }
 
     var desc = str_cat(str_from("Obfuscated "),
-               str_cat(script_language_name(language), str_from(" script detected")));
+    str_cat(script_language_name(language), str_from(" script detected")));
     var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-                       str_from("script_obfuscation"), desc);
+    str_from("script_obfuscation"), desc);
     map_set(load64(f + 40), str_from("script_language"), script_language_name(language));
     map_set(load64(f + 40), str_from("obfuscation_score"), str_from_int(load64(obfuscation + 24)));
     map_set(load64(f + 40), str_from("high_entropy_lines"), str_from_int(load64(obfuscation)));

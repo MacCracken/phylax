@@ -783,7 +783,7 @@ fn test_scan_pipeline() {
 
     # Add a finding and check
     var f = finding_new(target, CATEGORY_MALWARE, SEVERITY_HIGH,
-                        str_from("test"), str_from("desc"));
+    str_from("test"), str_from("desc"));
     vec_push(load64(result + 8), f);
     assert(scan_result_has_threats(result), "result has threats");
     assert_eq(scan_result_finding_count(result), 1, "result count = 1");
@@ -791,7 +791,7 @@ fn test_scan_pipeline() {
     # finding_is_critical
     assert_eq(finding_is_critical(f), 0, "HIGH is not critical");
     var fc = finding_new(target, CATEGORY_MALWARE, SEVERITY_CRITICAL,
-                         str_from("crit"), str_from("desc"));
+    str_from("crit"), str_from("desc"));
     assert(finding_is_critical(fc), "CRITICAL is critical");
 }
 

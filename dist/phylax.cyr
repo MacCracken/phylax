@@ -1135,8 +1135,8 @@ fn detect_file_type(data, len) {
     # TAR: check for "ustar" magic at offset 257
     if (len >= 263) {
         if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
-            load8(data + 259) == 116 && load8(data + 260) == 97 &&
-            load8(data + 261) == 114) {
+        load8(data + 259) == 116 && load8(data + 260) == 97 &&
+        load8(data + 261) == 114) {
             return FILETYPE_TAR;
         }
     }
@@ -1151,8 +1151,8 @@ fn detect_tar(data, data_len) {
     # Method 1: check for "ustar" magic at offset 257
     if (data_len >= 263) {
         if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
-            load8(data + 259) == 116 && load8(data + 260) == 97 &&
-            load8(data + 261) == 114) {
+        load8(data + 259) == 116 && load8(data + 260) == 97 &&
+        load8(data + 261) == 114) {
             return 1;
         }
     }
@@ -1178,7 +1178,7 @@ fn detect_tar(data, data_len) {
             # Check typeflag at offset 156 — should be 0, '0', '5', or other valid flags
             var tf = load8(data + 156);
             if (tf == 0 || tf == 48 || tf == 53 || tf == 49 || tf == 50 ||
-                tf == 54 || tf == 55 || tf == 103 || tf == 120) {
+            tf == 54 || tf == 55 || tf == 103 || tf == 120) {
                 return 1;
             }
         }
@@ -1279,7 +1279,7 @@ fn findings_from_analysis(data, len, analysis, target) {
     if (vec_len(poly) > 1) {
         var poly_desc = str_from("Polyglot file detected");
         var f = finding_new(target, CATEGORY_EMBEDDED_PAYLOAD, SEVERITY_HIGH,
-                           str_from("polyglot_file"), poly_desc);
+        str_from("polyglot_file"), poly_desc);
         vec_push(findings, f);
     }
 
@@ -1317,7 +1317,7 @@ fn escalate_severity(findings, analysis) {
             if (str_eq(load64(f + 24), str_from("polyglot_file"))) {
                 store64(f + 16, SEVERITY_CRITICAL);
                 map_set(load64(f + 40), str_from("escalated_polyglot"),
-                       str_from("high_entropy+polyglot"));
+                str_from("high_entropy+polyglot"));
             }
         }
     }
@@ -1329,7 +1329,7 @@ fn escalate_severity(findings, analysis) {
             if (load64(f + 16) == SEVERITY_MEDIUM) {
                 store64(f + 16, SEVERITY_HIGH);
                 map_set(load64(f + 40), str_from("escalated_executable"),
-                       str_from("executable_file_type"));
+                str_from("executable_file_type"));
             }
         }
     }
@@ -1356,7 +1356,7 @@ fn escalate_severity(findings, analysis) {
         if (load64(highest + 16) == SEVERITY_HIGH) {
             store64(highest + 16, SEVERITY_CRITICAL);
             map_set(load64(highest + 40), str_from("escalated_signals"),
-                   str_from("multiple_signals"));
+            str_from("multiple_signals"));
         }
     }
 }
@@ -1382,7 +1382,7 @@ fn section_entropy_findings(sections, target) {
             if (load64(sec + 24)) { sev = SEVERITY_HIGH; }
             var desc = str_cat(str_from("Section has high entropy: "), load64(sec));
             var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-                               str_from("high_section_entropy"), desc);
+            str_from("high_section_entropy"), desc);
             map_set(load64(f + 40), str_from("section"), load64(sec));
             var exec_str = str_from("false");
             if (load64(sec + 24)) { exec_str = str_from("true"); }
@@ -1406,9 +1406,9 @@ fn overlay_findings(overlay, target) {
     }
     var desc = str_from("PE overlay detected");
     var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-                       str_from("pe_overlay"), desc);
+    str_from("pe_overlay"), desc);
     map_set(load64(f + 40), str_from("overlay_size"),
-           str_from_int(load64(overlay + 8)));
+    str_from_int(load64(overlay + 8)));
     vec_push(findings, f);
     return findings;
 }
@@ -1450,7 +1450,7 @@ fn packing_findings(signals, target) {
 
     var desc = str_from("Packed/encrypted binary detected");
     var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-                       str_from("packed_binary"), desc);
+    str_from("packed_binary"), desc);
     map_set(load64(f + 40), str_from("signal_count"), str_from_int(count));
     var findings = vec_new();
     vec_push(findings, f);
@@ -1981,9 +1981,9 @@ fn script_findings(language, obfuscation, target) {
     if (load64(obfuscation + 24) >= 2 && load64(obfuscation + 24) <= 3) { sev = SEVERITY_MEDIUM; }
 
     var desc = str_cat(str_from("Obfuscated "),
-               str_cat(script_language_name(language), str_from(" script detected")));
+    str_cat(script_language_name(language), str_from(" script detected")));
     var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-                       str_from("script_obfuscation"), desc);
+    str_from("script_obfuscation"), desc);
     map_set(load64(f + 40), str_from("script_language"), script_language_name(language));
     map_set(load64(f + 40), str_from("obfuscation_score"), str_from_int(load64(obfuscation + 24)));
     map_set(load64(f + 40), str_from("high_entropy_lines"), str_from_int(load64(obfuscation)));
@@ -2165,9 +2165,9 @@ fn ssdeep_hash(data, len) {
 
             # Build digest: "block_size:hash1:hash2"
             var digest = str_cat(str_from_int(block_size),
-                         str_cat(str_from(":"),
-                         str_cat(h1_trunc,
-                         str_cat(str_from(":"), h2_trunc))));
+            str_cat(str_from(":"),
+            str_cat(h1_trunc,
+            str_cat(str_from(":"), h2_trunc))));
 
             var result = alloc(16);
             store64(result, digest);
@@ -2738,9 +2738,9 @@ fn read_u16_le(data, offset) {
 # Read little-endian u32 from raw byte buffer
 fn read_u32_le(data, offset) {
     return load8(data + offset)
-         | (load8(data + offset + 1) << 8)
-         | (load8(data + offset + 2) << 16)
-         | (load8(data + offset + 3) << 24);
+    | (load8(data + offset + 1) << 8)
+    | (load8(data + offset + 2) << 16)
+    | (load8(data + offset + 3) << 24);
 }
 
 # Read little-endian u64 from raw byte buffer
@@ -3137,16 +3137,16 @@ fn parse_pe_imports(data, data_len, pe) {
                                                 if (hint_off + 2 < data_len) {
                                                     var func_name = read_ascii(data, hint_off + 2, 256);
                                                     vec_push(import_funcs,
-                                                        pe_import_new(dll_name, func_name));
+                                                    pe_import_new(dll_name, func_name));
                                                 }
                                             }
                                         } else {
                                             # Ordinal import
                                             var ord = entry & 0xFFFF;
                                             var ord_name = str_cat(str_from("ord:"),
-                                                           str_from_int(ord));
+                                            str_from_int(ord));
                                             vec_push(import_funcs,
-                                                pe_import_new(dll_name, ord_name));
+                                            pe_import_new(dll_name, ord_name));
                                         }
                                         fcount = fcount + 1;
                                         fpos = fpos + entry_size;
@@ -3604,14 +3604,14 @@ fn elf_read_u16(data, offset, little_endian) {
 fn elf_read_u32(data, offset, little_endian) {
     if (little_endian) {
         return load8(data + offset)
-             | (load8(data + offset + 1) << 8)
-             | (load8(data + offset + 2) << 16)
-             | (load8(data + offset + 3) << 24);
+        | (load8(data + offset + 1) << 8)
+        | (load8(data + offset + 2) << 16)
+        | (load8(data + offset + 3) << 24);
     }
     return (load8(data + offset) << 24)
-         | (load8(data + offset + 1) << 16)
-         | (load8(data + offset + 2) << 8)
-         | load8(data + offset + 3);
+    | (load8(data + offset + 1) << 16)
+    | (load8(data + offset + 2) << 8)
+    | load8(data + offset + 3);
 }
 
 fn elf_read_u64(data, offset, little_endian) {
@@ -4178,7 +4178,7 @@ fn zip_scan_entries(data, data_len, rules_path, max_depth) {
             if (uncomp_size <= ARCHIVE_MAX_EXPAND) {
                 var entry_data = data + data_offset;
                 var entry_findings = analyze_findings(entry_data, uncomp_size,
-                    scan_target_new(SCAN_TARGET_FILE, str_from("embedded")));
+                scan_target_new(SCAN_TARGET_FILE, str_from("embedded")));
                 # Also run YARA on embedded content (reuse global engine)
                 var engine = get_yara_engine();
                 var yf = yara_engine_scan(engine, entry_data, uncomp_size);
@@ -4228,10 +4228,10 @@ fn gzip_scan(data, data_len, rules_path) {
 
     # Add informational finding about compressed archive
     var f = finding_new(
-        scan_target_new(SCAN_TARGET_FILE, str_from("archive")),
-        CATEGORY_SUSPICIOUS, SEVERITY_INFO,
-        str_from("compressed_archive"),
-        str_from("File is a GZIP compressed archive (embedded content not scanned — deflate decompression pending)")
+    scan_target_new(SCAN_TARGET_FILE, str_from("archive")),
+    CATEGORY_SUSPICIOUS, SEVERITY_INFO,
+    str_from("compressed_archive"),
+    str_from("File is a GZIP compressed archive (embedded content not scanned — deflate decompression pending)")
     );
     vec_push(findings, f);
     return findings;
@@ -4286,7 +4286,7 @@ fn tar_scan_entries(data, data_len, rules_path, max_depth) {
 
                 # Run analysis on embedded file
                 var entry_findings = analyze_findings(entry_data, size,
-                    scan_target_new(SCAN_TARGET_FILE, str_from("tar-embedded")));
+                scan_target_new(SCAN_TARGET_FILE, str_from("tar-embedded")));
 
                 # Run YARA on embedded content (reuse global engine)
                 var engine = get_yara_engine();
@@ -5641,7 +5641,7 @@ fn yar_parse_strings(parser) {
                     }
                     hex_str = str_cat(hex_str, load64(load64(parser + 8) + 8));
                     if (load64(load64(parser + 8)) == YAR_TOK_NUMBER |
-                        load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+                    load64(load64(parser + 8)) == YAR_TOK_IDENT) {
                         hex_str = str_cat(hex_str, str_from(" "));
                     }
                     yar_advance(parser);
@@ -5889,7 +5889,7 @@ fn yara_parse_rules(src) {
             yar_advance(parser);
             # Skip the import target (string literal or identifier)
             if (load64(load64(parser + 8)) == YAR_TOK_STRING_LIT |
-                load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+            load64(load64(parser + 8)) == YAR_TOK_IDENT) {
                 yar_advance(parser);
             }
         } else {
@@ -5984,7 +5984,7 @@ fn yar_parse_meta(parser, rule) {
                 yar_advance(parser);
             } else {
                 if (load64(load64(parser + 8)) == YAR_TOK_TRUE |
-                    load64(load64(parser + 8)) == YAR_TOK_FALSE) {
+                load64(load64(parser + 8)) == YAR_TOK_FALSE) {
                     yar_advance(parser);
                 } else {
                     yar_advance(parser);
@@ -6053,7 +6053,7 @@ fn yara_engine_load_builtin_rules(engine) {
     vec_push(load64(nop_rule + 24), str_from("shellcode"));
     # 32 consecutive NOPs
     vec_push(load64(nop_rule + 32), yara_pattern_from_hex(str_from("$nop"),
-        str_from("90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90")));
+    str_from("90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90")));
     store64(nop_rule + 40, YARA_COND_ANY);
     yara_engine_add_rule(engine, nop_rule);
 
@@ -7222,54 +7222,54 @@ fn phylax_schema_object(props_json, required_json) {
 fn phylax_register_tools(registry, dispatcher) {
     # phylax_scan — scan a file for threats
     var scan_schema = phylax_schema_object(
-        str_from("{\"target\":{\"type\":\"string\",\"description\":\"Path to file to scan\"},\"target_type\":{\"type\":\"string\",\"enum\":[\"file\",\"agent\",\"package\",\"memory\"]},\"enable_yara\":{\"type\":\"boolean\"},\"enable_entropy\":{\"type\":\"boolean\"}}"),
-        str_from("[\"target\",\"target_type\"]")
+    str_from("{\"target\":{\"type\":\"string\",\"description\":\"Path to file to scan\"},\"target_type\":{\"type\":\"string\",\"enum\":[\"file\",\"agent\",\"package\",\"memory\"]},\"enable_yara\":{\"type\":\"boolean\"},\"enable_entropy\":{\"type\":\"boolean\"}}"),
+    str_from("[\"target\",\"target_type\"]")
     );
     var scan_def = tool_def_new(str_from("phylax_scan"),
-        str_from("Scan a file for threats using YARA rules, entropy analysis, and magic bytes detection"),
-        scan_schema);
+    str_from("Scan a file for threats using YARA rules, entropy analysis, and magic bytes detection"),
+    scan_schema);
     registry_register(registry, scan_def);
     dispatcher_handle(dispatcher, str_from("phylax_scan"), &phylax_scan_handler);
 
     # phylax_rules — list/search/inspect YARA rules
     var rules_schema = phylax_schema_object(
-        str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"list\",\"search\",\"inspect\"]},\"query\":{\"type\":\"string\",\"description\":\"Search query or rule name\"}}"),
-        str_from("[\"action\"]")
+    str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"list\",\"search\",\"inspect\"]},\"query\":{\"type\":\"string\",\"description\":\"Search query or rule name\"}}"),
+    str_from("[\"action\"]")
     );
     var rules_def = tool_def_new(str_from("phylax_rules"),
-        str_from("List, search, or inspect loaded YARA rules"),
-        rules_schema);
+    str_from("List, search, or inspect loaded YARA rules"),
+    rules_schema);
     registry_register(registry, rules_def);
 
     # phylax_status — engine status
     var status_schema = phylax_schema_object(
-        str_from("{\"verbose\":{\"type\":\"boolean\",\"description\":\"Include detailed statistics\"}}"),
-        str_from("[]")
+    str_from("{\"verbose\":{\"type\":\"boolean\",\"description\":\"Include detailed statistics\"}}"),
+    str_from("[]")
     );
     var status_def = tool_def_new(str_from("phylax_status"),
-        str_from("Get the current status of the Phylax threat detection engine"),
-        status_schema);
+    str_from("Get the current status of the Phylax threat detection engine"),
+    status_schema);
     registry_register(registry, status_def);
     dispatcher_handle(dispatcher, str_from("phylax_status"), &phylax_status_handler);
 
     # phylax_quarantine — quarantine/release/list
     var quar_schema = phylax_schema_object(
-        str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"quarantine\",\"release\",\"list\"]},\"target\":{\"type\":\"string\",\"description\":\"Path or quarantine ID\"},\"reason\":{\"type\":\"string\",\"description\":\"Reason for action\"}}"),
-        str_from("[\"action\"]")
+    str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"quarantine\",\"release\",\"list\"]},\"target\":{\"type\":\"string\",\"description\":\"Path or quarantine ID\"},\"reason\":{\"type\":\"string\",\"description\":\"Reason for action\"}}"),
+    str_from("[\"action\"]")
     );
     var quar_def = tool_def_new(str_from("phylax_quarantine"),
-        str_from("Quarantine or release a file flagged as a threat"),
-        quar_schema);
+    str_from("Quarantine or release a file flagged as a threat"),
+    quar_schema);
     registry_register(registry, quar_def);
 
     # phylax_report — generate threat report
     var report_schema = phylax_schema_object(
-        str_from("{\"target\":{\"type\":\"string\",\"description\":\"Specific target to report on\"},\"format\":{\"type\":\"string\",\"enum\":[\"json\",\"markdown\"]}}"),
-        str_from("[]")
+    str_from("{\"target\":{\"type\":\"string\",\"description\":\"Specific target to report on\"},\"format\":{\"type\":\"string\",\"enum\":[\"json\",\"markdown\"]}}"),
+    str_from("[]")
     );
     var report_def = tool_def_new(str_from("phylax_report"),
-        str_from("Generate a threat report for recent scans"),
-        report_schema);
+    str_from("Generate a threat report for recent scans"),
+    report_schema);
     registry_register(registry, report_def);
 
     return registry;

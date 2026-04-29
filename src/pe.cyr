@@ -69,9 +69,9 @@ fn read_u16_le(data, offset) {
 # Read little-endian u32 from raw byte buffer
 fn read_u32_le(data, offset) {
     return load8(data + offset)
-         | (load8(data + offset + 1) << 8)
-         | (load8(data + offset + 2) << 16)
-         | (load8(data + offset + 3) << 24);
+    | (load8(data + offset + 1) << 8)
+    | (load8(data + offset + 2) << 16)
+    | (load8(data + offset + 3) << 24);
 }
 
 # Read little-endian u64 from raw byte buffer
@@ -468,16 +468,16 @@ fn parse_pe_imports(data, data_len, pe) {
                                                 if (hint_off + 2 < data_len) {
                                                     var func_name = read_ascii(data, hint_off + 2, 256);
                                                     vec_push(import_funcs,
-                                                        pe_import_new(dll_name, func_name));
+                                                    pe_import_new(dll_name, func_name));
                                                 }
                                             }
                                         } else {
                                             # Ordinal import
                                             var ord = entry & 0xFFFF;
                                             var ord_name = str_cat(str_from("ord:"),
-                                                           str_from_int(ord));
+                                            str_from_int(ord));
                                             vec_push(import_funcs,
-                                                pe_import_new(dll_name, ord_name));
+                                            pe_import_new(dll_name, ord_name));
                                         }
                                         fcount = fcount + 1;
                                         fpos = fpos + entry_size;

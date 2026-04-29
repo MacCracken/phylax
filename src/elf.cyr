@@ -101,14 +101,14 @@ fn elf_read_u16(data, offset, little_endian) {
 fn elf_read_u32(data, offset, little_endian) {
     if (little_endian) {
         return load8(data + offset)
-             | (load8(data + offset + 1) << 8)
-             | (load8(data + offset + 2) << 16)
-             | (load8(data + offset + 3) << 24);
+        | (load8(data + offset + 1) << 8)
+        | (load8(data + offset + 2) << 16)
+        | (load8(data + offset + 3) << 24);
     }
     return (load8(data + offset) << 24)
-         | (load8(data + offset + 1) << 16)
-         | (load8(data + offset + 2) << 8)
-         | load8(data + offset + 3);
+    | (load8(data + offset + 1) << 16)
+    | (load8(data + offset + 2) << 8)
+    | load8(data + offset + 3);
 }
 
 fn elf_read_u64(data, offset, little_endian) {

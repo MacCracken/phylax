@@ -49,7 +49,7 @@ fn test_core_sha256() {
     test_group("core_sha256");
     var empty_hash = file_sha256(alloc(1), 0);
     assert(str_eq(empty_hash, str_from("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")),
-        "sha256 empty matches FIPS 180-4");
+    "sha256 empty matches FIPS 180-4");
 }
 
 # ================================================================

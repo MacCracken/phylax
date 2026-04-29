@@ -22,7 +22,7 @@ downstream consumers (daimon, aegis, t-ron) via the new `[lib]` /
   `~/.cyrius/versions/$VER/` with `~/.cyrius/bin/` symlinked for
   `PATH`. The cyrius pin is still read from `cyrius.cyml
   [package].cyrius` so the version stays declared in one place.
-  Also bumped pin **5.7.26 → 5.7.27** to land on a release that has
+  Also bumped pin **5.7.26 → 5.7.34** to land on a release that has
   a published tarball.
 
 ### Added
@@ -43,13 +43,13 @@ downstream consumers (daimon, aegis, t-ron) via the new `[lib]` /
   these compile and break before downstream consumers do.
 - **`tests/phylax-core.tcyr`** — 11 assertions across 6 groups
   (severity, analyze, sha256, memmem, strings, report) exercising the
-  core profile. All pass on Cyrius 5.7.27.
+  core profile. All pass on Cyrius 5.7.34.
 - **`tests/phylax-core.bcyr`** — replaces the misnamed
   `tests/phylax-bench-lite.bcyr` (which still pulled `src/lib.cyr`
   despite its "lite" label). Five benchmarks that actually compile
   against `src/lib_core.cyr`: `entropy_1k 16µs`, `file_detection 1µs`,
   `memmem_4k 9µs`, `hex_encode_256 5µs`, `extract_ascii 43µs` (Cyrius
-  5.7.27, dev host).
+  5.7.34, dev host).
 - **Distlib freshness gate** in `.github/workflows/ci.yml` — runs
   `cyrius distlib` + `cyrius distlib core`, then `git diff --exit-code
   dist/`. Same pattern as majra, sakshi, libro. Prevents the bundles
@@ -57,7 +57,7 @@ downstream consumers (daimon, aegis, t-ron) via the new `[lib]` /
 
 ### Changed
 
-- **Cyrius toolchain** pinned to **5.7.27** (was 5.1.12). Manifest pin
+- **Cyrius toolchain** pinned to **5.7.34** (was 5.1.12). Manifest pin
   is now the single source of truth — `.cyrius-toolchain` removed.
   Picks up the full 5.2.x → 5.7.x stdlib + frontend deltas (notable
   for phylax: heap-grow rounding fix from 5.6.34, `lib/hashmap.cyr`

@@ -1293,7 +1293,7 @@ fn yar_parse_strings(parser) {
                     }
                     hex_str = str_cat(hex_str, load64(load64(parser + 8) + 8));
                     if (load64(load64(parser + 8)) == YAR_TOK_NUMBER |
-                        load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+                    load64(load64(parser + 8)) == YAR_TOK_IDENT) {
                         hex_str = str_cat(hex_str, str_from(" "));
                     }
                     yar_advance(parser);
@@ -1541,7 +1541,7 @@ fn yara_parse_rules(src) {
             yar_advance(parser);
             # Skip the import target (string literal or identifier)
             if (load64(load64(parser + 8)) == YAR_TOK_STRING_LIT |
-                load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+            load64(load64(parser + 8)) == YAR_TOK_IDENT) {
                 yar_advance(parser);
             }
         } else {
@@ -1636,7 +1636,7 @@ fn yar_parse_meta(parser, rule) {
                 yar_advance(parser);
             } else {
                 if (load64(load64(parser + 8)) == YAR_TOK_TRUE |
-                    load64(load64(parser + 8)) == YAR_TOK_FALSE) {
+                load64(load64(parser + 8)) == YAR_TOK_FALSE) {
                     yar_advance(parser);
                 } else {
                     yar_advance(parser);
@@ -1705,7 +1705,7 @@ fn yara_engine_load_builtin_rules(engine) {
     vec_push(load64(nop_rule + 24), str_from("shellcode"));
     # 32 consecutive NOPs
     vec_push(load64(nop_rule + 32), yara_pattern_from_hex(str_from("$nop"),
-        str_from("90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90")));
+    str_from("90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90")));
     store64(nop_rule + 40, YARA_COND_ANY);
     yara_engine_add_rule(engine, nop_rule);
 

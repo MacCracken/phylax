@@ -131,7 +131,7 @@ fn run_scan(path, rules_path) {
         var yf = vec_get(yara_findings, i);
         # Convert YaraFinding to ThreatFinding
         var tf = finding_new(target, CATEGORY_CUSTOM_RULE, load64(yf + 16),
-                             load64(yf), load64(yf + 8));
+        load64(yf), load64(yf + 8));
         store64(tf + 48, clock_epoch_secs());
         vec_push(load64(result + 8), tf);
     }
@@ -827,8 +827,8 @@ fn cmd_intel_import(stix_path) {
     syscall(3, fd);
 
     str_println(str_cat(str_from("Extracted "), str_cat(str_from_int(vec_len(hashes)),
-        str_cat(str_from(" SHA-256 indicators -> phylax-intel.yar ("),
-        str_cat(str_from_int(str_len(output)), str_from(" bytes)"))))));
+    str_cat(str_from(" SHA-256 indicators -> phylax-intel.yar ("),
+    str_cat(str_from_int(str_len(output)), str_from(" bytes)"))))));
 
     return 0;
 }

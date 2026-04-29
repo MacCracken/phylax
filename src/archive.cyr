@@ -34,7 +34,7 @@ fn zip_scan_entries(data, data_len, rules_path, max_depth) {
             if (uncomp_size <= ARCHIVE_MAX_EXPAND) {
                 var entry_data = data + data_offset;
                 var entry_findings = analyze_findings(entry_data, uncomp_size,
-                    scan_target_new(SCAN_TARGET_FILE, str_from("embedded")));
+                scan_target_new(SCAN_TARGET_FILE, str_from("embedded")));
                 # Also run YARA on embedded content (reuse global engine)
                 var engine = get_yara_engine();
                 var yf = yara_engine_scan(engine, entry_data, uncomp_size);
@@ -84,10 +84,10 @@ fn gzip_scan(data, data_len, rules_path) {
 
     # Add informational finding about compressed archive
     var f = finding_new(
-        scan_target_new(SCAN_TARGET_FILE, str_from("archive")),
-        CATEGORY_SUSPICIOUS, SEVERITY_INFO,
-        str_from("compressed_archive"),
-        str_from("File is a GZIP compressed archive (embedded content not scanned — deflate decompression pending)")
+    scan_target_new(SCAN_TARGET_FILE, str_from("archive")),
+    CATEGORY_SUSPICIOUS, SEVERITY_INFO,
+    str_from("compressed_archive"),
+    str_from("File is a GZIP compressed archive (embedded content not scanned — deflate decompression pending)")
     );
     vec_push(findings, f);
     return findings;
@@ -142,7 +142,7 @@ fn tar_scan_entries(data, data_len, rules_path, max_depth) {
 
                 # Run analysis on embedded file
                 var entry_findings = analyze_findings(entry_data, size,
-                    scan_target_new(SCAN_TARGET_FILE, str_from("tar-embedded")));
+                scan_target_new(SCAN_TARGET_FILE, str_from("tar-embedded")));
 
                 # Run YARA on embedded content (reuse global engine)
                 var engine = get_yara_engine();

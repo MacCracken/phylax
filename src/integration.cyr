@@ -375,54 +375,54 @@ fn phylax_schema_object(props_json, required_json) {
 fn phylax_register_tools(registry, dispatcher) {
     # phylax_scan — scan a file for threats
     var scan_schema = phylax_schema_object(
-        str_from("{\"target\":{\"type\":\"string\",\"description\":\"Path to file to scan\"},\"target_type\":{\"type\":\"string\",\"enum\":[\"file\",\"agent\",\"package\",\"memory\"]},\"enable_yara\":{\"type\":\"boolean\"},\"enable_entropy\":{\"type\":\"boolean\"}}"),
-        str_from("[\"target\",\"target_type\"]")
+    str_from("{\"target\":{\"type\":\"string\",\"description\":\"Path to file to scan\"},\"target_type\":{\"type\":\"string\",\"enum\":[\"file\",\"agent\",\"package\",\"memory\"]},\"enable_yara\":{\"type\":\"boolean\"},\"enable_entropy\":{\"type\":\"boolean\"}}"),
+    str_from("[\"target\",\"target_type\"]")
     );
     var scan_def = tool_def_new(str_from("phylax_scan"),
-        str_from("Scan a file for threats using YARA rules, entropy analysis, and magic bytes detection"),
-        scan_schema);
+    str_from("Scan a file for threats using YARA rules, entropy analysis, and magic bytes detection"),
+    scan_schema);
     registry_register(registry, scan_def);
     dispatcher_handle(dispatcher, str_from("phylax_scan"), &phylax_scan_handler);
 
     # phylax_rules — list/search/inspect YARA rules
     var rules_schema = phylax_schema_object(
-        str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"list\",\"search\",\"inspect\"]},\"query\":{\"type\":\"string\",\"description\":\"Search query or rule name\"}}"),
-        str_from("[\"action\"]")
+    str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"list\",\"search\",\"inspect\"]},\"query\":{\"type\":\"string\",\"description\":\"Search query or rule name\"}}"),
+    str_from("[\"action\"]")
     );
     var rules_def = tool_def_new(str_from("phylax_rules"),
-        str_from("List, search, or inspect loaded YARA rules"),
-        rules_schema);
+    str_from("List, search, or inspect loaded YARA rules"),
+    rules_schema);
     registry_register(registry, rules_def);
 
     # phylax_status — engine status
     var status_schema = phylax_schema_object(
-        str_from("{\"verbose\":{\"type\":\"boolean\",\"description\":\"Include detailed statistics\"}}"),
-        str_from("[]")
+    str_from("{\"verbose\":{\"type\":\"boolean\",\"description\":\"Include detailed statistics\"}}"),
+    str_from("[]")
     );
     var status_def = tool_def_new(str_from("phylax_status"),
-        str_from("Get the current status of the Phylax threat detection engine"),
-        status_schema);
+    str_from("Get the current status of the Phylax threat detection engine"),
+    status_schema);
     registry_register(registry, status_def);
     dispatcher_handle(dispatcher, str_from("phylax_status"), &phylax_status_handler);
 
     # phylax_quarantine — quarantine/release/list
     var quar_schema = phylax_schema_object(
-        str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"quarantine\",\"release\",\"list\"]},\"target\":{\"type\":\"string\",\"description\":\"Path or quarantine ID\"},\"reason\":{\"type\":\"string\",\"description\":\"Reason for action\"}}"),
-        str_from("[\"action\"]")
+    str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"quarantine\",\"release\",\"list\"]},\"target\":{\"type\":\"string\",\"description\":\"Path or quarantine ID\"},\"reason\":{\"type\":\"string\",\"description\":\"Reason for action\"}}"),
+    str_from("[\"action\"]")
     );
     var quar_def = tool_def_new(str_from("phylax_quarantine"),
-        str_from("Quarantine or release a file flagged as a threat"),
-        quar_schema);
+    str_from("Quarantine or release a file flagged as a threat"),
+    quar_schema);
     registry_register(registry, quar_def);
 
     # phylax_report — generate threat report
     var report_schema = phylax_schema_object(
-        str_from("{\"target\":{\"type\":\"string\",\"description\":\"Specific target to report on\"},\"format\":{\"type\":\"string\",\"enum\":[\"json\",\"markdown\"]}}"),
-        str_from("[]")
+    str_from("{\"target\":{\"type\":\"string\",\"description\":\"Specific target to report on\"},\"format\":{\"type\":\"string\",\"enum\":[\"json\",\"markdown\"]}}"),
+    str_from("[]")
     );
     var report_def = tool_def_new(str_from("phylax_report"),
-        str_from("Generate a threat report for recent scans"),
-        report_schema);
+    str_from("Generate a threat report for recent scans"),
+    report_schema);
     registry_register(registry, report_def);
 
     return registry;
