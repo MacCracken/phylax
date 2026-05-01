@@ -1,6 +1,8 @@
 # phylax core — detection primitives only, no orchestration/integration
 # Matches the [lib.core] profile in cyrius.cyml. Consumers that pull
 # dist/phylax-core.cyr get this surface — no bote/majra/HTTP transitive deps.
+include "src/syscall_x86_64_linux.cyr"
+include "src/syscall_aarch64_linux.cyr"
 include "src/types.cyr"
 include "src/utils.cyr"
 include "src/analyze.cyr"

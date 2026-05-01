@@ -1,0 +1,28 @@
+# syscall_x86_64_linux.cyr — x86 wrapper backfill for stdlib gaps
+#
+# Self-gated with `#ifdef CYRIUS_ARCH_X86` so this file ships in
+# the bundled `dist/phylax.cyr` alongside the aarch64 peer; only
+# the matching arch's block compiles in any given consumer build.
+#
+# As of cyrius 5.7.48, `lib/syscalls_aarch64_linux.cyr` exposes
+# `sys_stat(path, buf)` / `sys_fstat(fd, buf)` wrappers but the
+# x86_64 peer does not (asymmetry; tracked as a cyrius hygiene
+# item). Phylax's `phylax_read_file` path needs both, so the x86
+# wrappers are provided here. On aarch64, the stdlib wrappers
+# are used directly (this peer's #ifdef block is skipped).
+
+#ifdef CYRIUS_ARCH_X86
+
+# stat(2) — direct syscall on x86_64. SYS_STAT (= 4) and the
+# st_mode-at-offset-24 layout come from
+# `lib/syscalls_x86_64_linux.cyr` (already in scope).
+fn sys_stat(path, buf) {
+    return syscall(SYS_STAT, path, buf);
+}
+
+# fstat(2) — direct syscall on x86_64. SYS_FSTAT (= 5) ditto.
+fn sys_fstat(fd, buf) {
+    return syscall(SYS_FSTAT, fd, buf);
+}
+
+#endif

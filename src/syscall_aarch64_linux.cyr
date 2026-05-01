@@ -1,0 +1,13 @@
+# syscall_aarch64_linux.cyr — aarch64 peer (intentionally empty)
+#
+# Self-gated with `#ifdef CYRIUS_ARCH_AARCH64` so this file ships
+# in `dist/phylax.cyr` alongside the x86_64 peer.
+#
+# aarch64 stdlib (`lib/syscalls_aarch64_linux.cyr`) already exposes
+# `sys_stat(path, buf)` / `sys_fstat(fd, buf)` via the at-family
+# (newfstatat / bare fstat) — phylax pulls those directly. No
+# wrapper backfill needed on this arch.
+
+#ifdef CYRIUS_ARCH_AARCH64
+# (intentionally empty — see header note)
+#endif

@@ -67,12 +67,13 @@ fn str_to_cstr(s) {
 }
 
 fn phylax_file_size(path) {
-    # stat(path, &statbuf) — st_size is at offset 48 on x86_64
-    # path is a cstr (null-terminated)
-    var statbuf[144];  # struct stat is 144 bytes on x86_64
-    var rc = syscall(4, path, &statbuf);  # SYS_STAT = 4
+    # stat(path, &statbuf) via stdlib wrapper (x86: direct SYS_STAT;
+    # aarch64: newfstatat(AT_FDCWD, …)). STAT_BUFSZ / STAT_SIZE come
+    # from `lib/syscalls.cyr`'s arch-correct enum.
+    var statbuf[144];  # STAT_BUFSZ literal (cyrius requires numeric literal in array-size context)
+    var rc = sys_stat(path, &statbuf);
     if (rc < 0) { return -1; }
-    return load64(&statbuf + 48);
+    return load64(&statbuf + STAT_SIZE);
 }
 
 fn phylax_read_file(path) {
@@ -86,14 +87,14 @@ fn phylax_read_file(path) {
 
     if (size > PHYLAX_MMAP_THRESHOLD) {
         # mmap path with O_NOFOLLOW — reject symlinks, zero-copy
-        var fd = syscall(2, path, O_RDONLY | O_NOFOLLOW, 0);  # SYS_OPEN with O_NOFOLLOW
+        var fd = sys_open(path, O_RDONLY | O_NOFOLLOW, 0);
         if (fd < 0) { return 0; }
         # fstat to verify it's a regular file (mode & 0170000 == 0100000)
-        var statbuf[144];
-        var frc = syscall(SYS_FSTAT, fd, &statbuf);
-        if (frc < 0) { syscall(3, fd); return 0; }
-        var mode = load64(&statbuf + 24);  # st_mode at offset 24
-        if ((mode & 0170000) != 0100000) { syscall(3, fd); return 0; }  # not regular file
+        var statbuf[144];  # STAT_BUFSZ literal (cyrius requires numeric literal in array-size context)
+        var frc = sys_fstat(fd, &statbuf);
+        if (frc < 0) { sys_close(fd); return 0; }
+        var mode = load64(&statbuf + STAT_MODE);
+        if ((mode & 0170000) != 0100000) { sys_close(fd); return 0; }  # not regular file
         var addr = mmap_file_ro(fd, size);
         file_close(fd);
         if (addr == 0) { return 0; }
@@ -163,7 +164,7 @@ fn http_post(url, body, content_type) {
     var fd = tcp_socket();
     if (fd < 0) { var err = alloc(24); store64(err, 0); return err; }
     var r = sock_connect(fd, host, port);
-    if (r < 0) { syscall(3, fd); var err = alloc(24); store64(err, 0); return err; }
+    if (r < 0) { sys_close(fd); var err = alloc(24); store64(err, 0); return err; }
 
     # Send headers
     sock_send(fd, req, pos);
@@ -181,7 +182,7 @@ fn http_post(url, body, content_type) {
         if (n <= 0) { rgo = 0; }
         else { total = total + n; if (total >= 65536) { rgo = 0; } }
     }
-    syscall(3, fd);
+    sys_close(fd);
 
     return _http_parse_response(rbuf, total);
 }

@@ -47,4 +47,4 @@ fn fuzz_entry() {
 }
 
 var r = fuzz_entry();
-syscall(60, r);
+sys_exit(r);

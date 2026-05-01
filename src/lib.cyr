@@ -1,4 +1,6 @@
 # phylax — all modules, no entry point
+include "src/syscall_x86_64_linux.cyr"
+include "src/syscall_aarch64_linux.cyr"
 include "src/types.cyr"
 include "src/utils.cyr"
 include "src/analyze.cyr"

@@ -244,8 +244,12 @@ fn parallel_scan(files, nfiles, rules_path) {
     return results;
 }
 
-# Workaround: syscall(60, N) in nested if-blocks inside large functions
-# passes 0 instead of N. Moving to a small helper function fixes it.
+# Workaround: raw `syscall(SYS_EXIT, N)` in nested if-blocks inside
+# large functions passed 0 instead of N (cc5 register-spill bug).
+# Moving the call to a small helper function fixes it. Now using
+# stdlib's `sys_exit(code)` wrapper, which is itself a one-line
+# helper — preserves the workaround AND makes the path
+# arch-portable (SYS_EXIT = 60 on x86_64, 93 on aarch64).
 fn scan_finish(nfiles, total, highest, threshold, code) {
     str_println(str_from(""));
     str_println(str_cat(str_from("Scan complete: "), str_from_int(nfiles)));
@@ -254,7 +258,7 @@ fn scan_finish(nfiles, total, highest, threshold, code) {
     str_println(str_from(" finding(s)"));
     if (total > 0) {
         if (severity_gte(highest, threshold)) {
-            syscall(60, code);
+            sys_exit(code);
         }
     }
     return 0;
@@ -263,7 +267,7 @@ fn scan_finish(nfiles, total, highest, threshold, code) {
 fn check_and_exit(total, highest, threshold, code) {
     if (total > 0) {
         if (severity_gte(highest, threshold)) {
-            syscall(60, code);
+            sys_exit(code);
         }
     }
     return 0;
@@ -476,7 +480,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
 
     for (var loop_guard = 0; loop_guard < 999999999; loop_guard = loop_guard + 1) {
         # SYS_READ = 0
-        var bytes_read = syscall(0, inotify_fd, buf, 4096);
+        var bytes_read = sys_read(inotify_fd, buf, 4096);
         if (bytes_read <= 0) {
             # Read error or EOF — exit watch loop
             loop_guard = 999999999;
@@ -708,13 +712,13 @@ fn cmd_rules_fetch(url, output_path) {
     }
 
     # Write to file
-    var fd = syscall(2, output_path, 577, 420);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
+    var fd = sys_open(output_path, 577, 420);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
     if (fd < 0) {
         str_println(str_cat(str_from("Error: cannot write to "), str_from(output_path)));
         return 1;
     }
-    syscall(1, fd, body, body_len);
-    syscall(3, fd);
+    sys_write(fd, body, body_len);
+    sys_close(fd);
 
     str_println(str_cat(str_from("Saved "), str_from_int(body_len)));
     str_println(str_cat(str_from(" bytes to "), str_from(output_path)));
@@ -818,13 +822,13 @@ fn cmd_intel_import(stix_path) {
 
     # Write to file
     var out_path = "phylax-intel.yar";
-    var fd = syscall(2, out_path, 577, 420);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
+    var fd = sys_open(out_path, 577, 420);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
     if (fd < 0) {
         str_println(str_from("Error: cannot write phylax-intel.yar"));
         return 1;
     }
-    syscall(1, fd, str_data(output), str_len(output));
-    syscall(3, fd);
+    sys_write(fd, str_data(output), str_len(output));
+    sys_close(fd);
 
     str_println(str_cat(str_from("Extracted "), str_cat(str_from_int(vec_len(hashes)),
     str_cat(str_from(" SHA-256 indicators -> phylax-intel.yar ("),
@@ -964,7 +968,7 @@ fn cmd_daemon(socket_path, rules_path) {
     var brc = syscall(SYS_BIND, fd, addr, 2 + plen + 1);
     if (brc < 0) {
         str_println(str_from("Error: cannot bind socket"));
-        syscall(3, fd);
+        sys_close(fd);
         return 1;
     }
 
@@ -981,7 +985,7 @@ fn cmd_daemon(socket_path, rules_path) {
         else {
             # Read request (file path, max 4096 bytes)
             var buf = alloc(4096);
-            var n = syscall(0, client, buf, 4095);  # SYS_READ
+            var n = sys_read(client, buf, 4095);  # SYS_READ
             if (n > 0) {
                 # Trim newline
                 if (load8(buf + n - 1) == 10) { n = n - 1; }
@@ -1000,13 +1004,13 @@ fn cmd_daemon(socket_path, rules_path) {
                 resp = str_cat(resp, str_from("\n"));
 
                 # Send response
-                syscall(1, client, str_data(resp), str_len(resp));
+                sys_write(client, str_data(resp), str_len(resp));
             }
-            syscall(3, client);  # close client
+            sys_close(client);  # close client
         }
     }
 
-    syscall(3, fd);  # close server socket
+    sys_close(fd);  # close server socket
     syscall(SYS_UNLINK, socket_path);  # cleanup socket file
     return 0;
 }

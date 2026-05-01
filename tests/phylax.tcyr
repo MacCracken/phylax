@@ -969,4 +969,4 @@ fn main() {
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+sys_exit(exit_code);

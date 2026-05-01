@@ -2,12 +2,28 @@
 
 All notable changes to Phylax will be documented in this file.
 
-## [1.1.0] - 2026-04-28
+## [1.1.0] - 2026-04-30
 
-Toolchain + dep refresh, library split, and CI modernization. No
-behavioral changes to detection or scan output. Additive surface for
-downstream consumers (daimon, aegis, t-ron) via the new `[lib]` /
-`[lib.core]` profiles.
+Toolchain + dep refresh, library split, CI modernization, and
+aarch64 portability sweep. No behavioral changes to detection or
+scan output. Additive surface for downstream consumers (daimon,
+aegis, t-ron) via the new `[lib]` / `[lib.core]` profiles.
+
+The 1.1.0 release rolled across three sessions; this entry
+combines them. Mid-flight bumps that did not ship as separate
+releases:
+- cyrius pin: 5.1.12 → 5.7.34 → **5.7.48**
+- sakshi: 1.0.0 → **2.1.0**
+- sigil: 2.1.2 → 2.9.4 → **2.9.5**
+- agnosys: (newly added dep) **1.0.4** via sigil's bundle
+- majra: 2.2.0 → **2.4.1**
+
+The 5.7.34 → 5.7.48 nudge picks up the rest of the 5.7.x cycle's
+syscall-portability narrative (per-arch table dispatch, `sys_*`
+wrappers, `_SC_ARITY` arity checks, advanced-TS pin closure,
+late refactor pass). The sigil 2.9.4 → 2.9.5 nudge pulls in the
+agnosys 1.0.4 portability sweep transitively (sigil's
+`lib/agnosys.cyr` is the bundled artifact).
 
 ### Fixed
 
@@ -55,9 +71,66 @@ downstream consumers (daimon, aegis, t-ron) via the new `[lib]` /
   dist/`. Same pattern as majra, sakshi, libro. Prevents the bundles
   from drifting out of sync with `src/`.
 
+### Fixed (aarch64 portability sweep — 2026-04-30)
+
+- **`src/utils.cyr`** raw-numeric syscalls migrated to portable
+  stdlib wrappers:
+  - `syscall(4, path, &statbuf)` (raw SYS_STAT, x86-only number) →
+    `sys_stat(path, &statbuf)` (stdlib wrapper, dispatches to
+    `SYS_STAT` on x86 / `SYS_NEWFSTATAT(AT_FDCWD, …)` on aarch64).
+  - `syscall(2, path, …)` (raw SYS_OPEN) → `sys_open(path, …)`.
+  - `syscall(SYS_FSTAT, fd, …)` left as-is — `SYS_FSTAT` constant
+    is arch-correct in both stdlib peers (x86 = 5, aarch64 = 80).
+    Switched the call to `sys_fstat(fd, buf)` for consistency.
+  - 4× `syscall(3, fd)` (raw SYS_CLOSE) → `sys_close(fd)`.
+  - **Stat-struct offsets** `+24` (st_mode) and `+48` (st_size)
+    replaced with `STAT_MODE` / `STAT_SIZE` enum members from
+    `lib/syscalls.cyr`. The arch peers expand `STAT_MODE` to 24 on
+    x86 (`asm/stat.h` 144-byte layout) and 16 on aarch64
+    (`asm-generic/stat.h` 128-byte layout — compact `st_nlink`).
+    The 8-byte `load64` reads st_mode + the next 4-byte field on
+    either layout; the existing `(mode & 0170000)` mask isolates
+    the file-type bits independently of what's in the upper half.
+  - `var statbuf[144]` retained as a numeric literal — cyrius
+    requires a constant integer in array-size context, and
+    `STAT_BUFSZ` is 144 on both arches.
+- **`src/cli.cyr`** raw-numeric syscalls migrated:
+  - 3× `syscall(60, code)` (raw SYS_EXIT) → `sys_exit(code)` in
+    `scan_finish` / `check_and_exit` / unix-domain-socket exit paths.
+    The "syscall(60, N) in nested if-blocks passes 0" workaround
+    note is preserved — `sys_exit(code)` is itself a one-line
+    helper, so the register-spill fix mechanism is unchanged. New:
+    portable across SYS_EXIT = 60 (x86) / 93 (aarch64).
+  - 2× `syscall(0, …)` (raw SYS_READ) → `sys_read(…)`.
+  - 2× `syscall(2, path, 577, 420)` (raw SYS_OPEN with
+    `O_WRONLY|O_CREAT|O_TRUNC` and mode 0644) → `sys_open(…)`.
+  - 3× `syscall(1, fd, …)` (raw SYS_WRITE) → `sys_write(fd, …)`.
+  - 6× `syscall(3, fd)` (raw SYS_CLOSE) → `sys_close(fd)`.
+- **`tests/phylax.tcyr` / `phylax-core.tcyr` / `phylax.bcyr` /
+  `phylax-core.bcyr` / `phylax.fcyr`** — 5× `syscall(60, exit_code)`
+  → `sys_exit(exit_code)`.
+
+### Added (aarch64 portability sweep — 2026-04-30)
+
+- **`src/syscall_x86_64_linux.cyr`** + **`src/syscall_aarch64_linux.cyr`**
+  — per-arch peer files for the cyrius stdlib gap. As of 5.7.48,
+  `lib/syscalls_aarch64_linux.cyr` exposes `sys_stat(path, buf)` /
+  `sys_fstat(fd, buf)` wrappers but the x86_64 peer does not
+  (asymmetry; tracked as a cyrius hygiene item). Phylax's x86 peer
+  backfills the two wrappers; the aarch64 peer is intentionally
+  empty (stdlib already has them). Each peer self-gates with
+  `#ifdef CYRIUS_ARCH_X86 / AARCH64` so both ship in
+  `dist/phylax.cyr` and `dist/phylax-core.cyr`; only the matching
+  arch's block compiles in any given consumer build. Pattern
+  mirrors agnosys 1.0.4 + sigil 2.9.5.
+- Peer files prepended to `[lib].modules` and `[lib.core].modules`
+  so they bundle ahead of every other module; also added to
+  `src/lib.cyr` and `src/lib_core.cyr` for the in-binary build path.
+
 ### Changed
 
-- **Cyrius toolchain** pinned to **5.7.34** (was 5.1.12). Manifest pin
+- **Cyrius toolchain** pinned to **5.7.48** (was 5.1.12 → 5.7.34
+  → 5.7.48 across this release's three sessions). Manifest pin
   is now the single source of truth — `.cyrius-toolchain` removed.
   Picks up the full 5.2.x → 5.7.x stdlib + frontend deltas (notable
   for phylax: heap-grow rounding fix from 5.6.34, `lib/hashmap.cyr`
@@ -73,12 +146,15 @@ downstream consumers (daimon, aegis, t-ron) via the new `[lib]` /
     `sakshi.cyr` / `sakshi_full.cyr` (removed in sakshi 2.0.0) to
     `dist/sakshi.cyr`. Public API (`sakshi_info` / `_warn` / `_error`)
     unchanged.
-  - **sigil 2.1.2 → 2.9.4** — adds SHA-NI hardware dispatch
+  - **sigil 2.1.2 → 2.9.5** — adds SHA-NI hardware dispatch
     (sigil 2.9.2 probe + 2.9.3 compress, ≈21–44× SHA-256 speedup
     on capable hosts; sigil bench reports 64 KB at 5.32 ms software
     vs 157 µs SHA-NI). `sha256_hex` API unchanged. Phylax-side bench
     `sha256_4k` measures 19–20 µs on the dev host (software path —
-    SHA-NI gains land on larger inputs / batched flows).
+    SHA-NI gains land on larger inputs / batched flows). 2.9.5
+    transitively pulls in the agnosys 1.0.4 portability sweep
+    (per-arch syscall peer files, raw-syscall migration to `sys_*`
+    wrappers across 28 sites in agnosys src/).
   - **majra 2.2.0 → 2.4.1** — `src/pubsub.cyr` and `src/counter.cyr`
     still standalone-includable; phylax pulls them transitively for
     `bote_events_majra.cyr`. No phylax-side API change.
@@ -116,17 +192,34 @@ downstream consumers (daimon, aegis, t-ron) via the new `[lib]` /
 
 ### Verification
 
-- `CYRIUS_DCE=1 cyrius build src/main.cyr build/phylax` — clean,
-  1,237,176 B ELF (`xxd -l 4` confirms `7f 45 4c 46`).
+- `CYRIUS_DCE=1 cyrius build src/main.cyr build/phylax` — clean
+  on x86_64. (Pre-existing `large static data` warning still
+  fires — same as 5.7.34 baseline.)
+- `cyrius build --aarch64 src/main.cyr build/phylax-aarch64`
+  fails at the stdlib level with `f64_log2 is x86-only for v5.6.0;
+  aarch64 has no native log2 — needs polyfill`. Phylax's Shannon
+  entropy in `src/analyze.cyr` uses `f64_log2`. Pre-existing
+  cyrius stdlib gap (was already broken in 5.7.34); not blocked
+  on phylax-side fixes. Tracked as a cyrius-side hygiene item.
 - `cyrius test tests/phylax.tcyr` — **178 passed, 0 failed**.
 - `cyrius test tests/phylax-core.tcyr` — **11 passed, 0 failed**.
-- `cyrius bench tests/phylax.bcyr` — full suite runs (entropy_1k 16 µs,
-  sha256_4k 20 µs, ssdeep_4k 113 µs, tlsh_1k 404 µs).
-- `cyrius bench tests/phylax-core.bcyr` — core suite runs.
+- `cyrius bench tests/phylax.bcyr` (5.7.48 dev host):
+  entropy_1k 14 µs (16 µs on 5.7.34), entropy_1m 4.21 ms,
+  chi_squared 19 µs, file_detection 430 ns (1 µs on 5.7.34),
+  sha256_4k 19 µs, memmem_4k 8 µs (9 µs), hex_encode_256 4 µs
+  (5 µs), extract_ascii 37 µs (43 µs), ssdeep_4k 106 µs,
+  tlsh_1k 377 µs.
+- `cyrius bench tests/phylax-core.bcyr` — core suite runs (same
+  improvements as above on shared paths).
 - `cyrius distlib && cyrius distlib core` — both bundles emitted;
-  `git diff --exit-code dist/` clean post-commit.
-- `cyrius deps --verify` — 29 entries in `cyrius.lock` (6 first-party
-  + 23 transitive via sigil/bote → agnosys, libro).
+  `dist/phylax.cyr` 7,272 lines (was 7,230 in the mid-flight
+  state; the +42 lines are the per-arch peer files +
+  `STAT_BUFSZ` literal substitution); `dist/phylax-core.cyr`
+  6,440 lines (was 6,398; same delta).
+- `cyrius deps --verify` — 25 entries in `cyrius.lock` (6
+  first-party + 19 transitive via sigil/bote → agnosys 1.0.4,
+  libro). Down from 29 — sigil 2.9.5 trimmed a transitive
+  dep entry.
 
 ### Migration notes for downstream consumers
 
