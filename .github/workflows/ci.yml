@@ -85,13 +85,13 @@ jobs:
       - name: Cross-build aarch64 (best-effort)
         # Only when toolchain bundle includes cc5_aarch64. Currently
         # blocked at the cyrius-stdlib level: phylax's `shannon_entropy`
-        # in `src/analyze.cyr` uses `f64_log2`, which `cc5_aarch64` flags
-        # as `f64_log2 is x86-only for v5.6.0; aarch64 has no native
-        # log2 — needs polyfill`. Tracked as a cyrius-side hygiene item;
-        # phylax's polyfill lands once stdlib exposes a portable f64
-        # `log2` (or once we replace shannon_entropy's f64 path with a
-        # fixed-point integer approximation). Marked best-effort so the
-        # rest of the CI gates green while that's pending.
+        # in `src/analyze.cyr` uses `f64_log2`, which `cc5_aarch64`
+        # flags as `f64_log2 is x86-only for v5.6.0; aarch64 has no
+        # native log2 — needs polyfill`. Full write-up + closeout
+        # criteria in
+        # docs/development/issues/2026-04-30-cyrius-stdlib-issues.md.
+        # Marked best-effort so the rest of the CI gates green while
+        # that's pending.
         continue-on-error: true
         run: |
           if [ ! -x "$HOME/.cyrius/bin/cc5_aarch64" ]; then

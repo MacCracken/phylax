@@ -200,7 +200,11 @@ agnosys 1.0.4 portability sweep transitively (sigil's
   aarch64 has no native log2 — needs polyfill`. Phylax's Shannon
   entropy in `src/analyze.cyr` uses `f64_log2`. Pre-existing
   cyrius stdlib gap (was already broken in 5.7.34); not blocked
-  on phylax-side fixes. Tracked as a cyrius-side hygiene item.
+  on phylax-side fixes. Tracked alongside three other cyrius
+  stdlib observations in
+  `docs/development/issues/2026-04-30-cyrius-stdlib-issues.md`.
+  CI's "Cross-build aarch64 (best-effort)" step is now
+  `continue-on-error: true` until the polyfill lands stdlib-side.
 - `cyrius test tests/phylax.tcyr` — **178 passed, 0 failed**.
 - `cyrius test tests/phylax-core.tcyr` — **11 passed, 0 failed**.
 - `cyrius bench tests/phylax.bcyr` (5.7.48 dev host):
