@@ -7,16 +7,41 @@
 # Values are stored as strings (callers convert with str_to_int etc).
 
 include "lib/fnptr.cyr"
+# v5.8.30: Result-returning *_r variants for the file-loading
+# parsers (`json_parse_file_r`). Bare `json_parse(src)` keeps its
+# best-effort vec return — no clean -1 surface to migrate.
+include "lib/result.cyr"
+include "lib/io.cyr"
+
+# v5.8.30 — JsonError variants. `JsonIoErr` covers any underlying
+# IoError raised while reading the source file; `JsonParseErr` is
+# reserved for a future slot when the parser tracks structural
+# errors instead of best-effort recovery; `JsonOther` is the
+# catch-all. Keep variant-name prefix `Json` to avoid colliding
+# with IoError's `Io*` variants in the global enum-variant
+# namespace.
+enum JsonError {
+    JsonIoErr;
+    JsonParseErr;
+    JsonOther;
+}
 
 # JSON value: { key: Str, value: Str }
 var JSON_PAIR_SIZE = 16;
 
-# Create a new key-value pair for JSON storage
-fn json_pair_new(key, value) {
-    var p = alloc(JSON_PAIR_SIZE);
+# v5.8.36 — Allocator-as-first-arg variant of json_pair_new.
+# Allocates the 16-byte pair via `a`. Returns 0 on OOM.
+fn json_pair_new_a(a, key, value) {
+    var p = alloc_via(a, JSON_PAIR_SIZE);
+    if (p == 0) { return 0; }
     store64(p, key);
     store64(p + 8, value);
     return p;
+}
+
+# Create a new key-value pair for JSON storage. v5.8.36 wrapper.
+fn json_pair_new(key, value) {
+    return json_pair_new_a(default_alloc(), key, value);
 }
 
 # Return the key Str from a JSON pair
@@ -152,6 +177,33 @@ fn json_parse_file(path) {
     return json_parse(str_new(buf, n));
 }
 
+# v5.8.30 — Result variant of json_parse_file. Open + read are
+# pushed through file_open_r / file_read_r so an underlying
+# IoError surfaces as Err(JsonIoErr) instead of being silently
+# converted to an empty vec (the back-compat behavior of
+# `json_parse_file`).
+fn json_parse_file_r(path) {
+    var fd_r = file_open_r(path, 0, 0);
+    if (is_err_result(fd_r) == 1) { return Err(JsonIoErr); }
+    var fd = load64(fd_r + 8);
+    var buf = alloc(16384);
+    var total = 0;
+    var rgo = 1;
+    while (rgo == 1) {
+        var rd_r = file_read_r(fd, buf + total, 16384 - total);
+        if (is_err_result(rd_r) == 1) { sys_close(fd); return Err(JsonIoErr); }
+        var n = load64(rd_r + 8);
+        if (n <= 0) { rgo = 0; }
+        else {
+            total = total + n;
+            if (total >= 16384) { rgo = 0; }
+        }
+    }
+    sys_close(fd);
+    if (total == 0) { return Err(JsonIoErr); }
+    return Ok(json_parse(str_new(buf, total)));
+}
+
 # ======================================================================
 # JSON ENGINE (v5.7.20) — Tagged-value tree with full nesting + escapes
 # ======================================================================
@@ -210,70 +262,140 @@ fn json_last_error_pos() { return _json_err_pos; }
 
 # === Constructors ===
 
-fn _jv_alloc(tag) {
-    var v = alloc(JV_SIZE);
+# v5.8.36 — Allocator-as-first-arg internal jv-cell allocator.
+# Returns 0 on OOM (caller must check). Used by every json_v_*_new_a
+# constructor below.
+fn _jv_alloc_a(a, tag) {
+    var v = alloc_via(a, JV_SIZE);
+    if (v == 0) { return 0; }
     store64(v, tag);
     store64(v + 8, 0);
     store64(v + 16, 0);
     return v;
 }
 
-# Create a new JTAG_NULL value.
+# Internal jv-cell allocator (back-compat wrapper).
+fn _jv_alloc(tag) { return _jv_alloc_a(default_alloc(), tag); }
+
+# v5.8.36 — Allocator-as-first-arg variant of json_v_null.
+fn json_v_null_a(a) { return _jv_alloc_a(a, JTAG_NULL); }
+
+# Create a new JTAG_NULL value. v5.8.36 wrapper.
 fn json_v_null() { return _jv_alloc(JTAG_NULL); }
 
-# Create a new JTAG_BOOL value (b is 0 or 1).
-fn json_v_bool_new(b) {
-    var v = _jv_alloc(JTAG_BOOL);
+# v5.8.36 — Allocator-as-first-arg variant of json_v_bool_new.
+fn json_v_bool_new_a(a, b) {
+    var v = _jv_alloc_a(a, JTAG_BOOL);
+    if (v == 0) { return 0; }
     if (b == 0) { store64(v + 8, 0); }
     else        { store64(v + 8, 1); }
     return v;
 }
 
-# Create a new JTAG_INT value (n is i64).
-fn json_v_int_new(n) {
-    var v = _jv_alloc(JTAG_INT);
+# Create a new JTAG_BOOL value (b is 0 or 1). v5.8.36 wrapper.
+fn json_v_bool_new(b) {
+    return json_v_bool_new_a(default_alloc(), b);
+}
+
+# v5.8.36 — Allocator-as-first-arg variant of json_v_int_new.
+fn json_v_int_new_a(a, n) {
+    var v = _jv_alloc_a(a, JTAG_INT);
+    if (v == 0) { return 0; }
     store64(v + 8, n);
     return v;
 }
 
-# Create a new JTAG_FLOAT value (f is f64 bit pattern).
-fn json_v_float_new(f) {
-    # Caller passes f64 bit pattern (f64_from_int / arithmetic result).
-    var v = _jv_alloc(JTAG_FLOAT);
+# Create a new JTAG_INT value (n is i64). v5.8.36 wrapper.
+fn json_v_int_new(n) {
+    return json_v_int_new_a(default_alloc(), n);
+}
+
+# v5.8.36 — Allocator-as-first-arg variant of json_v_float_new.
+fn json_v_float_new_a(a, f) {
+    var v = _jv_alloc_a(a, JTAG_FLOAT);
+    if (v == 0) { return 0; }
     store64(v + 8, f);
     return v;
 }
 
-# Create a new JTAG_STR value (s is a Str ptr).
-fn json_v_str_new(s) {
-    var v = _jv_alloc(JTAG_STR);
+# Create a new JTAG_FLOAT value (f is f64 bit pattern). v5.8.36 wrapper.
+fn json_v_float_new(f) {
+    return json_v_float_new_a(default_alloc(), f);
+}
+
+# v5.8.36 — Allocator-as-first-arg variant of json_v_str_new.
+fn json_v_str_new_a(a, s) {
+    var v = _jv_alloc_a(a, JTAG_STR);
+    if (v == 0) { return 0; }
     store64(v + 8, s);
     return v;
 }
 
-# Create an empty JTAG_ARR value. Append elements via json_v_arr_push.
+# Create a new JTAG_STR value (s is a Str ptr). v5.8.36 wrapper.
+fn json_v_str_new(s) {
+    return json_v_str_new_a(default_alloc(), s);
+}
+
+# v5.8.36 — Allocator-as-first-arg variant of json_v_arr_new.
+# Allocates BOTH the jv-cell AND the inner vec via `a`.
+fn json_v_arr_new_a(a) {
+    var v = _jv_alloc_a(a, JTAG_ARR);
+    if (v == 0) { return 0; }
+    var inner = vec_new_a(a);
+    if (inner == 0) { return 0; }
+    store64(v + 8, inner);
+    return v;
+}
+
+# Create an empty JTAG_ARR value. v5.8.36 wrapper. Append via
+# json_v_arr_push (use json_v_arr_push_a if you need the same
+# allocator threaded through grows).
 fn json_v_arr_new() {
-    var v = _jv_alloc(JTAG_ARR);
-    store64(v + 8, vec_new());
+    return json_v_arr_new_a(default_alloc());
+}
+
+# v5.8.36 — Allocator-as-first-arg variant of json_v_obj_new.
+# Allocates BOTH the jv-cell AND the inner pairs vec via `a`.
+fn json_v_obj_new_a(a) {
+    var v = _jv_alloc_a(a, JTAG_OBJ);
+    if (v == 0) { return 0; }
+    var inner = vec_new_a(a);
+    if (inner == 0) { return 0; }
+    store64(v + 8, inner);
     return v;
 }
 
-# Create an empty JTAG_OBJ value. Append entries via json_v_obj_set.
+# Create an empty JTAG_OBJ value. v5.8.36 wrapper.
 fn json_v_obj_new() {
-    var v = _jv_alloc(JTAG_OBJ);
-    store64(v + 8, vec_new());
-    return v;
+    return json_v_obj_new_a(default_alloc());
 }
 
-# A pair is a 16-byte heap struct: { key: Str @ +0, value: json_v* @ +8 }.
-fn _jv_pair_new(key, val) {
-    var p = alloc(16);
+# v5.8.36 — Allocator-as-first-arg variant of _jv_pair_new.
+fn _jv_pair_new_a(a, key, val) {
+    var p = alloc_via(a, 16);
+    if (p == 0) { return 0; }
     store64(p, key);
     store64(p + 8, val);
     return p;
 }
 
+# A pair is a 16-byte heap struct: { key: Str @ +0, value: json_v* @ +8 }.
+# v5.8.36 wrapper.
+fn _jv_pair_new(key, val) {
+    return _jv_pair_new_a(default_alloc(), key, val);
+}
+
+# v5.8.36 — Allocator-as-first-arg variant of json_v_arr_push.
+# Routes any vec-grow through `a`. Returns -1 on grow OOM
+# (vs. back-compat which aborts via vec_push).
+fn json_v_arr_push_a(a, arr, val) {
+    if (arr == 0) { return 0 - 1; }
+    if (load64(arr) != JTAG_ARR) { return 0 - 1; }
+    return vec_push_a(a, load64(arr + 8), val);
+}
+
 # Append a value to an array. No-op if arr is not JTAG_ARR.
+# v5.8.36 wrapper.
 fn json_v_arr_push(arr, val) {
     if (arr == 0) { return 0; }
     if (load64(arr) != JTAG_ARR) { return 0; }

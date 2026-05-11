@@ -4,7 +4,7 @@
 
 # Parse a CSV line into a vec of field strings (C strings).
 # Handles quoted fields, escaped quotes (""), and commas within quotes.
-fn csv_parse_line(line) {
+fn csv_parse_line(line): i64 {
     var fields = vec_new();
     var len = strlen(line);
     var pos = 0;
@@ -50,7 +50,7 @@ fn csv_parse_line(line) {
 }
 
 # Escape a field for CSV output (quote if needed)
-fn csv_escape(field) {
+fn csv_escape(field): i64 {
     var len = strlen(field);
     var needs_quote = 0;
     var i = 0;
@@ -79,7 +79,7 @@ fn csv_escape(field) {
 }
 
 # Write a vec of fields as a CSV line (returns null-terminated string)
-fn csv_write_line(fields) {
+fn csv_write_line(fields): i64 {
     var buf = alloc(4096);
     var pos = 0;
     var i = 0;
