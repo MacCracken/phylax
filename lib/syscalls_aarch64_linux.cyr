@@ -84,6 +84,8 @@ enum SysNr {
     SYS_SETUID = 146;
     SYS_SETGID = 144;
     SYS_SETGROUPS = 159;
+    SYS_SETRESUID = 147;
+    SYS_SETRESGID = 149;
 
     # Memory
     SYS_BRK = 214;
@@ -120,6 +122,11 @@ enum SysNr {
     # v5.7.35 (agnosys-surfaced — drm/luks/security)
     SYS_GETDENTS64 = 61;
     SYS_GETRANDOM = 278;
+    # v5.11.0 (kavach-surfaced — sandbox post-fork hardening)
+    SYS_FCHMOD = 52;
+    SYS_PRCTL = 167;
+    SYS_SECCOMP = 277;
+    SYS_EXECVEAT = 281;
     SYS_LANDLOCK_CREATE_RULESET = 444;
     SYS_LANDLOCK_ADD_RULE = 445;
     SYS_LANDLOCK_RESTRICT_SELF = 446;
@@ -401,6 +408,13 @@ fn sys_chmod(path, mode) {
     return syscall(SYS_FCHMODAT, AT_FDCWD, path, mode, 0);
 }
 
+# Change file permissions by fd — closes the chmod-by-path TOCTOU
+# window. v5.11.0 kavach-surfaced. Async-signal-safe. aarch64 has
+# a bare fchmod (52) — no at-family detour.
+fn sys_fchmod(fd, mode) {
+    return syscall(SYS_FCHMOD, fd, mode);
+}
+
 # Check file access permissions.
 # Translates to faccessat(AT_FDCWD, path, mode).
 fn sys_access(path, mode) {
@@ -509,6 +523,38 @@ fn sys_setuid(uid) { return syscall(SYS_SETUID, uid); }
 fn sys_setgid(gid) { return syscall(SYS_SETGID, gid); }
 # sys_setgroups syscall wrapper.
 fn sys_setgroups(size, list) { return syscall(SYS_SETGROUPS, size, list); }
+# Drop real / effective / saved UID atomically. Firecracker
+# jailer pattern: pre-execve, per-VM UID drop. Pairs with
+# sys_setresgid (gid first per Linux order-of-ops). v5.11.0
+# kavach v3.2. Async-signal-safe.
+fn sys_setresuid(ruid, euid, suid) { return syscall(SYS_SETRESUID, ruid, euid, suid); }
+# Drop real / effective / saved GID atomically. Pairs with
+# sys_setresuid. v5.11.0 kavach v3.2. Async-signal-safe.
+fn sys_setresgid(rgid, egid, sgid) { return syscall(SYS_SETRESGID, rgid, egid, sgid); }
+
+# ================================================================
+# Sandbox primitives (v5.11.0 — kavach-surfaced)
+# ================================================================
+# Post-fork, pre-execve hardening surface. Each is async-signal-
+# safe so it can run in the seccomp / setres* / execve window.
+
+# Process control (5-arg). Sets PR_SET_NO_NEW_PRIVS (option = 38)
+# ahead of sys_seccomp install.
+fn sys_prctl(option, arg2, arg3, arg4, arg5) {
+    return syscall(SYS_PRCTL, option, arg2, arg3, arg4, arg5);
+}
+
+# Install a seccomp BPF filter. `op` typically
+# SECCOMP_SET_MODE_FILTER (1); `args_ptr` → `struct sock_fprog`.
+fn sys_seccomp(op, flags, args_ptr) {
+    return syscall(SYS_SECCOMP, op, flags, args_ptr);
+}
+
+# Exec from a held fd. `flags` typically AT_EMPTY_PATH |
+# AT_SYMLINK_NOFOLLOW (0x1100). CLOEXEC must be cleared in child.
+fn sys_execveat(dirfd, pathname, argv_ptr, envp_ptr, flags) {
+    return syscall(SYS_EXECVEAT, dirfd, pathname, argv_ptr, envp_ptr, flags);
+}
 
 # Mount
 fn sys_mount(source, target, fstype, flags, data) {

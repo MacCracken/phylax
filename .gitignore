@@ -1,6 +1,9 @@
 # Build artifacts
 /build/
 
+# Resolved deps (cyrius deps populates from pinned tags — contract is the pin, not the bytes)
+/lib/
+
 # Editor / IDE
 *.swp
 *.swo

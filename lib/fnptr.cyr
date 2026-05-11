@@ -40,7 +40,7 @@
 # `docs/ffi/struct-packing.md` and `docs/ffi/fncall-abi.md`.
 
 # Call function pointer fp with zero arguments
-fn fncall0(fp) {
+fn fncall0(fp): i64 {
     var result = 0;
     #ifdef CYRIUS_TARGET_LINUX
     #ifdef CYRIUS_ARCH_X86
@@ -97,7 +97,7 @@ fn fncall0(fp) {
 }
 
 # Call function pointer fp with one argument
-fn fncall1(fp, a) {
+fn fncall1(fp, a): i64 {
     var result = 0;
     #ifdef CYRIUS_TARGET_LINUX
     #ifdef CYRIUS_ARCH_X86
@@ -153,7 +153,7 @@ fn fncall1(fp, a) {
 }
 
 # Call function pointer fp with two arguments
-fn fncall2(fp, a, b) {
+fn fncall2(fp, a, b): i64 {
     var result = 0;
     #ifdef CYRIUS_TARGET_LINUX
     #ifdef CYRIUS_ARCH_X86
@@ -214,7 +214,7 @@ fn fncall2(fp, a, b) {
 }
 
 # Call function pointer fp with three arguments
-fn fncall3(fp, a, b, c) {
+fn fncall3(fp, a, b, c): i64 {
     var result = 0;
     #ifdef CYRIUS_TARGET_LINUX
     #ifdef CYRIUS_ARCH_X86
@@ -280,7 +280,7 @@ fn fncall3(fp, a, b, c) {
 }
 
 # Call function pointer fp with four arguments
-fn fncall4(fp, a, b, c, d) {
+fn fncall4(fp, a, b, c, d): i64 {
     var result = 0;
     #ifdef CYRIUS_TARGET_LINUX
     #ifdef CYRIUS_ARCH_X86
@@ -351,7 +351,7 @@ fn fncall4(fp, a, b, c, d) {
 }
 
 # Call function pointer fp with five arguments
-fn fncall5(fp, a, b, c, d, e) {
+fn fncall5(fp, a, b, c, d, e): i64 {
     var result = 0;
     #ifdef CYRIUS_TARGET_LINUX
     #ifdef CYRIUS_ARCH_X86
@@ -430,7 +430,7 @@ fn fncall5(fp, a, b, c, d, e) {
 }
 
 # Call function pointer fp with six arguments
-fn fncall6(fp, a, b, c, d, e, f) {
+fn fncall6(fp, a, b, c, d, e, f): i64 {
     var result = 0;
     #ifdef CYRIUS_TARGET_LINUX
     #ifdef CYRIUS_ARCH_X86
@@ -531,7 +531,7 @@ fn fncall6(fp, a, b, c, d, e, f) {
 # of padding.
 # aarch64: push args 7+ with `str x9, [sp, #-16]!` (16 bytes per
 # arg to preserve alignment), restore via `add sp, sp, #N*16`.
-fn fncall7(fp, a, b, c, d, e, f, g) {
+fn fncall7(fp, a, b, c, d, e, f, g): i64 {
     var result = 0;
     #ifdef CYRIUS_TARGET_LINUX
     #ifdef CYRIUS_ARCH_X86
@@ -635,7 +635,7 @@ fn fncall7(fp, a, b, c, d, e, f, g) {
 # Push order on aarch64: g (arg 7) FIRST, then h (arg 8), so at `blr`
 # time [sp+0] = h and [sp+16] = g — matches cyrius caller's
 # ECALLPOPS step 3 (`str x10, [sp, #-16]!; str x9, [sp, #-16]!`).
-fn fncall8(fp, a, b, c, d, e, f, g, h) {
+fn fncall8(fp, a, b, c, d, e, f, g, h): i64 {
     var result = 0;
     #ifdef CYRIUS_TARGET_LINUX
     #ifdef CYRIUS_ARCH_X86

@@ -55,7 +55,7 @@ var STDOUT = 1;
 var STDERR = 2;
 
 # Open a file with given flags and mode, return fd
-fn file_open(path, flags, mode) {
+fn file_open(path: cstring, flags, mode): i64 {
     return sys_open(path, flags, mode);
 }
 
@@ -188,7 +188,7 @@ fn _io_errno_to_iorr(errn) {
 
 # Result variant of file_open. On success: Ok(fd); on failure:
 # Err(IoError variant for the underlying errno).
-fn file_open_r(path, flags, mode) {
+fn file_open_r(path: cstring, flags, mode) {
     var fd = sys_open(path, flags, mode);
     if (fd < 0) { return Err(_io_errno_to_iorr(0 - fd)); }
     return Ok(fd);

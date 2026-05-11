@@ -48,6 +48,7 @@ enum SysNr {
     SYS_SYMLINK = 88;
     SYS_READLINK = 89;
     SYS_CHMOD = 90;
+    SYS_FCHMOD = 91;
     SYS_GETUID = 102;
     SYS_GETGID = 104;
     SYS_SETUID = 105;
@@ -57,6 +58,9 @@ enum SysNr {
     SYS_GETPPID = 110;
     SYS_SETSID = 112;
     SYS_SETGROUPS = 116;
+    SYS_SETRESUID = 117;
+    SYS_SETRESGID = 119;
+    SYS_PRCTL = 157;
     SYS_SYNC = 162;
     SYS_MOUNT = 165;
     SYS_UMOUNT2 = 166;
@@ -76,7 +80,10 @@ enum SysNr {
     SYS_EXIT_GROUP = 231;
     # v5.7.35 (agnosys-surfaced — drm/luks/security)
     SYS_GETDENTS64 = 217;
+    # v5.11.0 (kavach-surfaced — sandbox post-fork hardening)
+    SYS_SECCOMP = 317;
     SYS_GETRANDOM = 318;
+    SYS_EXECVEAT = 322;
     SYS_LANDLOCK_CREATE_RULESET = 444;
     SYS_LANDLOCK_ADD_RULE = 445;
     SYS_LANDLOCK_RESTRICT_SELF = 446;
@@ -358,6 +365,14 @@ fn sys_chmod(path, mode) {
     return syscall(SYS_CHMOD, path, mode);
 }
 
+# Change file permissions by fd — closes the chmod-by-path TOCTOU
+# window (rename swap between sys_close + sys_chmod). v5.11.0
+# kavach-surfaced; v3.1.1 raw-syscall workaround folded back into
+# stdlib. Async-signal-safe: no heap, no mutex, no logging.
+fn sys_fchmod(fd, mode) {
+    return syscall(SYS_FCHMOD, fd, mode);
+}
+
 # Check file access permissions.
 fn sys_access(path, mode) {
     return syscall(SYS_ACCESS, path, mode);
@@ -453,6 +468,50 @@ fn sys_setuid(uid) { return syscall(SYS_SETUID, uid); }
 fn sys_setgid(gid) { return syscall(SYS_SETGID, gid); }
 # sys_setgroups syscall wrapper.
 fn sys_setgroups(size, list) { return syscall(SYS_SETGROUPS, size, list); }
+# Drop real / effective / saved UID atomically. Firecracker
+# jailer pattern: pre-execve, per-VM UID drop. Pairs with
+# sys_setresgid (gid first per Linux order-of-ops). v5.11.0
+# kavach v3.2. Async-signal-safe.
+fn sys_setresuid(ruid, euid, suid) { return syscall(SYS_SETRESUID, ruid, euid, suid); }
+# Drop real / effective / saved GID atomically. Pairs with
+# sys_setresuid. v5.11.0 kavach v3.2. Async-signal-safe.
+fn sys_setresgid(rgid, egid, sgid) { return syscall(SYS_SETRESGID, rgid, egid, sgid); }
+
+# ================================================================
+# Sandbox primitives (v5.11.0 — kavach-surfaced)
+# ================================================================
+# Post-fork, pre-execve hardening surface. Each is
+# async-signal-safe (no heap / no mutex / no logging) so it can
+# run in the seccomp / setresuid / execve transition window.
+
+# Process control (5-arg). Used here to set PR_SET_NO_NEW_PRIVS
+# (option = 38) ahead of sys_seccomp install — Linux mandates
+# the NO_NEW_PRIVS bit be set or seccomp(2) requires
+# CAP_SYS_ADMIN. Always called post-fork, pre-execve.
+fn sys_prctl(option, arg2, arg3, arg4, arg5) {
+    return syscall(SYS_PRCTL, option, arg2, arg3, arg4, arg5);
+}
+
+# Install a seccomp BPF filter. `op` is typically
+# SECCOMP_SET_MODE_FILTER (1); `flags` carries
+# SECCOMP_FILTER_FLAG_* bits (TSYNC=1, LOG=2, SPEC_ALLOW=4);
+# `args_ptr` is `struct sock_fprog *` (filter length + program
+# pointer). Caller builds the BPF program (kavach builds per
+# profile in-tree); the wrapper is just kernel-entry plumbing.
+fn sys_seccomp(op, flags, args_ptr) {
+    return syscall(SYS_SECCOMP, op, flags, args_ptr);
+}
+
+# Exec from a held fd — closes the path-resolution TOCTOU class.
+# `flags` typically AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW (0x1100)
+# lets the caller pass a held fd as `dirfd` with an empty
+# pathname — exec runs against the file referenced by the held
+# fd rather than re-resolving the path. CLOEXEC must be cleared
+# in the child. Path resolution happens pre-fork via sys_open,
+# so this call is async-signal-safe.
+fn sys_execveat(dirfd, pathname, argv_ptr, envp_ptr, flags) {
+    return syscall(SYS_EXECVEAT, dirfd, pathname, argv_ptr, envp_ptr, flags);
+}
 
 # Mount
 fn sys_mount(source, target, fstype, flags, data) {

@@ -5,7 +5,7 @@ description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF par
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "5.7.48"
+cyrius = "5.10.44"
 
 [build]
 entry = "src/main.cyr"
@@ -65,25 +65,46 @@ stdlib = [
     "assert", "hashmap", "json", "toml", "regex", "fs", "net",
     "tagged", "fnptr", "callback", "thread", "bench", "bounds",
     "math", "process", "chrono", "base64", "csv",
-    "freelist", "bigint", "http", "mmap"
+    "freelist", "bigint", "http", "mmap",
+    # New transitive deps from sigil 3.x — pulls ct (constant-time
+    # primitives), keccak (SHA-3 / SHAKE / Keccak-f1600 for ML-DSA),
+    # and random (getrandom for keygen / nonces). Phylax itself only
+    # consumes `sha256_hex`, but the sigil bundle's PQ + AES-GCM
+    # surfaces reference these symbols and the linker needs them
+    # declared even if DCE prunes the call sites.
+    "ct", "keccak", "random"
 ]
 
 [deps.sakshi]
 git = "https://github.com/MacCracken/sakshi.git"
-tag = "2.1.0"
+tag = "2.2.4"
 modules = ["dist/sakshi.cyr"]
 
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
-tag = "2.9.5"
+tag = "3.1.1"
 modules = ["dist/sigil.cyr"]
 
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
-tag = "2.4.1"
+tag = "2.4.4"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
-tag = "2.5.1"
+tag = "2.7.1"
 modules = ["src/registry.cyr", "src/dispatch.cyr", "src/error.cyr", "src/schema.cyr", "src/audit.cyr", "src/content.cyr", "src/jsonx.cyr", "src/protocol.cyr", "src/codec.cyr", "src/events.cyr", "src/events_majra.cyr"]
+
+# Direct override for the transitive libro pin bote-2.6.3+ ships
+# (`[deps.libro]` at libro 2.6.2 inside bote's manifest). libro 2.6.2
+# calls bare `ct_eq(...)` at `dist/libro.cyr:116` — the stdlib only
+# provides `ct_eq_bytes` / `ct_eq_bytes_lens`, so the link fails with
+# `undefined function 'ct_eq' (will crash at runtime)`. libro 2.6.3
+# fixed the call site to use `ct_eq_bytes_lens`. Phylax itself doesn't
+# consume the libro surface, but bote's bundle references libro
+# symbols transitively, so the dist module gets linked. Hold this
+# override until bote bumps its libro pin.
+[deps.libro]
+git = "https://github.com/MacCracken/libro.git"
+tag = "2.6.3"
+modules = ["dist/libro.cyr"]
