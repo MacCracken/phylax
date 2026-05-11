@@ -16,7 +16,7 @@
 var U256_SIZE = 32;
 
 # Create a zero u256
-fn u256_zero() {
+fn u256_zero(): i64 {
     var r = alloc(32);
     store64(r, 0);
     store64(r + 8, 0);
@@ -26,7 +26,7 @@ fn u256_zero() {
 }
 
 # Create u256 from a single 64-bit value
-fn u256_from(val) {
+fn u256_from(val): i64 {
     var r = alloc(32);
     store64(r, val);
     store64(r + 8, 0);
@@ -36,7 +36,7 @@ fn u256_from(val) {
 }
 
 # Copy u256
-fn u256_copy(dst, src) {
+fn u256_copy(dst, src): i64 {
     store64(dst, load64(src));
     store64(dst + 8, load64(src + 8));
     store64(dst + 16, load64(src + 16));
@@ -45,19 +45,19 @@ fn u256_copy(dst, src) {
 }
 
 # Clone u256 (allocates new)
-fn u256_clone(a) {
+fn u256_clone(a): i64 {
     var r = alloc(32);
     u256_copy(r, a);
     return r;
 }
 
 # Get/set individual limbs
-fn u256_limb(a, i) { return load64(a + i * 8); }
+fn u256_limb(a, i): i64 { return load64(a + i * 8); }
 # Set limb i of u256 to value v
-fn u256_set_limb(a, i, v) { store64(a + i * 8, v); return 0; }
+fn u256_set_limb(a, i, v): i64 { store64(a + i * 8, v); return 0; }
 
 # Check if zero
-fn u256_is_zero(a) {
+fn u256_is_zero(a): i64 {
     if (load64(a) != 0) { return 0; }
     if (load64(a + 8) != 0) { return 0; }
     if (load64(a + 16) != 0) { return 0; }
@@ -70,7 +70,7 @@ fn u256_is_zero(a) {
 # ================================================================
 
 # Compare a vs b: returns 1 if a > b, -1 if a < b, 0 if equal
-fn u256_cmp(a, b) {
+fn u256_cmp(a, b): i64 {
     # Compare from high limb to low
     var i = 3;
     while (i >= 0) {
@@ -87,7 +87,7 @@ fn u256_cmp(a, b) {
 }
 
 # Equality check
-fn u256_eq(a, b) {
+fn u256_eq(a, b): i64 {
     if (load64(a) != load64(b)) { return 0; }
     if (load64(a + 8) != load64(b + 8)) { return 0; }
     if (load64(a + 16) != load64(b + 16)) { return 0; }
@@ -101,7 +101,7 @@ fn u256_eq(a, b) {
 
 # Add two 64-bit values, return {sum, carry}
 # Uses the fact that if a + b < a, carry occurred (unsigned overflow)
-fn _add64(a, b) {
+fn _add64(a, b): i64 {
     var sum = a + b;
     # Unsigned carry detection: if sum < a (treating as unsigned)
     var carry = 0;
@@ -114,7 +114,7 @@ fn _add64(a, b) {
 }
 
 # Add single limb pair, return carry
-fn _add_limb(r_off, r, a, b, carry_in) {
+fn _add_limb(r_off, r, a, b, carry_in): i64 {
     var al = load64(a + r_off);
     var bl = load64(b + r_off);
     var s1 = al + bl;
@@ -130,7 +130,7 @@ fn _add_limb(r_off, r, a, b, carry_in) {
 }
 
 # r = a + b (mod 2^256). Returns carry (0 or 1).
-fn u256_add(r, a, b) {
+fn u256_add(r, a, b): i64 {
     var c = _add_limb(0, r, a, b, 0);
     c = _add_limb(8, r, a, b, c);
     c = _add_limb(16, r, a, b, c);
@@ -140,7 +140,7 @@ fn u256_add(r, a, b) {
 
 # r = a - b (mod 2^256). Returns borrow (0 or 1).
 # Subtract single limb pair, return borrow
-fn _sub_limb(r_off, r, a, b, borrow_in) {
+fn _sub_limb(r_off, r, a, b, borrow_in): i64 {
     var al = load64(a + r_off);
     var bl = load64(b + r_off);
     var new_borrow = 0;
@@ -165,7 +165,7 @@ fn _sub_limb(r_off, r, a, b, borrow_in) {
 }
 
 # r = a - b (mod 2^256). Returns borrow (0 or 1).
-fn u256_sub(r, a, b) {
+fn u256_sub(r, a, b): i64 {
     var c = _sub_limb(0, r, a, b, 0);
     c = _sub_limb(8, r, a, b, c);
     c = _sub_limb(16, r, a, b, c);
@@ -180,7 +180,7 @@ fn u256_sub(r, a, b) {
 # Multiply two 64-bit values, store 128-bit result in {lo, hi}
 # Split each into 32-bit halves: a = aH*2^32 + aL, b = bH*2^32 + bL
 # a*b = aH*bH*2^64 + (aH*bL + aL*bH)*2^32 + aL*bL
-fn _mul64(a, b, out_lo, out_hi) {
+fn _mul64(a, b, out_lo, out_hi): i64 {
     var mask32 = 0xFFFFFFFF;
     var aL = a & mask32;
     var aH = (a >> 32) & mask32;
@@ -206,7 +206,7 @@ fn _mul64(a, b, out_lo, out_hi) {
 }
 
 # r = a * b (mod 2^256). Truncates to 256 bits.
-fn u256_mul(r, a, b) {
+fn u256_mul(r, a, b): i64 {
     # Schoolbook multiplication: 4×4 limbs
     var tmp[64];  # 8 limbs temp (512 bits)
     memset(&tmp, 0, 64);
@@ -243,7 +243,7 @@ fn u256_mul(r, a, b) {
 # ================================================================
 
 # Left shift by 1 bit
-fn u256_shl1(r, a) {
+fn u256_shl1(r, a): i64 {
     var carry = 0;
     var i = 0;
     while (i < 4) {
@@ -256,7 +256,7 @@ fn u256_shl1(r, a) {
 }
 
 # Right shift by 1 bit
-fn u256_shr1(r, a) {
+fn u256_shr1(r, a): i64 {
     var carry = 0;
     var i = 3;
     while (i >= 0) {
@@ -274,7 +274,7 @@ fn u256_shr1(r, a) {
 
 # r = a mod p (simple repeated subtraction for small quotients,
 # or shift-subtract for general case)
-fn u256_mod(r, a, p) {
+fn u256_mod(r, a, p): i64 {
     u256_copy(r, a);
     while (u256_cmp(r, p) >= 0) {
         u256_sub(r, r, p);
@@ -283,21 +283,21 @@ fn u256_mod(r, a, p) {
 }
 
 # r = (a + b) mod p
-fn u256_addmod(r, a, b, p) {
+fn u256_addmod(r, a, b, p): i64 {
     u256_add(r, a, b);
     if (u256_cmp(r, p) >= 0) { u256_sub(r, r, p); }
     return 0;
 }
 
 # r = (a - b) mod p (handles underflow by adding p)
-fn u256_submod(r, a, b, p) {
+fn u256_submod(r, a, b, p): i64 {
     var borrow = u256_sub(r, a, b);
     if (borrow > 0) { u256_add(r, r, p); }
     return 0;
 }
 
 # r = (a * b) mod p
-fn u256_mulmod(r, a, b, p) {
+fn u256_mulmod(r, a, b, p): i64 {
     u256_mul(r, a, b);
     u256_mod(r, r, p);
     return 0;
@@ -308,7 +308,7 @@ fn u256_mulmod(r, a, b, p) {
 # ================================================================
 
 # Format u256 as 64-char hex string (big-endian, no prefix)
-fn u256_to_hex(a) {
+fn u256_to_hex(a): i64 {
     var hex = "0123456789abcdef";
     var buf = alloc(65);
     var bi = 0;
@@ -328,7 +328,7 @@ fn u256_to_hex(a) {
 }
 
 # Parse hex string to u256 (big-endian, up to 64 chars)
-fn u256_from_hex(s) {
+fn u256_from_hex(s): i64 {
     var r = u256_zero();
     var len = strlen(s);
     if (len > 64) { len = 64; }

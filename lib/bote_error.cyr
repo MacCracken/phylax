@@ -1,1 +1,129 @@
-/home/macro/.cyrius/deps/bote/2.7.1/src/error.cyr
+# bote::error — BoteError tags and JSON-RPC code mapping
+# Mirrors rust-old/src/error.rs
+
+enum BoteErrTag {
+    ERR_TOOL_NOT_FOUND = 0;
+    ERR_INVALID_PARAMS = 1;
+    ERR_EXEC_FAILED = 2;
+    ERR_PROTOCOL = 3;
+    ERR_PARSE = 4;
+    ERR_TRANSPORT_CLOSED = 5;
+    ERR_BIND_FAILED = 6;
+    ERR_REQUEST_CANCELLED = 7;
+    ERR_SCHEMA_VIOLATION = 8;
+    ERR_SANDBOX = 9;
+    ERR_JSON = 10;
+    ERR_IO = 11;
+    ERR_TAG_COUNT = 12;
+}
+
+# BoteError struct (32 bytes):
+#   +0  tag       i64
+#   +8  tool      cstr or 0
+#   +16 reason    cstr or 0
+#   +24 extra     vec of cstr (SCHEMA_VIOLATION violations) or 0
+
+fn bote_err_new(tag, tool, reason) {
+    var e = alloc(32);
+    store64(e, tag);
+    store64(e + 8, tool);
+    store64(e + 16, reason);
+    store64(e + 24, 0);
+    return e;
+}
+
+fn bote_err_with_violations(tag, tool, violations_vec) {
+    var e = alloc(32);
+    store64(e, tag);
+    store64(e + 8, tool);
+    store64(e + 16, 0);
+    store64(e + 24, violations_vec);
+    return e;
+}
+
+fn bote_err_tag(e) { return load64(e); }
+fn bote_err_tool(e) { return load64(e + 8); }
+fn bote_err_reason(e) { return load64(e + 16); }
+fn bote_err_violations(e) { return load64(e + 24); }
+
+# Map a BoteErrTag to its JSON-RPC error code (negative).
+fn bote_err_rpc_code(tag) {
+    if (tag == ERR_PARSE) { return 0 - 32700; }
+    if (tag == ERR_PROTOCOL) { return 0 - 32600; }
+    if (tag == ERR_TOOL_NOT_FOUND) { return 0 - 32601; }
+    if (tag == ERR_INVALID_PARAMS) { return 0 - 32602; }
+    if (tag == ERR_SCHEMA_VIOLATION) { return 0 - 32602; }
+    if (tag == ERR_EXEC_FAILED) { return 0 - 32000; }
+    if (tag == ERR_SANDBOX) { return 0 - 32000; }
+    if (tag == ERR_TRANSPORT_CLOSED) { return 0 - 32003; }
+    if (tag == ERR_BIND_FAILED) { return 0 - 32003; }
+    if (tag == ERR_REQUEST_CANCELLED) { return 0 - 32800; }
+    if (tag == ERR_JSON) { return 0 - 32700; }
+    if (tag == ERR_IO) { return 0 - 32603; }
+    return 0 - 32603;
+}
+
+# Build a Display string for a BoteError. Mirrors the Rust thiserror messages.
+fn bote_err_format(e) {
+    var tag = bote_err_tag(e);
+    var tool = bote_err_tool(e);
+    var reason = bote_err_reason(e);
+    var sb = str_builder_new();
+
+    if (tag == ERR_TOOL_NOT_FOUND) {
+        str_builder_add_cstr(sb, "tool not found: ");
+        if (tool != 0) { str_builder_add_cstr(sb, tool); }
+    } elif (tag == ERR_INVALID_PARAMS) {
+        str_builder_add_cstr(sb, "invalid params for tool '");
+        if (tool != 0) { str_builder_add_cstr(sb, tool); }
+        str_builder_add_cstr(sb, "': ");
+        if (reason != 0) { str_builder_add_cstr(sb, reason); }
+    } elif (tag == ERR_EXEC_FAILED) {
+        str_builder_add_cstr(sb, "tool execution failed: ");
+        if (tool != 0) { str_builder_add_cstr(sb, tool); }
+        str_builder_add_cstr(sb, " - ");
+        if (reason != 0) { str_builder_add_cstr(sb, reason); }
+    } elif (tag == ERR_PROTOCOL) {
+        str_builder_add_cstr(sb, "protocol error: ");
+        if (reason != 0) { str_builder_add_cstr(sb, reason); }
+    } elif (tag == ERR_PARSE) {
+        str_builder_add_cstr(sb, "parse error: ");
+        if (reason != 0) { str_builder_add_cstr(sb, reason); }
+    } elif (tag == ERR_TRANSPORT_CLOSED) {
+        str_builder_add_cstr(sb, "transport closed");
+    } elif (tag == ERR_BIND_FAILED) {
+        str_builder_add_cstr(sb, "transport bind failed: ");
+        if (reason != 0) { str_builder_add_cstr(sb, reason); }
+    } elif (tag == ERR_REQUEST_CANCELLED) {
+        str_builder_add_cstr(sb, "request cancelled: ");
+        if (reason != 0) { str_builder_add_cstr(sb, reason); }
+    } elif (tag == ERR_SCHEMA_VIOLATION) {
+        str_builder_add_cstr(sb, "schema violation for tool '");
+        if (tool != 0) { str_builder_add_cstr(sb, tool); }
+        str_builder_add_cstr(sb, "': ");
+        var vs = bote_err_violations(e);
+        if (vs != 0) {
+            var n = vec_len(vs);
+            var i = 0;
+            while (i < n) {
+                if (i > 0) { str_builder_add_cstr(sb, "; "); }
+                str_builder_add_cstr(sb, vec_get(vs, i));
+                i = i + 1;
+            }
+        }
+    } elif (tag == ERR_SANDBOX) {
+        str_builder_add_cstr(sb, "sandbox error for tool '");
+        if (tool != 0) { str_builder_add_cstr(sb, tool); }
+        str_builder_add_cstr(sb, "': ");
+        if (reason != 0) { str_builder_add_cstr(sb, reason); }
+    } elif (tag == ERR_JSON) {
+        str_builder_add_cstr(sb, "json error: ");
+        if (reason != 0) { str_builder_add_cstr(sb, reason); }
+    } elif (tag == ERR_IO) {
+        str_builder_add_cstr(sb, "io error: ");
+        if (reason != 0) { str_builder_add_cstr(sb, reason); }
+    } else {
+        str_builder_add_cstr(sb, "unknown error");
+    }
+    return str_builder_build(sb);
+}

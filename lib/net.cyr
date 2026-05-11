@@ -14,7 +14,7 @@ var SYS_SHUTDOWN = 48;
 # Socket constants
 enum SockDomain { AF_INET = 2; AF_INET6 = 10; }
 enum SockType { SOCK_STREAM = 1; SOCK_DGRAM = 2; }
-enum SockOpt { SOL_SOCKET = 1; SO_REUSEADDR = 2; }
+enum SockOpt { SOL_SOCKET = 1; SO_REUSEADDR = 2; SO_RCVTIMEO = 20; }
 
 # sockaddr_in: { family(2), port(2), addr(4), zero(8) } = 16 bytes
 # Build a sockaddr_in struct from address and port
@@ -31,9 +31,9 @@ fn sockaddr_in(addr, port): i64 {
 }
 
 # Common addresses
-fn INADDR_ANY() { return 0; }
+fn INADDR_ANY(): i64 { return 0; }
 # Loopback address 127.0.0.1 in network byte order
-fn INADDR_LOOPBACK() { return 0x0100007F; }
+fn INADDR_LOOPBACK(): i64 { return 0x0100007F; }
 
 # Create a TCP socket. Returns Result(fd).
 fn tcp_socket() : Result {
@@ -54,6 +54,21 @@ fn sock_reuse(fd): i64 {
     var val = alloc(4);
     store32(val, 1);
     return syscall(SYS_SETSOCKOPT, fd, SOL_SOCKET, SO_REUSEADDR, val, 4);
+}
+
+# Set the per-socket receive timeout (SO_RCVTIMEO). Blocking recv() on
+# this fd returns EWOULDBLOCK after `secs.usecs` of no data, instead of
+# blocking indefinitely. Slowloris defense: cap how long one slow client
+# can pin an accept-loop worker. Closes bote 1.9.5 audit H5
+# (see CHANGELOG [5.11.13]).
+fn sock_set_recv_timeout(fd, secs, usecs): i64 {
+    # Linux struct timeval is {tv_sec, tv_usec} — both i64 on 64-bit
+    # Linux (16 bytes total). Kernel reads 16 bytes; padding doesn't
+    # matter because both fields are 64-bit.
+    var tv = alloc(16);
+    store64(tv,     secs);
+    store64(tv + 8, usecs);
+    return syscall(SYS_SETSOCKOPT, fd, SOL_SOCKET, SO_RCVTIMEO, tv, 16);
 }
 
 # Bind socket to address:port. Returns Result(0).

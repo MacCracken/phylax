@@ -82,6 +82,24 @@ binary surface and detection behavior are unchanged from 1.1.0.
   without flags emits the formatted source and the diff catches
   real drift only.
 
+- **`tests/phylax.tcyr` — `sha256 empty` assertion fails.** The
+  `file_sha256` helper in `src/analyze.cyr:245` previously
+  delegated to sigil's `sha256_hex` wrapper. The sigil bundle is
+  compiled with its own local `hex_encode` (returns a raw
+  c-string), and the cyrius linker binds the `hex_encode` call
+  inside sigil's `sha256_hex` body at bundle-compile time —
+  bypassing phylax's `src/utils.cyr:286` last-def-wins override
+  (which returns a Str). Downstream `str_eq` / `str_cat` on the
+  raw c-string read length-bytes from the wrong offset and
+  silently produced the wrong answer (the failing assertion was
+  the canary; three other callers in `types.cyr`, `integration.cyr`,
+  `quarantine.cyr` had the same latent bug). Rewrote `file_sha256`
+  to compose `sha256()` (sigil digest primitive) + `hex_encode()`
+  (phylax local, Str output) directly — bypasses the dispatch
+  collision entirely. Other call sites remain on `sha256_hex`
+  pending the broader duplicate-fn cleanup in the 5.11.x / 5.12.x
+  sweep; they don't have failing assertions today.
+
 ### Carryover (not addressed in this cut)
 
 These are the 🟡 / 🟠 rows in `docs/doc-health.md` and the
@@ -101,13 +119,6 @@ known-issue list — picked up in the next sweep.
 - `docs/development/threat-model.md` — read-through against
   sigil 3.x's PQ surface; expected to be a no-op (phylax only
   consumes `sha256_hex`).
-- `tests/phylax.tcyr` — `sha256 empty` assertion fails under the
-  new toolchain. sigil 3.1.1's `sha256_hex` body is unchanged
-  from 2.9.5 (return-type annotation only); root cause likely
-  lives in the duplicate `hex_encode` resolution between sigil's
-  bundle and phylax's `src/utils.cyr:286`, or in a 5.10.44
-  toolchain-side dispatch change. Out-of-scope for the dep-bump
-  sweep; tracked as a known-issue for the next pass.
 - `src/syscall_x86_64_linux.cyr` + `src/utils.cyr` duplicate-fn
   warnings (`sys_stat`, `sys_fstat`, `str_to_int`, `hex_encode`,
   `hex_decode`, `str_contains`) — retire the phylax-side

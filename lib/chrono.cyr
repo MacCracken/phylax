@@ -6,33 +6,33 @@ var CLOCK_REALTIME = 0;
 var CLOCK_MONOTONIC = 1;
 
 # Get current time in nanoseconds (monotonic clock)
-fn clock_now_ns() {
+fn clock_now_ns(): i64 {
     var ts[16];
     syscall(228, CLOCK_MONOTONIC, &ts);
     return load64(&ts) * 1000000000 + load64(&ts + 8);
 }
 
 # Get current time in milliseconds (monotonic)
-fn clock_now_ms() {
+fn clock_now_ms(): i64 {
     return clock_now_ns() / 1000000;
 }
 
 # Get current epoch seconds (wall clock)
-fn clock_epoch_secs() {
+fn clock_epoch_secs(): i64 {
     var ts[16];
     syscall(228, CLOCK_REALTIME, &ts);
     return load64(&ts);
 }
 
 # Get current epoch nanoseconds (wall clock)
-fn clock_epoch_ns() {
+fn clock_epoch_ns(): i64 {
     var ts[16];
     syscall(228, CLOCK_REALTIME, &ts);
     return load64(&ts) * 1000000000 + load64(&ts + 8);
 }
 
 # Duration struct: {secs: i64, nsecs: i64} = 16 bytes
-fn dur_new(secs, nsecs) {
+fn dur_new(secs, nsecs): i64 {
     var d = alloc(16);
     store64(d, secs);
     store64(d + 8, nsecs);
@@ -40,28 +40,28 @@ fn dur_new(secs, nsecs) {
 }
 
 # Get seconds component of a duration
-fn dur_secs(d) { return load64(d); }
+fn dur_secs(d): i64 { return load64(d); }
 # Get nanoseconds component of a duration
-fn dur_nsecs(d) { return load64(d + 8); }
+fn dur_nsecs(d): i64 { return load64(d + 8); }
 
 # Convert duration to total milliseconds
-fn dur_to_ms(d) {
+fn dur_to_ms(d): i64 {
     return load64(d) * 1000 + load64(d + 8) / 1000000;
 }
 
 # Convert duration to total nanoseconds
-fn dur_to_ns(d) {
+fn dur_to_ns(d): i64 {
     return load64(d) * 1000000000 + load64(d + 8);
 }
 
 # Measure elapsed time between two ns timestamps
-fn dur_between(start_ns, end_ns) {
+fn dur_between(start_ns, end_ns): i64 {
     var diff = end_ns - start_ns;
     return dur_new(diff / 1000000000, diff % 1000000000);
 }
 
 # Sleep for ms milliseconds (blocking)
-fn sleep_ms(ms) {
+fn sleep_ms(ms): i64 {
     var ts[16];
     store64(&ts, ms / 1000);
     store64(&ts + 8, (ms % 1000) * 1000000);
@@ -75,7 +75,7 @@ fn sleep_ms(ms) {
 
 # Days in each month (non-leap)
 var _chrono_mdays = 0;
-fn _chrono_init_mdays() {
+fn _chrono_init_mdays(): i64 {
     if (_chrono_mdays != 0) { return 0; }
     _chrono_mdays = alloc(96);
     store64(_chrono_mdays, 31);       # Jan
@@ -94,7 +94,7 @@ fn _chrono_init_mdays() {
 }
 
 # Check leap year
-fn is_leap_year(y) {
+fn is_leap_year(y): i64 {
     if (y % 4 != 0) { return 0; }
     if (y % 100 != 0) { return 1; }
     if (y % 400 != 0) { return 0; }
@@ -103,7 +103,7 @@ fn is_leap_year(y) {
 
 # Convert epoch seconds to date components {year, month, day, hour, min, sec}
 # Returns alloc'd 48-byte struct
-fn epoch_to_date(epoch) {
+fn epoch_to_date(epoch): i64 {
     _chrono_init_mdays();
     var r = alloc(48);
     var secs = epoch;
@@ -137,14 +137,14 @@ fn epoch_to_date(epoch) {
 }
 
 # Write 2-digit zero-padded number to buffer
-fn _chrono_w2(buf, pos, val) {
+fn _chrono_w2(buf, pos, val): i64 {
     store8(buf + pos, 48 + val / 10);
     store8(buf + pos + 1, 48 + val % 10);
     return 0;
 }
 
 # Write 4-digit year to buffer
-fn _chrono_w4(buf, pos, val) {
+fn _chrono_w4(buf, pos, val): i64 {
     store8(buf + pos, 48 + val / 1000);
     store8(buf + pos + 1, 48 + (val / 100) % 10);
     store8(buf + pos + 2, 48 + (val / 10) % 10);
@@ -154,7 +154,7 @@ fn _chrono_w4(buf, pos, val) {
 
 # Format epoch seconds as ISO-8601: "2026-04-09T15:30:00Z"
 # Returns null-terminated string (alloc'd)
-fn iso8601(epoch) {
+fn iso8601(epoch): i64 {
     var d = epoch_to_date(epoch);
     var buf = alloc(24);
     _chrono_w4(buf, 0, load64(d));       # year
@@ -174,13 +174,13 @@ fn iso8601(epoch) {
 }
 
 # Format current time as ISO-8601
-fn iso8601_now() {
+fn iso8601_now(): i64 {
     return iso8601(clock_epoch_secs());
 }
 
 # Parse ISO-8601 string "YYYY-MM-DDTHH:MM:SSZ" to epoch seconds
 # Returns epoch seconds or -1 on parse error
-fn iso8601_parse(s) {
+fn iso8601_parse(s): i64 {
     var len = strlen(s);
     if (len < 19) { return 0 - 1; }
     # Parse digits

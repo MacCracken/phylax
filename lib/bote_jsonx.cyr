@@ -1,1 +1,172 @@
-/home/macro/.cyrius/deps/bote/2.7.1/src/jsonx.cyr
+# bote::jsonx — nested-aware JSON value extractor
+#
+# Why: lib/json.cyr is flat-only — it truncates on nested objects/arrays.
+# For dispatch we need to pull "name", "arguments", "version" out of a
+# tools/call params object whose "arguments" is itself an object.
+#
+# This module exposes:
+#   jsonx_get_raw(obj_cstr, key) → cstr (raw JSON value) or 0
+#   jsonx_get_str(obj_cstr, key) → cstr (decoded string value, no quotes) or 0
+#
+# Limitations: no escape decoding inside strings (only \" is honored for
+# detecting closing quote). No whitespace tolerance inside structured values.
+
+# Maximum nesting depth before _jx_skip_struct bails. Audit 1.9.4
+# defensive cap — caps adversarial input from walking a hand-crafted
+# 100k-deep-but-valid-JSON tree. 64 is well above any legitimate
+# protocol message; MCP tool args rarely exceed depth 5.
+var JSONX_MAX_DEPTH = 64;
+
+# Skip whitespace; return new index.
+fn _jx_skip_ws(buf, len, i) {
+    while (i < len) {
+        var c = load8(buf + i);
+        if (c == 32 || c == 9 || c == 10 || c == 13) { i = i + 1; }
+        else { return i; }
+    }
+    return i;
+}
+
+# Skip a JSON string starting at buf[i] (load8(buf+i) == '"').
+# Returns index AFTER the closing quote.
+fn _jx_skip_string(buf, len, i) {
+    i = i + 1;
+    while (i < len) {
+        var c = load8(buf + i);
+        if (c == 92) { i = i + 2; }
+        elif (c == 34) { return i + 1; }
+        else { i = i + 1; }
+    }
+    return i;
+}
+
+# Skip a JSON value at buf[i]. Returns index AFTER the value.
+# Handles: string, number, true/false/null, object, array (recursively).
+fn _jx_skip_value(buf, len, i) {
+    i = _jx_skip_ws(buf, len, i);
+    if (i >= len) { return i; }
+    var c = load8(buf + i);
+    if (c == 34) { return _jx_skip_string(buf, len, i); }
+    if (c == 123) { return _jx_skip_struct(buf, len, i, 123, 125); }
+    if (c == 91)  { return _jx_skip_struct(buf, len, i, 91, 93); }
+    # Bare token: number, true, false, null — read until terminator.
+    while (i < len) {
+        var cc = load8(buf + i);
+        if (cc == 44 || cc == 125 || cc == 93 || cc == 32 || cc == 9 || cc == 10 || cc == 13) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return i;
+}
+
+# Skip a balanced object/array. open=123 close=125 OR open=91 close=93.
+# Bounded by JSONX_MAX_DEPTH (default 64) — pathologically nested input
+# bails to end-of-buffer (caller sees end-of-input) rather than walking
+# an attacker-crafted deep structure. The 64 KB inbound HTTP buffer
+# already caps the absolute worst case, but the explicit guard keeps
+# us safe if anyone ever raises that buffer size.
+fn _jx_skip_struct(buf, len, i, open, close) {
+    var depth = 0;
+    while (i < len) {
+        var c = load8(buf + i);
+        if (c == 34) { i = _jx_skip_string(buf, len, i); }
+        elif (c == open) {
+            depth = depth + 1;
+            if (depth > JSONX_MAX_DEPTH) { return len; }
+            i = i + 1;
+        }
+        elif (c == close) {
+            depth = depth - 1;
+            i = i + 1;
+            if (depth == 0) { return i; }
+        }
+        else { i = i + 1; }
+    }
+    return i;
+}
+
+# Find a key inside a flat JSON object (one level). Returns index of the
+# value's first byte (after `:` and whitespace), or 0 - 1 if not found.
+fn _jx_find_value_pos(buf, len, key) {
+    var klen = strlen(key);
+    var i = _jx_skip_ws(buf, len, 0);
+    if (i >= len || load8(buf + i) != 123) { return 0 - 1; }
+    i = i + 1;
+    while (i < len) {
+        i = _jx_skip_ws(buf, len, i);
+        if (i >= len) { return 0 - 1; }
+        var c = load8(buf + i);
+        if (c == 125) { return 0 - 1; }
+        if (c != 34) { return 0 - 1; }
+        # Read key
+        var ks = i + 1;
+        var ke = _jx_skip_string(buf, len, i);
+        var key_len_actual = ke - ks - 1;
+        var key_match = 0;
+        if (key_len_actual == klen && memeq(buf + ks, key, klen) == 1) {
+            key_match = 1;
+        }
+        i = _jx_skip_ws(buf, len, ke);
+        if (i >= len || load8(buf + i) != 58) { return 0 - 1; }
+        i = _jx_skip_ws(buf, len, i + 1);
+        if (key_match == 1) { return i; }
+        # Skip the value
+        var ve = _jx_skip_value(buf, len, i);
+        i = _jx_skip_ws(buf, len, ve);
+        if (i < len && load8(buf + i) == 44) { i = i + 1; }
+    }
+    return 0 - 1;
+}
+
+# Get raw JSON value bytes for key. Returns cstr (alloc'd, null-terminated)
+# containing the verbatim source bytes, or 0 if key not found / input malformed.
+fn jsonx_get_raw(obj_cstr, key) {
+    if (obj_cstr == 0) { return 0; }
+    var len = strlen(obj_cstr);
+    var pos = _jx_find_value_pos(obj_cstr, len, key);
+    if (pos == 0 - 1) { return 0; }
+    var end = _jx_skip_value(obj_cstr, len, pos);
+    var n = end - pos;
+    var out = alloc(n + 1);
+    memcpy(out, obj_cstr + pos, n);
+    store8(out + n, 0);
+    return out;
+}
+
+# Get a string value for key (no quotes). Returns 0 if not found or value
+# is not a JSON string. No escape decoding (\\ \" \n \t are passed through
+# verbatim — adequate for tool names and version strings).
+fn jsonx_get_str(obj_cstr, key) {
+    if (obj_cstr == 0) { return 0; }
+    var len = strlen(obj_cstr);
+    var pos = _jx_find_value_pos(obj_cstr, len, key);
+    if (pos == 0 - 1) { return 0; }
+    if (load8(obj_cstr + pos) != 34) { return 0; }
+    var end = _jx_skip_string(obj_cstr, len, pos);
+    # Truncated input (no closing quote): _jx_skip_string returns end == len,
+    # so end - pos - 2 can go negative. Clamp to 0 (returns empty string).
+    var inner_len = end - pos - 2;
+    if (inner_len < 0) { inner_len = 0; }
+    var out = alloc(inner_len + 1);
+    memcpy(out, obj_cstr + pos + 1, inner_len);
+    store8(out + inner_len, 0);
+    return out;
+}
+
+# Returns 1 if obj_cstr contains key, 0 otherwise.
+fn jsonx_has(obj_cstr, key) {
+    if (obj_cstr == 0) { return 0; }
+    if (_jx_find_value_pos(obj_cstr, strlen(obj_cstr), key) == 0 - 1) { return 0; }
+    return 1;
+}
+
+# Returns 1 if obj_cstr (after leading ws) starts with `{`.
+fn jsonx_is_object(obj_cstr) {
+    if (obj_cstr == 0) { return 0; }
+    var len = strlen(obj_cstr);
+    var i = _jx_skip_ws(obj_cstr, len, 0);
+    if (i >= len) { return 0; }
+    if (load8(obj_cstr + i) != 123) { return 0; }
+    return 1;
+}

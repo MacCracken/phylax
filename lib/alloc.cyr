@@ -13,14 +13,9 @@
 # alloc(size) returns aligned pointer or 0 on failure.
 # alloc_reset() frees everything (batch).
 #
-# v5.5.0 split the implementation: Linux + aarch64 use the brk-
-# based path below; Windows (CYRIUS_TARGET_WIN) delegates to
-# lib/alloc_windows.cyr which uses VirtualAlloc. v5.5.16 adds the
-# macOS (CYRIUS_TARGET_MACOS) delegation to lib/alloc_macos.cyr
-# (mmap-based — Darwin has no brk, and BSD syscall 12 is chdir,
-# so the Linux branch silently corrupts _heap_base when it runs
-# on Mach-O). arena_* helpers are OS-agnostic and shipped inline
-# after the selector.
+# Linux/aarch64 → brk path (below); Windows → alloc_windows.cyr
+# (VirtualAlloc); macOS → alloc_macos.cyr (mmap; Darwin has no brk).
+# arena_* helpers are OS-agnostic. See CHANGELOG [5.5.0], [5.5.16].
 
 #ifdef CYRIUS_TARGET_WIN
 include "lib/alloc_windows.cyr"
@@ -72,12 +67,8 @@ fn alloc(size): i64 {
     if (new_ptr < ptr) { return 0; }
     _heap_ptr = new_ptr;
     if (_heap_ptr > _heap_end) {
-        # Grow to cover _heap_ptr, rounded up to the next 1MB boundary.
-        # v5.6.34: previously stepped by exactly 0x100000 regardless of
-        # how far past _heap_end the new_ptr was, so any alloc(>1MB) near
-        # the grow point returned a pointer past the brk — SIGSEGV on
-        # first tail-write. Rounding up to a 1MB grain keeps the
-        # brk-per-alloc churn low while always mapping enough space.
+        # Grow to cover _heap_ptr, round up to next 1MB grain
+        # (low brk-churn + correct for alloc(>1MB); see CHANGELOG [5.6.34]).
         var new_end = (_heap_ptr + 0xFFFFF) & (0 - 0x100000);
         var result = syscall(12, new_end);
         if (result < new_end) {
@@ -109,12 +100,29 @@ fn alloc_used(): i64 {
 # Each arena has its own bump pointer. Freeing one arena doesn't
 # affect allocations from other arenas or the global allocator.
 #
+# Per-frame / per-emission reuse pattern (bote WS, bote SSE,
+# daimon agent supervision, mneme long-running — closes bote audit
+# item via v5.11.14):
+#   var a = arena_new(65536);             # one-time per connection
+#   while (more_frames) {
+#       arena_reset(a);                    # zero-cost: bump back to base
+#       var buf = arena_alloc(a, frame_sz);
+#       handle_frame(buf, ...);
+#   }
+#   arena_free(a);                          # end of connection
+#
 # Usage:
 #   var a = arena_new(4096);          # 4KB arena
 #   var p1 = arena_alloc(a, 64);     # allocate from arena
 #   var p2 = arena_alloc(a, 128);    # still valid after arena_reset
 #   arena_reset(a);                   # frees p1 and p2, not global allocs
-#   (no arena_free — bump allocator, memory reclaimed on process exit)
+#   arena_free(a);                    # invalidates arena (further allocs fail)
+#
+# Memory semantics: arena_free invalidates the arena handle but does NOT
+# return the backing buffer to the global heap (global is a bump allocator
+# with no individual free — backing memory is reclaimed at process exit
+# or global alloc_reset). A future variant could be mmap-backed for true
+# OS-level reclamation; see CHANGELOG [5.11.14] for the scope discussion.
 #
 # Layout: { base: i64, ptr: i64, end: i64 } = 24 bytes
 
@@ -154,6 +162,23 @@ fn arena_used(a): i64 {
 # Return bytes remaining in the arena
 fn arena_remaining(a): i64 {
     return load64(a + 16) - load64(a + 8);
+}
+
+# Invalidate the arena: zero out the header so subsequent arena_alloc
+# returns 0. The backing buffer remains in the global bump heap until
+# process exit or alloc_reset() (bump allocator has no individual free).
+# Match this with arena_reset() before arena_free() if you want to
+# observe used-bytes go to 0 first.
+#
+# bote use case (v5.11.14 closeout): end-of-connection cleanup —
+# arena handle no longer valid, future arena_alloc on the freed
+# handle fails safely instead of leaking writes into stale memory.
+fn arena_free(a): i64 {
+    if (a == 0) { return 0; }
+    store64(a,      0);   # base = 0
+    store64(a + 8,  0);   # ptr  = 0  (matches base; arena_used == 0)
+    store64(a + 16, 0);   # end  = 0  (so arena_alloc's bounds check fails)
+    return 0;
 }
 
 # ================================================================

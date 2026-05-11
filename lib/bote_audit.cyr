@@ -1,1 +1,87 @@
-/home/macro/.cyrius/deps/bote/2.7.1/src/audit.cyr
+# bote::audit — tool-call audit logging
+# Mirrors rust-old/src/audit.rs (trait + ToolCallEvent).
+#
+# Cyrius has no traits, so AuditSink is a (log_fp, ctx) struct.
+# Backends (e.g. LibroAudit in src/audit_libro.cyr — v1.2) wrap their state
+# in `ctx` and provide a log function pointer with signature:
+#
+#   fn my_log(ctx, event_ptr) → 0
+
+# ================================================================
+# ToolCallEvent (40 bytes):
+#   +0  tool_name     cstr
+#   +8  duration_ms   i64
+#   +16 success       0/1
+#   +24 error         cstr or 0 (only set when success == 0)
+#   +32 caller_id     cstr or 0
+# ================================================================
+
+fn tool_call_event_new(tool_name, duration_ms, success, error, caller_id) {
+    var e = alloc(40);
+    store64(e, tool_name);
+    store64(e + 8, duration_ms);
+    store64(e + 16, success);
+    store64(e + 24, error);
+    store64(e + 32, caller_id);
+    return e;
+}
+
+fn tool_call_event_tool_name(e)   { return load64(e); }
+fn tool_call_event_duration_ms(e) { return load64(e + 8); }
+fn tool_call_event_success(e)     { return load64(e + 16); }
+fn tool_call_event_error(e)       { return load64(e + 24); }
+fn tool_call_event_caller_id(e)   { return load64(e + 32); }
+
+# Serialize a ToolCallEvent to a JSON cstr. Skips error/caller_id when 0.
+# Mirrors Rust's `#[serde(skip_serializing_if = "Option::is_none")]`.
+fn tool_call_event_to_json(e) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"tool_name\":\"");
+    _json_emit_escaped(sb, tool_call_event_tool_name(e));
+    str_builder_add_cstr(sb, "\",\"duration_ms\":");
+    str_builder_add_int(sb, tool_call_event_duration_ms(e));
+    str_builder_add_cstr(sb, ",\"success\":");
+    if (tool_call_event_success(e) == 1) { str_builder_add_cstr(sb, "true"); }
+    else { str_builder_add_cstr(sb, "false"); }
+    var err = tool_call_event_error(e);
+    if (err != 0) {
+        str_builder_add_cstr(sb, ",\"error\":\"");
+        _json_emit_escaped(sb, err);
+        str_builder_add_cstr(sb, "\"");
+    }
+    var cid = tool_call_event_caller_id(e);
+    if (cid != 0) {
+        str_builder_add_cstr(sb, ",\"caller_id\":\"");
+        _json_emit_escaped(sb, cid);
+        str_builder_add_cstr(sb, "\"");
+    }
+    str_builder_add_cstr(sb, "}");
+    return str_data(str_builder_build(sb));
+}
+
+# ================================================================
+# AuditSink (16 bytes):
+#   +0  log_fp  function pointer (or 0 for no-op sink)
+#   +8  ctx     opaque pointer passed to log_fp
+# ================================================================
+
+fn audit_sink_new(log_fp, ctx) {
+    var s = alloc(16);
+    store64(s, log_fp);
+    store64(s + 8, ctx);
+    return s;
+}
+
+fn audit_sink_noop() { return audit_sink_new(0, 0); }
+fn audit_sink_log_fp(sink) { return load64(sink); }
+fn audit_sink_ctx(sink) { return load64(sink + 8); }
+
+# Log an event. Safe to call with sink==0 or noop sink (both no-op).
+fn audit_sink_log(sink, event) {
+    if (sink == 0) { return 0; }
+    var fp = load64(sink);
+    if (fp == 0) { return 0; }
+    var ctx = load64(sink + 8);
+    fncall2(fp, ctx, event);
+    return 0;
+}

@@ -31,7 +31,7 @@ var JSON_PAIR_SIZE = 16;
 
 # v5.8.36 — Allocator-as-first-arg variant of json_pair_new.
 # Allocates the 16-byte pair via `a`. Returns 0 on OOM.
-fn json_pair_new_a(a, key, value) {
+fn json_pair_new_a(a, key, value): i64 {
     var p = alloc_via(a, JSON_PAIR_SIZE);
     if (p == 0) { return 0; }
     store64(p, key);
@@ -40,19 +40,19 @@ fn json_pair_new_a(a, key, value) {
 }
 
 # Create a new key-value pair for JSON storage. v5.8.36 wrapper.
-fn json_pair_new(key, value) {
+fn json_pair_new(key, value): i64 {
     return json_pair_new_a(default_alloc(), key, value);
 }
 
 # Return the key Str from a JSON pair
-fn json_key(p) { return load64(p); }
+fn json_key(p): i64 { return load64(p); }
 # Return the value Str from a JSON pair
-fn json_value(p) { return load64(p + 8); }
+fn json_value(p): i64 { return load64(p + 8); }
 
 # Parse a JSON object string into a vec of key-value pairs.
 # Handles: {"key": "value", "key2": "value2", "num": 42}
 # Returns vec of json_pair pointers.
-fn json_parse(src) {
+fn json_parse(src): i64 {
     var pairs = vec_new();
     var data = str_data(src);
     var slen = str_len(src);
@@ -127,7 +127,7 @@ fn json_parse(src) {
 }
 
 # Find value by key in parsed JSON. Returns Str or 0 if not found.
-fn json_get(pairs, key) {
+fn json_get(pairs, key): i64 {
     if (pairs == 0) { return 0; }
     if (key == 0) { return 0; }
     var len = vec_len(pairs);
@@ -143,14 +143,14 @@ fn json_get(pairs, key) {
 }
 
 # Get value as integer (0 if not found or not numeric)
-fn json_get_int(pairs, key) {
+fn json_get_int(pairs, key): i64 {
     var v = json_get(pairs, key);
     if (v == 0) { return 0; }
     return str_to_int(v);
 }
 
 # Build a JSON object from a vec of key-value pairs
-fn json_build(pairs) {
+fn json_build(pairs): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "{");
     var len = vec_len(pairs);
@@ -170,7 +170,7 @@ fn json_build(pairs) {
 }
 
 # Parse a JSON file
-fn json_parse_file(path) {
+fn json_parse_file(path): i64 {
     var buf = alloc(16384);
     var n = file_read_all(path, buf, 16384);
     if (n <= 0) { return vec_new(); }
@@ -182,7 +182,7 @@ fn json_parse_file(path) {
 # IoError surfaces as Err(JsonIoErr) instead of being silently
 # converted to an empty vec (the back-compat behavior of
 # `json_parse_file`).
-fn json_parse_file_r(path) {
+fn json_parse_file_r(path): i64 {
     var fd_r = file_open_r(path, 0, 0);
     if (is_err_result(fd_r) == 1) { return Err(JsonIoErr); }
     var fd = load64(fd_r + 8);
@@ -252,20 +252,20 @@ var _json_err_msg = 0;
 var _json_err_pos = 0;
 
 # Return the last parse error message (cstr) — set on json_v_parse* failure.
-fn json_last_error() {
+fn json_last_error(): i64 {
     if (_json_err_msg == 0) { return ""; }
     return _json_err_msg;
 }
 
 # Return the last parse error byte offset — set on json_v_parse* failure.
-fn json_last_error_pos() { return _json_err_pos; }
+fn json_last_error_pos(): i64 { return _json_err_pos; }
 
 # === Constructors ===
 
 # v5.8.36 — Allocator-as-first-arg internal jv-cell allocator.
 # Returns 0 on OOM (caller must check). Used by every json_v_*_new_a
 # constructor below.
-fn _jv_alloc_a(a, tag) {
+fn _jv_alloc_a(a, tag): i64 {
     var v = alloc_via(a, JV_SIZE);
     if (v == 0) { return 0; }
     store64(v, tag);
@@ -275,16 +275,16 @@ fn _jv_alloc_a(a, tag) {
 }
 
 # Internal jv-cell allocator (back-compat wrapper).
-fn _jv_alloc(tag) { return _jv_alloc_a(default_alloc(), tag); }
+fn _jv_alloc(tag): i64 { return _jv_alloc_a(default_alloc(), tag); }
 
 # v5.8.36 — Allocator-as-first-arg variant of json_v_null.
-fn json_v_null_a(a) { return _jv_alloc_a(a, JTAG_NULL); }
+fn json_v_null_a(a): i64 { return _jv_alloc_a(a, JTAG_NULL); }
 
 # Create a new JTAG_NULL value. v5.8.36 wrapper.
-fn json_v_null() { return _jv_alloc(JTAG_NULL); }
+fn json_v_null(): i64 { return _jv_alloc(JTAG_NULL); }
 
 # v5.8.36 — Allocator-as-first-arg variant of json_v_bool_new.
-fn json_v_bool_new_a(a, b) {
+fn json_v_bool_new_a(a, b): i64 {
     var v = _jv_alloc_a(a, JTAG_BOOL);
     if (v == 0) { return 0; }
     if (b == 0) { store64(v + 8, 0); }
@@ -293,12 +293,12 @@ fn json_v_bool_new_a(a, b) {
 }
 
 # Create a new JTAG_BOOL value (b is 0 or 1). v5.8.36 wrapper.
-fn json_v_bool_new(b) {
+fn json_v_bool_new(b): i64 {
     return json_v_bool_new_a(default_alloc(), b);
 }
 
 # v5.8.36 — Allocator-as-first-arg variant of json_v_int_new.
-fn json_v_int_new_a(a, n) {
+fn json_v_int_new_a(a, n): i64 {
     var v = _jv_alloc_a(a, JTAG_INT);
     if (v == 0) { return 0; }
     store64(v + 8, n);
@@ -306,12 +306,12 @@ fn json_v_int_new_a(a, n) {
 }
 
 # Create a new JTAG_INT value (n is i64). v5.8.36 wrapper.
-fn json_v_int_new(n) {
+fn json_v_int_new(n): i64 {
     return json_v_int_new_a(default_alloc(), n);
 }
 
 # v5.8.36 — Allocator-as-first-arg variant of json_v_float_new.
-fn json_v_float_new_a(a, f) {
+fn json_v_float_new_a(a, f): i64 {
     var v = _jv_alloc_a(a, JTAG_FLOAT);
     if (v == 0) { return 0; }
     store64(v + 8, f);
@@ -319,12 +319,12 @@ fn json_v_float_new_a(a, f) {
 }
 
 # Create a new JTAG_FLOAT value (f is f64 bit pattern). v5.8.36 wrapper.
-fn json_v_float_new(f) {
+fn json_v_float_new(f): i64 {
     return json_v_float_new_a(default_alloc(), f);
 }
 
 # v5.8.36 — Allocator-as-first-arg variant of json_v_str_new.
-fn json_v_str_new_a(a, s) {
+fn json_v_str_new_a(a, s): i64 {
     var v = _jv_alloc_a(a, JTAG_STR);
     if (v == 0) { return 0; }
     store64(v + 8, s);
@@ -332,13 +332,13 @@ fn json_v_str_new_a(a, s) {
 }
 
 # Create a new JTAG_STR value (s is a Str ptr). v5.8.36 wrapper.
-fn json_v_str_new(s) {
+fn json_v_str_new(s): i64 {
     return json_v_str_new_a(default_alloc(), s);
 }
 
 # v5.8.36 — Allocator-as-first-arg variant of json_v_arr_new.
 # Allocates BOTH the jv-cell AND the inner vec via `a`.
-fn json_v_arr_new_a(a) {
+fn json_v_arr_new_a(a): i64 {
     var v = _jv_alloc_a(a, JTAG_ARR);
     if (v == 0) { return 0; }
     var inner = vec_new_a(a);
@@ -350,13 +350,13 @@ fn json_v_arr_new_a(a) {
 # Create an empty JTAG_ARR value. v5.8.36 wrapper. Append via
 # json_v_arr_push (use json_v_arr_push_a if you need the same
 # allocator threaded through grows).
-fn json_v_arr_new() {
+fn json_v_arr_new(): i64 {
     return json_v_arr_new_a(default_alloc());
 }
 
 # v5.8.36 — Allocator-as-first-arg variant of json_v_obj_new.
 # Allocates BOTH the jv-cell AND the inner pairs vec via `a`.
-fn json_v_obj_new_a(a) {
+fn json_v_obj_new_a(a): i64 {
     var v = _jv_alloc_a(a, JTAG_OBJ);
     if (v == 0) { return 0; }
     var inner = vec_new_a(a);
@@ -366,12 +366,12 @@ fn json_v_obj_new_a(a) {
 }
 
 # Create an empty JTAG_OBJ value. v5.8.36 wrapper.
-fn json_v_obj_new() {
+fn json_v_obj_new(): i64 {
     return json_v_obj_new_a(default_alloc());
 }
 
 # v5.8.36 — Allocator-as-first-arg variant of _jv_pair_new.
-fn _jv_pair_new_a(a, key, val) {
+fn _jv_pair_new_a(a, key, val): i64 {
     var p = alloc_via(a, 16);
     if (p == 0) { return 0; }
     store64(p, key);
@@ -381,14 +381,14 @@ fn _jv_pair_new_a(a, key, val) {
 
 # A pair is a 16-byte heap struct: { key: Str @ +0, value: json_v* @ +8 }.
 # v5.8.36 wrapper.
-fn _jv_pair_new(key, val) {
+fn _jv_pair_new(key, val): i64 {
     return _jv_pair_new_a(default_alloc(), key, val);
 }
 
 # v5.8.36 — Allocator-as-first-arg variant of json_v_arr_push.
 # Routes any vec-grow through `a`. Returns -1 on grow OOM
 # (vs. back-compat which aborts via vec_push).
-fn json_v_arr_push_a(a, arr, val) {
+fn json_v_arr_push_a(a, arr, val): i64 {
     if (arr == 0) { return 0 - 1; }
     if (load64(arr) != JTAG_ARR) { return 0 - 1; }
     return vec_push_a(a, load64(arr + 8), val);
@@ -396,7 +396,7 @@ fn json_v_arr_push_a(a, arr, val) {
 
 # Append a value to an array. No-op if arr is not JTAG_ARR.
 # v5.8.36 wrapper.
-fn json_v_arr_push(arr, val) {
+fn json_v_arr_push(arr, val): i64 {
     if (arr == 0) { return 0; }
     if (load64(arr) != JTAG_ARR) { return 0; }
     vec_push(load64(arr + 8), val);
@@ -404,7 +404,7 @@ fn json_v_arr_push(arr, val) {
 }
 
 # Append a key/value pair to an object. No-op if obj is not JTAG_OBJ.
-fn json_v_obj_set(obj, key, val) {
+fn json_v_obj_set(obj, key, val): i64 {
     if (obj == 0) { return 0; }
     if (load64(obj) != JTAG_OBJ) { return 0; }
     vec_push(load64(obj + 8), _jv_pair_new(key, val));
@@ -414,37 +414,37 @@ fn json_v_obj_set(obj, key, val) {
 # === Tag predicates ===
 
 # Return the value tag (JTAG_NULL/BOOL/INT/FLOAT/STR/ARR/OBJ), or -1 if v is 0.
-fn json_v_tag(v) {
+fn json_v_tag(v): i64 {
     if (v == 0) { return 0 - 1; }
     return load64(v);
 }
 
 # Tag predicates — return 1 if v has the given tag, else 0. All return 0 on null v.
-fn json_v_is_null(v)  { if (v == 0) { return 0; } if (load64(v) == JTAG_NULL)  { return 1; } return 0; }
+fn json_v_is_null(v): i64 { if (v == 0) { return 0; } if (load64(v) == JTAG_NULL)  { return 1; } return 0; }
 # True if v is a JTAG_BOOL value.
-fn json_v_is_bool(v)  { if (v == 0) { return 0; } if (load64(v) == JTAG_BOOL)  { return 1; } return 0; }
+fn json_v_is_bool(v): i64 { if (v == 0) { return 0; } if (load64(v) == JTAG_BOOL)  { return 1; } return 0; }
 # True if v is a JTAG_INT value.
-fn json_v_is_int(v)   { if (v == 0) { return 0; } if (load64(v) == JTAG_INT)   { return 1; } return 0; }
+fn json_v_is_int(v): i64 { if (v == 0) { return 0; } if (load64(v) == JTAG_INT)   { return 1; } return 0; }
 # True if v is a JTAG_FLOAT value.
-fn json_v_is_float(v) { if (v == 0) { return 0; } if (load64(v) == JTAG_FLOAT) { return 1; } return 0; }
+fn json_v_is_float(v): i64 { if (v == 0) { return 0; } if (load64(v) == JTAG_FLOAT) { return 1; } return 0; }
 # True if v is a JTAG_STR value.
-fn json_v_is_str(v)   { if (v == 0) { return 0; } if (load64(v) == JTAG_STR)   { return 1; } return 0; }
+fn json_v_is_str(v): i64 { if (v == 0) { return 0; } if (load64(v) == JTAG_STR)   { return 1; } return 0; }
 # True if v is a JTAG_ARR value.
-fn json_v_is_arr(v)   { if (v == 0) { return 0; } if (load64(v) == JTAG_ARR)   { return 1; } return 0; }
+fn json_v_is_arr(v): i64 { if (v == 0) { return 0; } if (load64(v) == JTAG_ARR)   { return 1; } return 0; }
 # True if v is a JTAG_OBJ value.
-fn json_v_is_obj(v)   { if (v == 0) { return 0; } if (load64(v) == JTAG_OBJ)   { return 1; } return 0; }
+fn json_v_is_obj(v): i64 { if (v == 0) { return 0; } if (load64(v) == JTAG_OBJ)   { return 1; } return 0; }
 
 # === Value accessors (INT/FLOAT coercion) ===
 
 # Return v as i64 (0 or 1) if v is JTAG_BOOL, else 0.
-fn json_v_bool(v) {
+fn json_v_bool(v): i64 {
     if (v == 0) { return 0; }
     if (load64(v) != JTAG_BOOL) { return 0; }
     return load64(v + 8);
 }
 
 # Return v as i64 — coerces JTAG_FLOAT via f64_to. Returns 0 on other tags.
-fn json_v_int(v) {
+fn json_v_int(v): i64 {
     if (v == 0) { return 0; }
     var t = load64(v);
     if (t == JTAG_INT) { return load64(v + 8); }
@@ -453,7 +453,7 @@ fn json_v_int(v) {
 }
 
 # Return v as f64 bit pattern — coerces JTAG_INT via f64_from. Returns f64_from(0) on other tags.
-fn json_v_float(v) {
+fn json_v_float(v): i64 {
     if (v == 0) { return 0; }
     var t = load64(v);
     if (t == JTAG_FLOAT) { return load64(v + 8); }
@@ -462,7 +462,7 @@ fn json_v_float(v) {
 }
 
 # Return v as Str ptr if v is JTAG_STR, else 0.
-fn json_v_str(v) {
+fn json_v_str(v): i64 {
     if (v == 0) { return 0; }
     if (load64(v) != JTAG_STR) { return 0; }
     return load64(v + 8);
@@ -471,14 +471,14 @@ fn json_v_str(v) {
 # === Container accessors ===
 
 # Return array length, or 0 if v is not JTAG_ARR.
-fn json_v_arr_len(v) {
+fn json_v_arr_len(v): i64 {
     if (v == 0) { return 0; }
     if (load64(v) != JTAG_ARR) { return 0; }
     return vec_len(load64(v + 8));
 }
 
 # Return array element at index i (json_v* or 0 if out of range / wrong tag).
-fn json_v_arr_get(v, i) {
+fn json_v_arr_get(v, i): i64 {
     if (v == 0) { return 0; }
     if (load64(v) != JTAG_ARR) { return 0; }
     var arr = load64(v + 8);
@@ -488,14 +488,14 @@ fn json_v_arr_get(v, i) {
 }
 
 # Return object pair count, or 0 if v is not JTAG_OBJ.
-fn json_v_obj_len(v) {
+fn json_v_obj_len(v): i64 {
     if (v == 0) { return 0; }
     if (load64(v) != JTAG_OBJ) { return 0; }
     return vec_len(load64(v + 8));
 }
 
 # Return the n-th object key (Str ptr or 0 if out of range / wrong tag).
-fn json_v_obj_key(v, i) {
+fn json_v_obj_key(v, i): i64 {
     if (v == 0) { return 0; }
     if (load64(v) != JTAG_OBJ) { return 0; }
     var pairs = load64(v + 8);
@@ -505,7 +505,7 @@ fn json_v_obj_key(v, i) {
 }
 
 # Return the n-th object value (json_v* or 0 if out of range / wrong tag).
-fn json_v_obj_val(v, i) {
+fn json_v_obj_val(v, i): i64 {
     if (v == 0) { return 0; }
     if (load64(v) != JTAG_OBJ) { return 0; }
     var pairs = load64(v + 8);
@@ -515,7 +515,7 @@ fn json_v_obj_val(v, i) {
 }
 
 # json_v_obj_get — lookup by C-string key. Returns json_v* or 0.
-fn json_v_obj_get(v, key) {
+fn json_v_obj_get(v, key): i64 {
     if (v == 0) { return 0; }
     if (load64(v) != JTAG_OBJ) { return 0; }
     var pairs = load64(v + 8);
@@ -540,14 +540,14 @@ var _jp_buf = 0;
 var _jp_len = 0;
 var _jp_pos = 0;
 
-fn _jp_set_err(msg) {
+fn _jp_set_err(msg): i64 {
     _json_err_msg = msg;
     _json_err_pos = _jp_pos;
     return 0;
 }
 
 # Skip whitespace (space, tab, LF, CR).
-fn _jp_skip_ws() {
+fn _jp_skip_ws(): i64 {
     while (_jp_pos < _jp_len) {
         var c = load8(_jp_buf + _jp_pos);
         if (c == 32 || c == 9 || c == 10 || c == 13) { _jp_pos = _jp_pos + 1; }
@@ -557,7 +557,7 @@ fn _jp_skip_ws() {
 }
 
 # Decode a hex digit (returns -1 if not a hex digit).
-fn _jp_hex(c) {
+fn _jp_hex(c): i64 {
     if (c >= 48) { if (c <= 57)  { return c - 48; } }
     if (c >= 97) { if (c <= 102) { return c - 87; } }
     if (c >= 65) { if (c <= 70)  { return c - 55; } }
@@ -566,7 +566,7 @@ fn _jp_hex(c) {
 
 # Encode codepoint cp as UTF-8 into dst; return bytes written (1..4).
 # Caller handles surrogate pairs before calling.
-fn _jp_emit_utf8(dst, cp) {
+fn _jp_emit_utf8(dst, cp): i64 {
     if (cp < 128)    { store8(dst, cp); return 1; }
     if (cp < 2048)   {
         store8(dst, 192 | (cp >> 6));
@@ -589,7 +589,7 @@ fn _jp_emit_utf8(dst, cp) {
 # Parse a JSON string starting at the opening quote. Returns Str* or 0.
 # On entry, _jp_pos points at the `"`. On success, _jp_pos points just
 # past the closing `"`.
-fn _jp_parse_string() {
+fn _jp_parse_string(): i64 {
     if (_jp_pos >= _jp_len) { _jp_set_err("unexpected EOF in string"); return 0; }
     if (load8(_jp_buf + _jp_pos) != 34) { _jp_set_err("expected string"); return 0; }
     _jp_pos = _jp_pos + 1;
@@ -662,7 +662,7 @@ fn _jp_parse_string() {
 }
 
 # Parse a number. Returns json_v* (INT or FLOAT) or 0.
-fn _jp_parse_number() {
+fn _jp_parse_number(): i64 {
     var start = _jp_pos;
     var is_float = 0;
     # Optional minus
@@ -710,7 +710,7 @@ fn _jp_parse_number() {
 }
 
 # Parse a signed integer from buf[0..len). Returns i64.
-fn _jp_atoi(buf, len) {
+fn _jp_atoi(buf, len): i64 {
     var i = 0;
     var sign = 1;
     if (len > 0 && load8(buf) == 45) { sign = 0 - 1; i = 1; }
@@ -724,7 +724,7 @@ fn _jp_atoi(buf, len) {
 
 # Parse a float from buf[0..len). Returns f64 bit pattern.
 # Handles signed mantissa, optional fraction, optional signed exponent.
-fn _jp_atof(buf, len) {
+fn _jp_atof(buf, len): i64 {
     var i = 0;
     var sign = 1;
     if (len > 0 && load8(buf) == 45) { sign = 0 - 1; i = 1; }
@@ -778,7 +778,7 @@ fn _jp_atof(buf, len) {
 # === Main parse entry ===
 
 # Recursive value parser. Returns json_v* or 0.
-fn _jp_parse_value() {
+fn _jp_parse_value(): i64 {
     _jp_skip_ws();
     if (_jp_pos >= _jp_len) { _jp_set_err("unexpected EOF"); return 0; }
     var c = load8(_jp_buf + _jp_pos);
@@ -817,7 +817,7 @@ fn _jp_parse_value() {
     return 0;
 }
 
-fn _jp_parse_array() {
+fn _jp_parse_array(): i64 {
     if (load8(_jp_buf + _jp_pos) != 91) { _jp_set_err("expected '['"); return 0; }
     _jp_pos = _jp_pos + 1;
     var arr = json_v_arr_new();
@@ -840,7 +840,7 @@ fn _jp_parse_array() {
     return 0;
 }
 
-fn _jp_parse_object() {
+fn _jp_parse_object(): i64 {
     if (load8(_jp_buf + _jp_pos) != 123) { _jp_set_err("expected '{'"); return 0; }
     _jp_pos = _jp_pos + 1;
     var obj = json_v_obj_new();
@@ -872,13 +872,13 @@ fn _jp_parse_object() {
 }
 
 # Public parse entry — Str. Returns json_v* or 0.
-fn json_v_parse(src) {
+fn json_v_parse(src): i64 {
     if (src == 0) { _json_err_msg = "null source"; _json_err_pos = 0; return 0; }
     return json_v_parse_str(str_data(src), str_len(src));
 }
 
 # Public parse entry — explicit cstr+len.
-fn json_v_parse_str(buf, len) {
+fn json_v_parse_str(buf, len): i64 {
     _jp_buf = buf;
     _jp_len = len;
     _jp_pos = 0;
@@ -898,7 +898,7 @@ fn json_v_parse_str(buf, len) {
 # === Serializer ===
 
 # Append a JSON-escaped string into sb, including the surrounding quotes.
-fn _jb_append_string(sb, s) {
+fn _jb_append_string(sb, s): i64 {
     str_builder_add_cstr(sb, "\"");
     var data = str_data(s);
     var slen = str_len(s);
@@ -936,7 +936,7 @@ fn _jb_append_string(sb, s) {
 }
 
 # Emit '\n' followed by (indent * level) spaces. Pretty-mode helper.
-fn _jb_emit_indent(sb, indent, level) {
+fn _jb_emit_indent(sb, indent, level): i64 {
     str_builder_add_byte(sb, 10);
     var total = indent * level;
     var i = 0;
@@ -947,16 +947,11 @@ fn _jb_emit_indent(sb, indent, level) {
     return 0;
 }
 
-# v5.7.47 refactor: unified compact + pretty walker. Pre-v5.7.47
-# this was two near-identical fns (_jb_walk + _jb_walk_pretty)
-# differing only in newline emission and key separator. The
-# `indent` param drives the mode: 0 = compact (no newlines, ":"
-# separator), >0 = pretty (newlines, ": " separator). The
-# empty-container check (`if n > 0`) handles both modes correctly:
-# compact with n=0 emits "[]"/"{}" naturally because the loop
-# doesn't run; pretty needs the same guard to avoid emitting a
-# trailing newline+indent before the closing bracket.
-fn _jb_walk(sb, v, indent, level) {
+# Unified compact + pretty walker. `indent` param drives mode:
+# 0 = compact (":" separator), >0 = pretty (newlines, ": ").
+# `if n > 0` guards empty-container case for both modes.
+# See CHANGELOG [5.7.47].
+fn _jb_walk(sb, v, indent, level): i64 {
     if (v == 0) { str_builder_add_cstr(sb, "null"); return 0; }
     var t = load64(v);
     if      (t == JTAG_NULL)  { str_builder_add_cstr(sb, "null"); }
@@ -1020,7 +1015,7 @@ fn _jb_walk(sb, v, indent, level) {
 }
 
 # json_v_build — serialize a tagged value tree to a Str (compact).
-fn json_v_build(v) {
+fn json_v_build(v): i64 {
     var sb = str_builder_new();
     _jb_walk(sb, v, 0, 0);
     return str_builder_build(sb);
@@ -1028,7 +1023,7 @@ fn json_v_build(v) {
 
 # json_v_build_pretty — serialize a tagged value tree with newlines + indent.
 # `indent` is the spaces per level; `indent <= 0` falls back to compact.
-fn json_v_build_pretty(v, indent) {
+fn json_v_build_pretty(v, indent): i64 {
     if (indent <= 0) { return json_v_build(v); }
     var sb = str_builder_new();
     _jb_walk(sb, v, indent, 0);
@@ -1079,7 +1074,7 @@ var _JS_HANDLER_SIZE = 96;
 
 # Allocate a handler with all callback slots 0 (no-op). `ctx` is the
 # user pointer threaded through every callback as its first argument.
-fn json_stream_handler_new(ctx) {
+fn json_stream_handler_new(ctx): i64 {
     var h = alloc(_JS_HANDLER_SIZE);
     var i = 0;
     while (i < _JS_HANDLER_SIZE) { store64(h + i, 0); i = i + 8; }
@@ -1089,17 +1084,17 @@ fn json_stream_handler_new(ctx) {
 
 # Bind callback `fp` to event `event_id`. Returns 0 on success, -1 on
 # bad event_id. Pass fp=0 to clear an event.
-fn json_stream_on(h, event_id, fp) {
+fn json_stream_on(h, event_id, fp): i64 {
     if (event_id < 0 || event_id >= JS_EV_COUNT) { return 0 - 1; }
     store64(h + 8 + event_id * 8, fp);
     return 0;
 }
 
-fn _js_ctx(h) { return load64(h); }
-fn _js_cb(h, event_id) { return load64(h + 8 + event_id * 8); }
+fn _js_ctx(h): i64 { return load64(h); }
+fn _js_cb(h, event_id): i64 { return load64(h + 8 + event_id * 8); }
 
 # Set last-error globals + fire on_error if registered.
-fn _js_emit_error(h, msg) {
+fn _js_emit_error(h, msg): i64 {
     _json_err_msg = msg;
     _json_err_pos = _jp_pos;
     var fp = _js_cb(h, JS_EV_ERROR);
@@ -1110,7 +1105,7 @@ fn _js_emit_error(h, msg) {
 # Relay a _jp_set_err-set error through to on_error (for paths that
 # call _jp_parse_string and get a 0 back — error globals are already
 # populated, just need to forward).
-fn _js_relay_err(h) {
+fn _js_relay_err(h): i64 {
     var fp = _js_cb(h, JS_EV_ERROR);
     if (fp != 0) { fncall3(fp, _js_ctx(h), _json_err_msg, _json_err_pos); }
     return 0;
@@ -1119,7 +1114,7 @@ fn _js_relay_err(h) {
 # Number parser — mirrors _jp_parse_number's lex but emits via
 # callback instead of allocating json_v*. Returns 0 on success, -1 on
 # error.
-fn _js_parse_number(h) {
+fn _js_parse_number(h): i64 {
     var start = _jp_pos;
     var is_float = 0;
     if (_jp_pos < _jp_len && load8(_jp_buf + _jp_pos) == 45) { _jp_pos = _jp_pos + 1; }
@@ -1166,7 +1161,7 @@ fn _js_parse_number(h) {
     return 0;
 }
 
-fn _js_parse_array(h) {
+fn _js_parse_array(h): i64 {
     if (load8(_jp_buf + _jp_pos) != 91) { _js_emit_error(h, "expected '['"); return 0 - 1; }
     _jp_pos = _jp_pos + 1;
     var fp_s = _js_cb(h, JS_EV_ARRAY_START);
@@ -1194,7 +1189,7 @@ fn _js_parse_array(h) {
     return 0;
 }
 
-fn _js_parse_object(h) {
+fn _js_parse_object(h): i64 {
     if (load8(_jp_buf + _jp_pos) != 123) { _js_emit_error(h, "expected '{'"); return 0 - 1; }
     _jp_pos = _jp_pos + 1;
     var fp_s = _js_cb(h, JS_EV_OBJECT_START);
@@ -1231,7 +1226,7 @@ fn _js_parse_object(h) {
     return 0;
 }
 
-fn _js_parse_value(h) {
+fn _js_parse_value(h): i64 {
     _jp_skip_ws();
     if (_jp_pos >= _jp_len) { _js_emit_error(h, "unexpected EOF"); return 0 - 1; }
     var c = load8(_jp_buf + _jp_pos);
@@ -1285,7 +1280,7 @@ fn _js_parse_value(h) {
 # success, -1 on error. After error, callers can read json_last_error()
 # and json_last_error_pos(); the JS_EV_ERROR callback (if registered)
 # already fired.
-fn json_stream_parse(buf, len, h) {
+fn json_stream_parse(buf, len, h): i64 {
     _jp_buf = buf;
     _jp_len = len;
     _jp_pos = 0;
@@ -1301,7 +1296,7 @@ fn json_stream_parse(buf, len, h) {
 }
 
 # Convenience: stream-parse from a Str.
-fn json_stream_parse_str(src, h) {
+fn json_stream_parse_str(src, h): i64 {
     if (src == 0) { _json_err_msg = "null source"; _json_err_pos = 0; return 0 - 1; }
     return json_stream_parse(str_data(src), str_len(src), h);
 }
@@ -1330,7 +1325,7 @@ fn json_stream_parse_str(src, h) {
 
 # Look up (buf, len) as a key in OBJ value `v`. Length-explicit so
 # tokens with interior NUL bytes (theoretical via `\u0000`) still match.
-fn _jp_obj_lookup(v, buf, len) {
+fn _jp_obj_lookup(v, buf, len): i64 {
     if (load64(v) != JTAG_OBJ) { return 0; }
     var pairs = load64(v + 8);
     var n = vec_len(pairs);
@@ -1351,7 +1346,7 @@ fn _jp_obj_lookup(v, buf, len) {
 # Parse (buf, len) as a strict array index per RFC 6901 §4. Returns
 # index >= 0, or -1 on invalid (leading zero, non-digit, empty,
 # the "-" next-element token, etc.).
-fn _jp_parse_idx(buf, len) {
+fn _jp_parse_idx(buf, len): i64 {
     if (len == 0) { return 0 - 1; }
     var c0 = load8(buf);
     if (c0 == 48) { if (len == 1) { return 0; } return 0 - 1; }
@@ -1371,7 +1366,7 @@ fn _jp_parse_idx(buf, len) {
 # allocated buffer. Layout: u64 length prefix at offset 0, decoded
 # bytes from offset 8, NUL byte at offset 8+len. Returns the alloc
 # pointer, or 0 on bad escape (lone "~" or "~X" where X != 0/1).
-fn _jp_token_unescape(src, src_len) {
+fn _jp_token_unescape(src, src_len): i64 {
     var out = alloc(src_len + 8 + 1);
     var oi = 0;
     var i = 0;
@@ -1397,7 +1392,7 @@ fn _jp_token_unescape(src, src_len) {
 }
 
 # Public entry — explicit buf+len pointer string.
-fn json_v_pointer_cstr(v, ptr, plen) {
+fn json_v_pointer_cstr(v, ptr, plen): i64 {
     if (v == 0) { return 0; }
     if (plen == 0) { return v; }
     if (load8(ptr) != 47) { return 0; }   # must start with '/'
@@ -1433,7 +1428,7 @@ fn json_v_pointer_cstr(v, ptr, plen) {
 }
 
 # Convenience: pointer as a Str.
-fn json_v_pointer(v, ptr) {
+fn json_v_pointer(v, ptr): i64 {
     if (ptr == 0) { return v; }
     return json_v_pointer_cstr(v, str_data(ptr), str_len(ptr));
 }

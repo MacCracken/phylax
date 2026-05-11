@@ -1,1 +1,21 @@
-/home/macro/.cyrius/deps/bote/2.7.1/src/events_majra.cyr
+# bote::events::majra — MajraEvents adapter
+# Mirrors rust-old/src/events.rs::majra_impl::MajraEvents.
+#
+# Wraps a majra PubSub instance with bote's EventSink contract.
+# topic and payload are passed straight through to pubsub_publish.
+#
+# Wire-up:
+#   var ps = pubsub_new();
+#   var sink = event_sink_new(&majra_events_publish, ps);
+#   dispatcher_set_events(d, sink);
+#
+# Subscribe to bote topics from your own code:
+#   var rx = pubsub_subscribe(ps, "bote/tool/#");
+
+# EventSink-compatible publish function.
+# ctx is a majra PubSub ptr.
+fn majra_events_publish(ctx, topic, payload) {
+    if (ctx == 0) { return 0; }
+    pubsub_publish(ctx, topic, payload);
+    return 0;
+}

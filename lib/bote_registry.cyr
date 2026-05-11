@@ -1,1 +1,327 @@
-/home/macro/.cyrius/deps/bote/2.7.1/src/registry.cyr
+# bote::registry — Tool registration, discovery, and parameter validation
+# Mirrors rust-old/src/registry.rs
+#
+# CompiledSchema integration is deferred until src/schema.cyr lands.
+# For now, validate_params performs:
+#   1. "params is JSON object" check (leading non-ws byte == '{')
+#   2. Required-field-present check via lib/json.cyr (flat parse)
+
+include "lib/hashmap.cyr"
+include "lib/json.cyr"
+
+# ================================================================
+# ToolAnnotations — tri-state hint flags (MCP 2025-11-25)
+# ================================================================
+#
+# Each hint is i64: 0 = unset, 1 = true, 2 = false.
+# Serialization: skip when unset; emit "true" or "false" otherwise.
+#
+# Layout (32 bytes):
+#   +0  read_only_hint
+#   +8  destructive_hint
+#   +16 idempotent_hint
+#   +24 open_world_hint
+
+enum AnnHint {
+    HINT_UNSET = 0;
+    HINT_TRUE = 1;
+    HINT_FALSE = 2;
+}
+
+fn ann_new() {
+    var a = alloc(32);
+    store64(a, HINT_UNSET);
+    store64(a + 8, HINT_UNSET);
+    store64(a + 16, HINT_UNSET);
+    store64(a + 24, HINT_UNSET);
+    return a;
+}
+
+fn ann_read_only_hint(a) { return load64(a); }
+fn ann_destructive_hint(a) { return load64(a + 8); }
+fn ann_idempotent_hint(a) { return load64(a + 16); }
+fn ann_open_world_hint(a) { return load64(a + 24); }
+
+fn ann_set_read_only(a, v) { store64(a, v); return a; }
+fn ann_set_destructive(a, v) { store64(a + 8, v); return a; }
+fn ann_set_idempotent(a, v) { store64(a + 16, v); return a; }
+fn ann_set_open_world(a, v) { store64(a + 24, v); return a; }
+
+# Preset: read-only tool (no side effects).
+fn ann_read_only() {
+    var a = ann_new();
+    store64(a, HINT_TRUE);
+    store64(a + 8, HINT_FALSE);
+    store64(a + 16, HINT_TRUE);
+    store64(a + 24, HINT_FALSE);
+    return a;
+}
+
+# Preset: destructive tool.
+fn ann_destructive() {
+    var a = ann_new();
+    store64(a, HINT_FALSE);
+    store64(a + 8, HINT_TRUE);
+    store64(a + 16, HINT_FALSE);
+    store64(a + 24, HINT_TRUE);
+    return a;
+}
+
+# ================================================================
+# ToolSchema — JSON Schema subset
+# ================================================================
+#
+# Layout (24 bytes):
+#   +0  schema_type cstr ("object", "string", ...)
+#   +8  properties  vec of {key_cstr, value_cstr_raw_json} pairs (16 bytes each) or 0
+#   +16 required    vec of cstr or 0
+
+fn schema_new(schema_type, properties_vec, required_vec) {
+    var s = alloc(24);
+    store64(s, schema_type);
+    store64(s + 8, properties_vec);
+    store64(s + 16, required_vec);
+    return s;
+}
+
+fn schema_type(s) { return load64(s); }
+fn schema_properties(s) { return load64(s + 8); }
+fn schema_required(s) { return load64(s + 16); }
+
+# Property pair (16 bytes): key_cstr, value_cstr (raw JSON literal)
+fn schema_prop_new(key, value) {
+    var p = alloc(16);
+    store64(p, key);
+    store64(p + 8, value);
+    return p;
+}
+fn schema_prop_key(p) { return load64(p); }
+fn schema_prop_value(p) { return load64(p + 8); }
+
+# ================================================================
+# ToolDef
+# ================================================================
+#
+# Layout (56 bytes):
+#   +0  name         cstr
+#   +8  description  cstr
+#   +16 input_schema ptr to ToolSchema
+#   +24 version      cstr or 0
+#   +32 deprecated   cstr or 0 (deprecation message)
+#   +40 annotations  ptr to ToolAnnotations or 0
+#   +48 compiled     ptr to CompiledSchema or 0 (set by tool_def_with_compiled)
+
+fn tool_def_new(name, description, input_schema) {
+    var d = alloc(56);
+    store64(d, name);
+    store64(d + 8, description);
+    store64(d + 16, input_schema);
+    store64(d + 24, 0);
+    store64(d + 32, 0);
+    store64(d + 40, 0);
+    store64(d + 48, 0);
+    return d;
+}
+
+fn tool_def_with_version(d, version) { store64(d + 24, version); return d; }
+fn tool_def_with_deprecated(d, msg) { store64(d + 32, msg); return d; }
+fn tool_def_with_annotations(d, ann) { store64(d + 40, ann); return d; }
+fn tool_def_with_compiled(d, c) { store64(d + 48, c); return d; }
+
+fn tool_def_name(d) { return load64(d); }
+fn tool_def_description(d) { return load64(d + 8); }
+fn tool_def_input_schema(d) { return load64(d + 16); }
+fn tool_def_version(d) { return load64(d + 24); }
+fn tool_def_deprecated(d) { return load64(d + 32); }
+fn tool_def_annotations(d) { return load64(d + 40); }
+fn tool_def_compiled(d) { return load64(d + 48); }
+
+# ================================================================
+# ToolRegistry
+# ================================================================
+#
+# Layout (24 bytes):
+#   +0  entries  hashmap: name_cstr -> ToolDef ptr
+#   +8  versions hashmap: name_cstr -> vec of ToolDef ptrs
+#   +16 names    vec of name_cstr (insertion order, for list())
+
+fn registry_new() {
+    var r = alloc(24);
+    store64(r, map_new());
+    store64(r + 8, map_new());
+    store64(r + 16, vec_new());
+    return r;
+}
+
+fn registry_entries(r) { return load64(r); }
+fn registry_versions_map(r) { return load64(r + 8); }
+fn registry_names(r) { return load64(r + 16); }
+
+fn registry_register(r, tool_def) {
+    var name = tool_def_name(tool_def);
+    var entries = registry_entries(r);
+    var names = registry_names(r);
+    if (map_has(entries, name) == 0) {
+        vec_push(names, name);
+    }
+    map_set(entries, name, tool_def);
+
+    var ver = tool_def_version(tool_def);
+    if (ver != 0) {
+        var vmap = registry_versions_map(r);
+        var bucket = map_get(vmap, name);
+        if (bucket == 0) {
+            bucket = vec_new();
+            map_set(vmap, name, bucket);
+        }
+        vec_push(bucket, tool_def);
+    }
+    return 0;
+}
+
+fn registry_get(r, name) {
+    return map_get(registry_entries(r), name);
+}
+
+fn registry_contains(r, name) {
+    return map_has(registry_entries(r), name);
+}
+
+fn registry_len(r) {
+    return map_count(registry_entries(r));
+}
+
+fn registry_is_empty(r) {
+    if (registry_len(r) == 0) { return 1; }
+    return 0;
+}
+
+# Return a vec of ToolDef pointers in insertion order.
+fn registry_list(r) {
+    var out = vec_new();
+    var names = registry_names(r);
+    var entries = registry_entries(r);
+    var n = vec_len(names);
+    var i = 0;
+    while (i < n) {
+        var name = vec_get(names, i);
+        if (map_has(entries, name) == 1) {
+            vec_push(out, map_get(entries, name));
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn registry_get_versioned(r, name, version) {
+    var bucket = map_get(registry_versions_map(r), name);
+    if (bucket == 0) { return 0; }
+    var n = vec_len(bucket);
+    var i = 0;
+    while (i < n) {
+        var t = vec_get(bucket, i);
+        var v = tool_def_version(t);
+        if (v != 0 && streq(v, version) == 1) { return t; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn registry_list_versions(r, name) {
+    var bucket = map_get(registry_versions_map(r), name);
+    if (bucket == 0) { return vec_new(); }
+    return bucket;
+}
+
+# Remove a tool. Returns the removed ToolDef ptr or 0 if absent.
+fn registry_deregister(r, name) {
+    var entries = registry_entries(r);
+    var existing = map_get(entries, name);
+    if (existing == 0) { return 0; }
+    map_delete(entries, name);
+    map_delete(registry_versions_map(r), name);
+    # Compact the names vec.
+    var names = registry_names(r);
+    var n = vec_len(names);
+    var i = 0;
+    while (i < n) {
+        if (streq(vec_get(names, i), name) == 1) {
+            vec_remove(names, i);
+            i = n;
+        }
+        i = i + 1;
+    }
+    return existing;
+}
+
+# Mark a tool deprecated with a message. No-op if tool absent.
+fn registry_deprecate(r, name, message) {
+    var t = registry_get(r, name);
+    if (t == 0) { return 0; }
+    tool_def_with_deprecated(t, message);
+    return 0;
+}
+
+# ================================================================
+# validate_params
+# ================================================================
+#
+# Returns 0 on success, or a BoteError ptr on failure.
+# Caller checks `bote_err_tag(err)` for the specific failure mode.
+
+# Trim leading whitespace; return first non-ws byte (0 if EOS).
+fn _vp_first_nonws(s) {
+    if (s == 0) { return 0; }
+    var i = 0;
+    while (1 == 1) {
+        var c = load8(s + i);
+        if (c == 0) { return 0; }
+        if (c == 32 || c == 9 || c == 10 || c == 13) { i = i + 1; }
+        else { return c; }
+    }
+    return 0;
+}
+
+fn registry_validate_params(r, name, params_cstr) {
+    if (registry_contains(r, name) == 0) {
+        return bote_err_new(ERR_TOOL_NOT_FOUND, name, 0);
+    }
+    var t = registry_get(r, name);
+
+    # 1. params must be a JSON object.
+    if (_vp_first_nonws(params_cstr) != 123) {
+        return bote_err_new(ERR_INVALID_PARAMS, name, "params must be an object");
+    }
+
+    # 2. Compiled schema path (preferred — full type/enum/bounds/nested checks).
+    var compiled = tool_def_compiled(t);
+    if (compiled != 0) {
+        var violations = compiled_validate(compiled, params_cstr);
+        if (vec_len(violations) > 0) {
+            return bote_err_with_violations(ERR_SCHEMA_VIOLATION, name, violations);
+        }
+        return 0;
+    }
+
+    # 3. Fallback: required-field-present check via lib/json.cyr.
+    var schema = tool_def_input_schema(t);
+    var required = schema_required(schema);
+    if (required == 0) { return 0; }
+    var nreq = vec_len(required);
+    if (nreq == 0) { return 0; }
+
+    var pairs = json_parse(str_from(params_cstr));
+    var i = 0;
+    while (i < nreq) {
+        var req_key = vec_get(required, i);
+        if (json_get(pairs, str_from(req_key)) == 0) {
+            var sb = str_builder_new();
+            str_builder_add_cstr(sb, "missing required field: ");
+            str_builder_add_cstr(sb, req_key);
+            var msg = str_builder_build(sb);
+            return bote_err_new(ERR_INVALID_PARAMS, name, str_data(msg));
+        }
+        i = i + 1;
+    }
+    return 0;
+}

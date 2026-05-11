@@ -13,7 +13,7 @@
 # `# O_RDONLY`).
 
 # Build argv array and execve. Called in child after fork. Does not return.
-fn _exec3(cmd, arg1, arg2) {
+fn _exec3(cmd, arg1, arg2): i64 {
     var argv[4];
     store64(&argv, cmd);
     var ai = 1;
@@ -27,7 +27,7 @@ fn _exec3(cmd, arg1, arg2) {
 }
 
 # Run a command and wait for it. Returns Result(exit_code).
-fn run(cmd, arg1, arg2) {
+fn run(cmd, arg1, arg2): Result {
     var pid = sys_fork();
     if (pid < 0) { return Err(0 - pid); }
     if (pid == 0) { _exec3(cmd, arg1, arg2); }
@@ -41,7 +41,7 @@ fn run(cmd, arg1, arg2) {
 
 # Run a command and capture stdout into a buffer.
 # Returns Result(bytes_read).
-fn run_capture(cmd, arg1, arg2, buf, buflen) {
+fn run_capture(cmd, arg1, arg2, buf, buflen): Result {
     var pipefd[16];
     var pr = sys_pipe(&pipefd);
     if (pr < 0) { return Err(0 - pr); }
@@ -81,7 +81,7 @@ fn run_capture(cmd, arg1, arg2, buf, buflen) {
 
 # Spawn a command in the background (don't wait).
 # Returns Result(child_pid).
-fn spawn(cmd, arg1, arg2) {
+fn spawn(cmd, arg1, arg2): Result {
     var pid = sys_fork();
     if (pid < 0) { return Err(0 - pid); }
     if (pid == 0) { _exec3(cmd, arg1, arg2); }
@@ -89,7 +89,7 @@ fn spawn(cmd, arg1, arg2) {
 }
 
 # Wait for a specific pid. Returns Result(exit_code).
-fn wait_pid(pid) {
+fn wait_pid(pid): Result {
     var status_buf[1];
     var r = sys_waitpid(pid, &status_buf, 0);
     if (r < 0) { return Err(0 - r); }
@@ -100,10 +100,10 @@ fn wait_pid(pid) {
 }
 
 # Get current process ID
-fn getpid() { return sys_getpid(); }
+fn getpid(): i64 { return sys_getpid(); }
 
 # Get parent process ID
-fn getppid() { return sys_getppid(); }
+fn getppid(): i64 { return sys_getppid(); }
 
 # ================================================================
 # Enhanced subprocess — variable args via vec, env passing
@@ -143,7 +143,7 @@ fn getppid() { return sys_getppid(); }
 # v5.10.44: docstring now explicitly cstr-only; Str pushers MUST
 # use `exec_vec_str` instead (silently fails otherwise — see family
 # header comment above).
-fn exec_vec(args) {
+fn exec_vec(args): i64 {
     var argc = vec_len(args);
     if (argc < 1) { return 0 - 1; }
     var cmd = vec_get(args, 0);
@@ -173,7 +173,7 @@ fn exec_vec(args) {
 # Run command with cstr args vec and capture stdout. Returns bytes
 # read. buf must be pre-allocated.
 # v5.10.44: cstr-only; Str pushers use `exec_capture_str`.
-fn exec_capture(args, buf, buflen) {
+fn exec_capture(args, buf, buflen): i64 {
     var argc = vec_len(args);
     if (argc < 1) { return 0 - 1; }
     var cmd = vec_get(args, 0);
@@ -217,7 +217,7 @@ fn exec_capture(args, buf, buflen) {
 # env is a vec of cstr "KEY=VALUE" pointers.
 # v5.10.44: cstr-only on both args + env; Str pushers use
 # `exec_env_str`.
-fn exec_env(args, env) {
+fn exec_env(args, env): i64 {
     var argc = vec_len(args);
     if (argc < 1) { return 0 - 1; }
     var cmd = vec_get(args, 0);
@@ -270,7 +270,7 @@ fn exec_env(args, env) {
 # Run command with a vec of Str argv elements. Returns exit code
 # or -1. Same semantics as exec_vec; the only difference is the
 # argv element shape (Str fat-pointer rather than cstr).
-fn exec_vec_str(args) {
+fn exec_vec_str(args): i64 {
     var argc = vec_len(args);
     if (argc < 1) { return 0 - 1; }
     var cmd = str_data(vec_get(args, 0));
@@ -298,7 +298,7 @@ fn exec_vec_str(args) {
 
 # Run command with Str args vec and capture stdout. Returns bytes
 # read. buf must be pre-allocated.
-fn exec_capture_str(args, buf, buflen) {
+fn exec_capture_str(args, buf, buflen): i64 {
     var argc = vec_len(args);
     if (argc < 1) { return 0 - 1; }
     var cmd = str_data(vec_get(args, 0));
@@ -340,7 +340,7 @@ fn exec_capture_str(args, buf, buflen) {
 
 # Run command with Str args vec + Str env vec.
 # env is a vec of "KEY=VALUE" Str pointers.
-fn exec_env_str(args, env) {
+fn exec_env_str(args, env): i64 {
     var argc = vec_len(args);
     if (argc < 1) { return 0 - 1; }
     var cmd = str_data(vec_get(args, 0));
@@ -378,7 +378,7 @@ fn exec_env_str(args, env) {
 # the pre-v5.10.43 byte-or-pointer impl, would crash under the
 # new STR-path dispatch) to 32 (byte literal for space). Hits the
 # byte path of str_split's v5.10.43 runtime dispatch.
-fn exec_cmd(cmdline) {
+fn exec_cmd(cmdline): i64 {
     var args = vec_new();
     var parts = str_split(str_from(cmdline), 32);
     var pi = 0;

@@ -1,1 +1,232 @@
-/home/macro/.cyrius/deps/bote/2.7.1/src/content.cyr
+# bote::content — typed MCP content blocks (spec 2025-11-25).
+#
+# A tool handler that wants to return anything richer than a plain text
+# result builds one or more blocks with the constructors below, collects
+# them into a vec, and returns `content_array(blocks)` or
+# `content_array_error(blocks)`. `src/bridge.cyr`'s `wrap_tool_result`
+# is already a pass-through when a result has a top-level `content`
+# array, so handlers can opt into blocks without any transport changes.
+#
+# Five block types per MCP:
+#   text           {"type":"text","text":"..."}
+#   image          {"type":"image","data":"<b64>","mimeType":"..."}
+#   audio          {"type":"audio","data":"<b64>","mimeType":"..."}
+#   resource       {"type":"resource","resource":{"uri":"...","mimeType":"...","text":"..."}}
+#                  (embedded — the resource's text body travels in the envelope)
+#   resource_link  {"type":"resource_link","uri":"...","name":"...","mimeType":"..."}
+#                  (reference — the client fetches by URI)
+#
+# Convention: every constructor returns an alloc'd cstr. Every string
+# argument is a cstr; `_json_emit_escaped` handles JSON quoting at the
+# boundary (dispatched from src/dispatch.cyr). mimeType strings are
+# passed through unchecked — the handler is responsible for RFC 6838
+# compliance.
+
+# ================================================================
+# Text block
+# ================================================================
+
+fn content_text(text) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"type\":\"text\",\"text\":\"");
+    if (text != 0) { _json_emit_escaped(sb, text); }
+    str_builder_add_cstr(sb, "\"}");
+    return str_data(str_builder_build(sb));
+}
+
+# ================================================================
+# Binary blocks (image, audio) — both take base64-encoded data +
+# a mimeType. The constructors are structurally identical; factored
+# through a private helper to keep the two spec variants obvious.
+# ================================================================
+
+fn _content_binary(kind, b64_data, mime) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"type\":\"");
+    str_builder_add_cstr(sb, kind);
+    str_builder_add_cstr(sb, "\",\"data\":\"");
+    if (b64_data != 0) { _json_emit_escaped(sb, b64_data); }
+    str_builder_add_cstr(sb, "\",\"mimeType\":\"");
+    if (mime != 0) { _json_emit_escaped(sb, mime); }
+    str_builder_add_cstr(sb, "\"}");
+    return str_data(str_builder_build(sb));
+}
+
+fn content_image(b64_data, mime) { return _content_binary("image", b64_data, mime); }
+fn content_audio(b64_data, mime) { return _content_binary("audio", b64_data, mime); }
+
+# ================================================================
+# Resource block — embedded resource contents travel in the envelope.
+# Any of text / mime / uri may be 0 (omitted from the emitted object).
+# Per MCP spec, `uri` is required and `text` is required for text
+# resources; handlers should supply both. Binary resources use a
+# different shape (blob) — add a constructor variant when needed.
+# ================================================================
+
+fn content_resource(uri, mime, text) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"type\":\"resource\",\"resource\":{\"uri\":\"");
+    if (uri != 0) { _json_emit_escaped(sb, uri); }
+    str_builder_add_cstr(sb, "\"");
+    if (mime != 0) {
+        str_builder_add_cstr(sb, ",\"mimeType\":\"");
+        _json_emit_escaped(sb, mime);
+        str_builder_add_cstr(sb, "\"");
+    }
+    if (text != 0) {
+        str_builder_add_cstr(sb, ",\"text\":\"");
+        _json_emit_escaped(sb, text);
+        str_builder_add_cstr(sb, "\"");
+    }
+    str_builder_add_cstr(sb, "}}");
+    return str_data(str_builder_build(sb));
+}
+
+# ================================================================
+# Resource link — reference only; client fetches the URI itself.
+# ================================================================
+
+fn content_resource_link(uri, name, mime) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"type\":\"resource_link\",\"uri\":\"");
+    if (uri != 0) { _json_emit_escaped(sb, uri); }
+    str_builder_add_cstr(sb, "\"");
+    if (name != 0) {
+        str_builder_add_cstr(sb, ",\"name\":\"");
+        _json_emit_escaped(sb, name);
+        str_builder_add_cstr(sb, "\"");
+    }
+    if (mime != 0) {
+        str_builder_add_cstr(sb, ",\"mimeType\":\"");
+        _json_emit_escaped(sb, mime);
+        str_builder_add_cstr(sb, "\"");
+    }
+    str_builder_add_cstr(sb, "}");
+    return str_data(str_builder_build(sb));
+}
+
+# ================================================================
+# Envelopes — collect blocks into a tool-result response.
+# Each block in `blocks` is an already-built cstr (one of the
+# constructors above, or any caller-supplied object).
+# ================================================================
+
+fn _content_blocks_array(sb, blocks) {
+    str_builder_add_cstr(sb, "[");
+    var n = vec_len(blocks);
+    var i = 0;
+    while (i < n) {
+        if (i > 0) { str_builder_add_cstr(sb, ","); }
+        str_builder_add_cstr(sb, vec_get(blocks, i));
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, "]");
+    return 0;
+}
+
+# {"content":[...]}
+fn content_array(blocks) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"content\":");
+    _content_blocks_array(sb, blocks);
+    str_builder_add_cstr(sb, "}");
+    return str_data(str_builder_build(sb));
+}
+
+# {"content":[...],"isError":true} — marks a failed tool execution that
+# still wants to return content (MCP spec: errors may carry explanation
+# content, distinguished from protocol errors by the isError flag).
+fn content_array_error(blocks) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"content\":");
+    _content_blocks_array(sb, blocks);
+    str_builder_add_cstr(sb, ",\"isError\":true}");
+    return str_data(str_builder_build(sb));
+}
+
+# Single-block shorthand: wrap one already-built block cstr.
+fn content_single(block) {
+    var v = vec_new();
+    vec_push(v, block);
+    return content_array(v);
+}
+
+# Convenience: a plain text response (equivalent to
+# content_single(content_text(s)), saves a vec alloc for the common case).
+fn content_text_response(text) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"content\":[{\"type\":\"text\",\"text\":\"");
+    if (text != 0) { _json_emit_escaped(sb, text); }
+    str_builder_add_cstr(sb, "\"}]}");
+    return str_data(str_builder_build(sb));
+}
+
+# ================================================================
+# Binary resource (blob) variant of content_resource. The MCP spec
+# distinguishes text resources (carry a `text` field) from binary
+# resources (carry a `blob` field with base64-encoded data). Use this
+# constructor when the resource body isn't UTF-8.
+# ================================================================
+
+fn content_resource_blob(uri, mime, b64_data) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"type\":\"resource\",\"resource\":{\"uri\":\"");
+    if (uri != 0) { _json_emit_escaped(sb, uri); }
+    str_builder_add_cstr(sb, "\"");
+    if (mime != 0) {
+        str_builder_add_cstr(sb, ",\"mimeType\":\"");
+        _json_emit_escaped(sb, mime);
+        str_builder_add_cstr(sb, "\"");
+    }
+    if (b64_data != 0) {
+        str_builder_add_cstr(sb, ",\"blob\":\"");
+        _json_emit_escaped(sb, b64_data);
+        str_builder_add_cstr(sb, "\"");
+    }
+    str_builder_add_cstr(sb, "}}");
+    return str_data(str_builder_build(sb));
+}
+
+# Annotations (MCP spec optional metadata): take a pre-built block cstr
+# and splice an `annotations` field in before the closing `}`. Either
+# arg may be null/empty/-1; if both are absent the input is returned
+# unchanged. Caller responsible for valid block input (any of the
+# constructors above produces well-formed JSON).
+fn content_with_annotations(block, audience, priority) {
+    if (block == 0) { return block; }
+    var has_a = 0;
+    if (audience != 0) { if (vec_len(audience) > 0) { has_a = 1; } }
+    var has_p = 0;
+    if (priority >= 0) { has_p = 1; }
+    if (has_a == 0 && has_p == 0) { return block; }
+    var bn = strlen(block);
+    if (bn < 2) { return block; }
+    if (load8(block + bn - 1) != 125) { return block; }   # '}'
+    var sb = str_builder_new();
+    # copy block minus trailing '}' as a single buffer
+    var pre = alloc(bn);
+    memcpy(pre, block, bn - 1);
+    store8(pre + bn - 1, 0);
+    str_builder_add_cstr(sb, pre);
+    str_builder_add_cstr(sb, ",\"annotations\":{");
+    if (has_a == 1) {
+        str_builder_add_cstr(sb, "\"audience\":[");
+        var an = vec_len(audience);
+        var ai = 0;
+        while (ai < an) {
+            if (ai > 0) { str_builder_add_cstr(sb, ","); }
+            str_builder_add_cstr(sb, "\"");
+            _json_emit_escaped(sb, vec_get(audience, ai));
+            str_builder_add_cstr(sb, "\"");
+            ai = ai + 1;
+        }
+        str_builder_add_cstr(sb, "]");
+    }
+    if (has_p == 1) {
+        if (has_a == 1) { str_builder_add_cstr(sb, ","); }
+        str_builder_add_cstr(sb, "\"priority\":");
+        str_builder_add_int(sb, priority);
+    }
+    str_builder_add_cstr(sb, "}}");
+    return str_data(str_builder_build(sb));
+}
