@@ -2,6 +2,118 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.1.1] - 2026-05-11
+
+Toolchain + dep pin sweep, dependency-resolution model cleanup, and
+new doc-health ledger. No source changes in `src/` or `tests/`; the
+binary surface and detection behavior are unchanged from 1.1.0.
+
+### Changed
+
+- **Cyrius toolchain pin: 5.7.48 → 5.10.44.** Picks up the 5.8.x →
+  5.10.x cycle's stdlib + frontend deltas. Notable for phylax:
+  `lib/syscalls_x86_64_linux.cyr` in the 5.10.x snapshot now ships
+  `sys_stat` / `sys_fstat` wrappers, making phylax's local
+  `src/syscall_x86_64_linux.cyr` x86 backfill redundant (the
+  duplicate-fn warnings surface but the build is otherwise clean;
+  scheduled for removal in the 5.11.x / 5.12.x sweep).
+
+- **First-party dep pins, all bumped to latest released:**
+  - **sakshi 2.1.0 → 2.2.4** — minor + patch cycle, structured-logging surface unchanged at phylax's call sites.
+  - **sigil 2.9.5 → 3.1.1** — major version. Phylax's only sigil
+    surface is `sha256_hex`, which is unchanged in body (only a
+    return-type annotation added between 2.9.5 and 3.x). The 3.x
+    bundle pulls new transitive stdlib references (`ct_eq_bytes_lens`,
+    `ct_select`, `_keccak_absorb`, `_keccak_f1600`, `shake256`,
+    `random_bytes`); see the stdlib addition below.
+  - **majra 2.4.1 → 2.4.4** — minor refresh, pubsub/counter surface
+    unchanged at phylax's transitive call sites (via bote's
+    `events_majra` module).
+  - **bote 2.5.1 → 2.7.1** — bote 2.6.3+ added a transitive
+    `[deps.libro]` pin at libro 2.6.2; see new dep below.
+
+- **New direct dep: `[deps.libro] = 2.6.3`.** Overrides bote's
+  transitive libro 2.6.2 pin. libro 2.6.2 calls bare
+  `ct_eq(data_a, len_a, data_b, len_b)` at `dist/libro.cyr:116` —
+  the stdlib only exposes `ct_eq_bytes(a, b, n)` and
+  `ct_eq_bytes_lens(a, a_len, b, b_len)`, so the link fails with
+  `undefined function 'ct_eq' (will crash at runtime)`. libro 2.6.3
+  fixed the call site to `ct_eq_bytes_lens`. Phylax itself doesn't
+  consume the libro surface — the bytes get linked because bote's
+  bundle references libro symbols transitively. Hold this override
+  until bote bumps its own libro pin past 2.6.2.
+
+- **Stdlib additions: `ct`, `keccak`, `random`.** The sigil 3.x
+  bundle's PQ (ML-DSA-65) + AES-GCM surfaces reference these
+  symbols; the linker needs them declared even though DCE prunes
+  the call sites in phylax's binary (phylax consumes only
+  `sha256_hex`).
+
+- **`lib/` is no longer tracked.** Resolved deps move from
+  in-tree-vendored to `cyrius deps`-resolved, mirroring the libro
+  and majra pattern that's been in place for several minor cycles.
+  The contract is the pin set in `cyrius.cyml`; the bytes get
+  rehydrated on demand. `.gitignore` carries `/lib/`. (Existing
+  tracked `lib/` files need a one-time `git rm -r --cached lib/`
+  by the maintainer; gitignore patterns don't retroactively
+  untrack content.)
+
+### Added
+
+- **`docs/doc-health.md`** — living ledger of doc currency in the
+  phylax repo. Tracks Tier 1 root files → Tier 8 root-level
+  benchmark snapshots, with five buckets (Fresh / Stale /
+  Read-through outstanding / Evergreen / Frozen). Initial audit at
+  the 1.1.1 cut surfaces six 🟡 stale + four 🟠 read-through rows
+  as carryover for the next doc-sync pass. Pattern lifted from
+  `libro/docs/doc-health.md` + `majra/docs/doc-health.md`,
+  phylax-shaped.
+
+### Fixed
+
+- **CI `Format check` step regressed under cyrius 5.10.x.** The
+  previous invocation, `diff -q <(cyrius fmt "$f" --check 2>/dev/null) "$f"`,
+  assumed `cyrius fmt --check` writes the formatted source to
+  stdout. In cyrius 5.10.x, `--check` is silent on clean files
+  (exit 0, no output) — so the `diff` against the file content
+  always reports drift on every non-empty source file (false
+  positive across the whole tree, as surfaced by the CI run on
+  2026-05-11). Dropped the `--check` flag; `cyrius fmt "$f"`
+  without flags emits the formatted source and the diff catches
+  real drift only.
+
+### Carryover (not addressed in this cut)
+
+These are the 🟡 / 🟠 rows in `docs/doc-health.md` and the
+known-issue list — picked up in the next sweep.
+
+- `docs/development/dependency-watch.md` — pin matrix rewrite
+  against the post-sweep state (cyrius 5.10.44, sakshi 2.2.4,
+  sigil 3.1.1, majra 2.4.4, bote 2.7.1, +libro 2.6.3 direct).
+- `docs/development/roadmap.md` — aarch64-chain row refresh; the
+  sigil floor moved transitively past 2.9.5 to 3.1.1 in this
+  cycle and the chain shape needs to be re-anchored.
+- `docs/development/issues/2026-04-30-cyrius-stdlib-issues.md` —
+  walk the catalogue: `sys_stat` / `sys_fstat` closed in 5.10.x
+  (verify and retire phylax's local x86 backfill in
+  `src/syscall_x86_64_linux.cyr`), file new entries for anything
+  that resurfaced under the new pin.
+- `docs/development/threat-model.md` — read-through against
+  sigil 3.x's PQ surface; expected to be a no-op (phylax only
+  consumes `sha256_hex`).
+- `tests/phylax.tcyr` — `sha256 empty` assertion fails under the
+  new toolchain. sigil 3.1.1's `sha256_hex` body is unchanged
+  from 2.9.5 (return-type annotation only); root cause likely
+  lives in the duplicate `hex_encode` resolution between sigil's
+  bundle and phylax's `src/utils.cyr:286`, or in a 5.10.44
+  toolchain-side dispatch change. Out-of-scope for the dep-bump
+  sweep; tracked as a known-issue for the next pass.
+- `src/syscall_x86_64_linux.cyr` + `src/utils.cyr` duplicate-fn
+  warnings (`sys_stat`, `sys_fstat`, `str_to_int`, `hex_encode`,
+  `hex_decode`, `str_contains`) — retire the phylax-side
+  duplicates that the 5.10.x stdlib now ships. Scheduled for the
+  5.11.x / 5.12.x sweep.
+
 ## [1.1.0] - 2026-04-30
 
 Toolchain + dep refresh, library split, CI modernization, and

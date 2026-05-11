@@ -47,13 +47,16 @@ jobs:
           fi
 
       - name: Format check
-        # cyrius fmt --check emits the formatted source to stdout;
-        # diff against the file in-place to catch drift.
+        # `cyrius fmt <file>` emits the formatted source to stdout;
+        # diff against the file in-place to catch drift. The `--check`
+        # flag is silent on clean files in cyrius 5.10.x — using it
+        # here produces an empty stream that diffs against every
+        # non-empty source file (false positive on the whole tree).
         run: |
           fail=0
           for f in src/*.cyr tests/*.tcyr tests/*.bcyr tests/*.fcyr; do
             [ -f "$f" ] || continue
-            if ! diff -q <(cyrius fmt "$f" --check 2>/dev/null) "$f" > /dev/null; then
+            if ! diff -q <(cyrius fmt "$f" 2>/dev/null) "$f" > /dev/null; then
               echo "needs fmt: $f"
               fail=1
             fi
