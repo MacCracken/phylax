@@ -427,8 +427,11 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
     var msg = str_from("phylax: starting file watcher");
     sakshi_info(str_data(msg), str_len(msg));
 
-    # Initialize inotify
-    var inotify_fd = syscall(SYS_INOTIFY_INIT);
+    # Initialize inotify — sys_inotify_init wrapper from the stdlib
+    # composes through SYS_INOTIFY_INIT1 on aarch64 (bare INIT was
+    # dropped on the generic-table arches); x86_64 stdlib provides
+    # the same wrapper name as a direct SYS_INOTIFY_INIT call.
+    var inotify_fd = sys_inotify_init();
     if (inotify_fd < 0) {
         var errmsg = str_from("watch: failed to initialize inotify");
         sakshi_error(str_data(errmsg), str_len(errmsg));
@@ -441,7 +444,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
 
     for (var i = 0; i < npaths; i = i + 1) {
         var p = vec_get(paths, i);
-        var wd = syscall(SYS_INOTIFY_ADD_WATCH, inotify_fd, p, WATCH_MASK);
+        var wd = sys_inotify_add_watch(inotify_fd, p, WATCH_MASK);
         if (wd >= 0) {
             map_set(watch_map, str_from_int(wd), p);
             var wmsg = str_cat(str_from("watching: "), p);
@@ -462,7 +465,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
                     var child_entries = dir_list(child);
                     if (child_entries != 0) {
                         # It's a directory — watch it
-                        var cwd = syscall(SYS_INOTIFY_ADD_WATCH, inotify_fd, child, WATCH_MASK);
+                        var cwd = sys_inotify_add_watch(inotify_fd, child, WATCH_MASK);
                         if (cwd >= 0) {
                             map_set(watch_map, str_from_int(cwd), child);
                         }
@@ -946,8 +949,10 @@ fn cmd_daemon(socket_path, rules_path) {
     str_println(str_cat(str_from("Phylax daemon v"), VERSION));
     str_println(str_cat(str_from("Listening on: "), str_from(socket_path)));
 
-    # Remove existing socket file
-    syscall(SYS_UNLINK, socket_path);
+    # Remove existing socket file — sys_unlink composes through
+    # SYS_UNLINKAT on aarch64 (bare unlink was dropped on the
+    # generic-table arches).
+    sys_unlink(socket_path);
 
     # Create socket
     var fd = syscall(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0);
@@ -1011,7 +1016,7 @@ fn cmd_daemon(socket_path, rules_path) {
     }
 
     sys_close(fd);  # close server socket
-    syscall(SYS_UNLINK, socket_path);  # cleanup socket file
+    sys_unlink(socket_path);  # cleanup socket file (portable wrapper)
     return 0;
 }
 

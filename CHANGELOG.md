@@ -130,6 +130,29 @@ binary surface and detection behavior are unchanged from 1.1.0.
   instead of `sha256_hex`. The dispatch collision is no longer
   reachable from phylax code.
 
+- **aarch64 release build fails on undefined `SYS_MKDIR`.** The
+  release-workflow cross-build (`cyrius build --aarch64`) failed at
+  compile time on `src/quarantine.cyr:89`'s raw
+  `syscall(SYS_MKDIR, dir, 448)` — aarch64 Linux dropped the bare
+  `mkdir(2)` syscall in favor of `mkdirat(2)`, so `SYS_MKDIR` isn't
+  exposed by the cyrius stdlib's aarch64 peer. Same class of issue
+  affects three other call sites that were latent (CI's compiler
+  stops at the first undefined identifier, so the next-up
+  bug-after-fix would have surfaced on the following push):
+  `syscall(SYS_RENAME, …)` in `src/quarantine.cyr` (×2 sites),
+  `syscall(SYS_UNLINK, …)` in `src/cli.cyr` (×2 sites),
+  `syscall(SYS_INOTIFY_INIT)` + `syscall(SYS_INOTIFY_ADD_WATCH, …)`
+  in `src/cli.cyr` (×3 sites). All six classes swapped to the
+  portable wrapper form. `sys_mkdir` / `sys_unlink` /
+  `sys_inotify_init` / `sys_inotify_add_watch` come from the
+  cyrius stdlib's per-arch peer; `sys_rename` is a phylax-side
+  backfill added to both `src/syscall_x86_64_linux.cyr` (direct
+  `SYS_RENAME`) and `src/syscall_aarch64_linux.cyr` (composes
+  through `SYS_RENAMEAT(AT_FDCWD, old, AT_FDCWD, new)`) since
+  neither stdlib peer ships a `sys_rename` today. The aarch64
+  peer's "intentionally empty" header is gone — it's now a real
+  backfill file that mirrors the x86 peer's role.
+
 - **`hex_decode` name collision with sigil's bundle.** Phylax's
   `src/utils.cyr:phylax_hex_decode` (formerly `hex_decode`) shares
   a name with `lib/sigil.cyr:1272`'s `hex_decode(hex_str, hex_len)
@@ -182,6 +205,20 @@ known-issue list — picked up in the next sweep.
 - `docs/development/threat-model.md` — read-through against
   sigil 3.x's PQ surface; expected to be a no-op (phylax only
   consumes `sha256_hex`).
+- **Socket-family aarch64 portability.** `src/cli.cyr` daemon path
+  uses `syscall(SYS_SOCKET, …)` / `SYS_BIND` / `SYS_LISTEN` /
+  `SYS_ACCEPT` directly. Those constants are defined unguarded in
+  `lib/net.cyr` with x86_64 syscall numbers (41 / 49 / 50 / 43);
+  on aarch64 the build succeeds but the syscall numbers are wrong
+  at runtime (aarch64 uses different numbers for the socket family).
+  Runtime-only portability gap; doesn't block the CI release cross-
+  build but the daemon mode will be broken on aarch64 hardware
+  until `lib/net.cyr` (cyrius stdlib) grows per-arch peer files
+  the same way `syscalls.cyr` did at 5.4.10. Tracked here for the
+  next sweep; phylax-side workaround would be to introduce
+  per-arch wrappers like the syscall peer files do, or wait for
+  the stdlib to land the fix.
+
 - `src/syscall_x86_64_linux.cyr` + `src/utils.cyr` duplicate-fn
   warnings (`sys_stat`, `sys_fstat`, `str_to_int`, `hex_encode`,
   `hex_decode`, `str_contains`) — retire the phylax-side

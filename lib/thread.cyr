@@ -374,3 +374,35 @@ fn chan_close(ch): i64 {
     syscall(SYS_FUTEX, ch + 32, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1000, 0, 0, 0);
     return 0;
 }
+
+# Non-blocking receive. Returns:
+#   value > 0  → message dequeued (callers using 0-as-sentinel
+#                should avoid sending 0 through chan_send).
+#   value = 0  → channel empty OR closed-and-empty (caller can
+#                disambiguate by checking *(ch + 48) == 1).
+#
+# Pattern (bote streaming dispatch — drain a worker's progress
+# channel without blocking the transport thread):
+#   while (chan_try_recv(progress) != 0) {
+#       emit_jsonrpc_notification(...);
+#   }
+#   # ... go do other transport work, come back later ...
+fn chan_try_recv(ch): i64 {
+    var mtx = load64(ch + 40);
+    mutex_lock(mtx);
+    var count = load64(ch + 32);
+    if (count == 0) {
+        mutex_unlock(mtx);
+        return 0;
+    }
+    var buf = load64(ch);
+    var head = load64(ch + 16);
+    var cap = load64(ch + 8);
+    var result = load64(buf + head * 8);
+    store64(ch + 16, (head + 1) % cap);
+    store64(ch + 32, count - 1);
+    mutex_unlock(mtx);
+    # Wake one sender (if it was waiting on full-buffer condition).
+    syscall(SYS_FUTEX, ch + 32, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, 0, 0, 0);
+    return result;
+}

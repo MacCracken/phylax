@@ -25,4 +25,12 @@ fn sys_fstat(fd, buf) {
     return syscall(SYS_FSTAT, fd, buf);
 }
 
+# rename(2) — direct syscall on x86_64. SYS_RENAME (= 82) is
+# already defined in `lib/syscalls_x86_64_linux.cyr`. Mirrors the
+# aarch64 peer's `sys_rename` (which composes through SYS_RENAMEAT)
+# so phylax-internal callers can rely on a single portable name.
+fn sys_rename(old_path, new_path) {
+    return syscall(SYS_RENAME, old_path, new_path);
+}
+
 #endif

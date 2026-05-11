@@ -85,8 +85,15 @@ fn quarantine_new(dir) {
     store64(mgr + 24, 1);
     store64(mgr + 16, path_join(dir, str_from("index.json")));
 
-    # Create quarantine directory (mode 0700 = 448 decimal)
-    syscall(SYS_MKDIR, dir, 448);
+    # Create quarantine directory (mode 0700 = 448 decimal).
+    # Use the stdlib's `sys_mkdir` wrapper rather than `syscall(SYS_MKDIR, ...)`
+    # directly — aarch64 Linux doesn't expose a bare `mkdir` syscall
+    # (it was deprecated in favor of `mkdirat`); `lib/syscalls_aarch64_linux.cyr`
+    # defines `sys_mkdir` as a `syscall(SYS_MKDIRAT, AT_FDCWD, path, mode)`
+    # shim, and `lib/syscalls_x86_64_linux.cyr` defines it as a direct
+    # `syscall(SYS_MKDIR, path, mode)`. Going through the wrapper keeps
+    # this path arch-portable.
+    sys_mkdir(dir, 448);
 
     # Try to load existing index — if file doesn't exist, start fresh
     # (file_read_all returns empty string on failure)
@@ -156,8 +163,11 @@ fn quarantine_file(mgr, source_path, reason) {
     # see file_sha256 for the full story).
     var hash = file_sha256(str_data(data), data_len);
 
-    # Move the file via rename syscall
-    var rc = syscall(SYS_RENAME, source_path, dest_path);
+    # Move the file via rename — sys_rename is the portable wrapper
+    # provided by `src/syscall_x86_64_linux.cyr` / `src/syscall_aarch64_linux.cyr`
+    # (aarch64 composes through SYS_RENAMEAT since bare rename was
+    # dropped on the generic-table arches).
+    var rc = sys_rename(source_path, dest_path);
     if (rc < 0) {
         var msg = str_from("quarantine: rename failed");
         sakshi_error(str_data(msg), str_len(msg));
@@ -211,8 +221,9 @@ fn quarantine_release(mgr, id) {
         return 0;
     }
 
-    # Move file back to original location
-    var rc = syscall(SYS_RENAME, load64(entry + 16), load64(entry + 8));
+    # Move file back to original location (sys_rename composes through
+    # SYS_RENAMEAT on aarch64; see quarantine_file above).
+    var rc = sys_rename(load64(entry + 16), load64(entry + 8));
     if (rc < 0) {
         var msg = str_from("quarantine_release: rename failed");
         sakshi_error(str_data(msg), str_len(msg));
