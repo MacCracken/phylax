@@ -18,8 +18,9 @@
 
 ```bash
 CYRIUS_DCE=1 cyrius build src/main.cyr build/phylax  # compile (DCE-pruned)
-cyrius test tests/phylax.tcyr                        # full test suite (178 assertions)
-cyrius test tests/phylax-core.tcyr                   # core profile smoke test
+for t in tests/*.tcyr; do cyrius test "$t"; done     # full suite — per-module test files
+cyrius test tests/test_severity.tcyr                 # single module (per-module split lands at 1.1.1)
+cyrius test tests/phylax-core.tcyr                   # core profile smoke test (11 assertions)
 cyrius bench tests/phylax.bcyr                       # full benchmarks
 cyrius bench tests/phylax-core.bcyr                  # core benchmarks
 cyrius check src/main.cyr                            # syntax check
@@ -28,6 +29,11 @@ cyrius lint src/main.cyr                             # lint
 cyrius distlib                                       # → dist/phylax.cyr (full lib)
 cyrius distlib core                                  # → dist/phylax-core.cyr (detection-only)
 ```
+
+The test suite is split per-module under `tests/test_*.tcyr` (14 files, 188 assertions
+total as of 1.1.1) so a crash in one module doesn't poison the rest of the run. Add a
+new module's tests as `tests/test_<module>.tcyr`; CI picks up `tests/*.tcyr`
+automatically.
 
 ## Consumers
 

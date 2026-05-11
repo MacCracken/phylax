@@ -151,8 +151,10 @@ fn quarantine_file(mgr, source_path, reason) {
         return 0;
     }
 
-    # Compute SHA-256 of the file data
-    var hash = sha256_hex(str_data(data), data_len);
+    # Compute SHA-256 of the file data (file_sha256 routes through
+    # analyze.cyr to bypass sigil's bundled-hex_encode collision —
+    # see file_sha256 for the full story).
+    var hash = file_sha256(str_data(data), data_len);
 
     # Move the file via rename syscall
     var rc = syscall(SYS_RENAME, source_path, dest_path);

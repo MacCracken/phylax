@@ -637,8 +637,8 @@ fn tlsh_distance(a, b) {
     var hex_b = str_substr(b_dig, 2, b_len - 2);
     var alen_ptr = alloc(8);
     var blen_ptr = alloc(8);
-    var a_bytes = hex_decode(hex_a, alen_ptr);
-    var b_bytes = hex_decode(hex_b, blen_ptr);
+    var a_bytes = phylax_hex_decode(hex_a, alen_ptr);
+    var b_bytes = phylax_hex_decode(hex_b, blen_ptr);
     if (a_bytes == 0 || b_bytes == 0) { return -1; }
     var ablen = load64(alen_ptr);
     var bblen = load64(blen_ptr);

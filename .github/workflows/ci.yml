@@ -124,17 +124,29 @@ jobs:
           fi
 
       - name: Test
+        # Per-module test files under tests/test_*.tcyr (split 2026-05-11)
+        # so a segfault in one module doesn't take out the whole suite.
+        # phylax-core.tcyr remains as the [lib.core] smoke test.
         run: |
           fail=0
+          passed_modules=()
+          failed_modules=()
           for t in tests/*.tcyr; do
             [ -f "$t" ] || continue
             name=$(basename "$t" .tcyr)
             echo "=== $name ==="
-            if ! cyrius test "$t"; then
-              echo "FAIL: $name"
+            if cyrius test "$t"; then
+              passed_modules+=("$name")
+            else
+              echo "FAIL: $name (exit $?)"
+              failed_modules+=("$name")
               fail=1
             fi
           done
+          echo ""
+          echo "===== summary ====="
+          echo "passed: ${#passed_modules[@]} — ${passed_modules[*]}"
+          echo "failed: ${#failed_modules[@]} — ${failed_modules[*]}"
           [ $fail -eq 0 ] || { echo "test failures"; exit 1; }
 
       - name: Bench

@@ -1,0 +1,94 @@
+# ELF parser + security feature — elf.cyr surface
+
+include "src/lib.cyr"
+
+fn test_elf_parser() {
+    test_group("elf_parser");
+
+    # Not an ELF
+    var pe_data = alloc(4);
+    store8(pe_data, 0x4d); store8(pe_data + 1, 0x5a);
+    assert_eq(parse_elf(pe_data, 4), 0, "PE data is not ELF");
+
+    # Empty
+    assert_eq(parse_elf(alloc(1), 0), 0, "empty is not ELF");
+
+    # Minimal 64-bit ELF
+    var data = alloc(128);
+    for (var i = 0; i < 128; i = i + 1) { store8(data + i, 0); }
+    # ELF magic
+    store8(data, 0x7f); store8(data + 1, 0x45); store8(data + 2, 0x4c); store8(data + 3, 0x46);
+    # Class: 64-bit
+    store8(data + 4, 2);
+    # Endian: little
+    store8(data + 5, 1);
+    # Version
+    store8(data + 6, 1);
+    # Type: executable (2)
+    store8(data + 16, 2);
+    # Machine: x86_64 (62)
+    store8(data + 18, 62);
+
+    var info = parse_elf(data, 128);
+    assert(info != 0, "minimal ELF parsed");
+}
+
+fn test_elf_security() {
+    test_group("elf_security");
+
+    # Build a minimal ELF64 with program headers
+    var size = 512;
+    var data = alloc(size);
+    for (var i = 0; i < size; i = i + 1) { store8(data + i, 0); }
+    # ELF magic
+    store8(data, 0x7f); store8(data + 1, 0x45); store8(data + 2, 0x4c); store8(data + 3, 0x46);
+    store8(data + 4, 2);  # 64-bit
+    store8(data + 5, 1);  # little-endian
+    store8(data + 6, 1);  # version
+    store8(data + 16, 2); # ET_EXEC
+    store8(data + 18, 62); # x86_64
+    # entry point
+    store8(data + 24, 0x00); store8(data + 25, 0x10);
+
+    # Program header table at offset 64
+    store8(data + 32, 64);  # ph_offset (low byte)
+    # ph_entry_size = 56 (ELF64)
+    store8(data + 54, 56);
+    # ph_num = 2
+    store8(data + 56, 2);
+
+    # Program header 0: PT_GNU_STACK (no exec flag → safe)
+    var ph0 = 64;
+    # p_type = PT_GNU_STACK (0x6474e551)
+    store8(data + ph0, 0x51); store8(data + ph0 + 1, 0xe5);
+    store8(data + ph0 + 2, 0x74); store8(data + ph0 + 3, 0x64);
+    # p_flags = PF_R | PF_W (no PF_X) = 6
+    store8(data + ph0 + 4, 6);
+
+    # Program header 1: PT_GNU_RELRO
+    var ph1 = 64 + 56;
+    store8(data + ph1, 0x52); store8(data + ph1 + 1, 0xe5);
+    store8(data + ph1 + 2, 0x74); store8(data + ph1 + 3, 0x64);
+    store8(data + ph1 + 4, 4);  # PF_R
+
+    var elf = parse_elf(data, size);
+    assert(elf != 0, "ELF with program headers parsed");
+
+    # Check security features
+    var sec = load64(elf + 88);
+    assert(load64(sec), "has RELRO");
+    assert_eq(load64(sec + 24), 0, "no executable stack");
+    assert_eq(load64(sec + 8), 0, "no RWX segment");
+}
+
+fn main() {
+    phylax_init();
+
+    test_elf_parser();
+    test_elf_security();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

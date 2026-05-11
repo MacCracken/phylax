@@ -1,0 +1,47 @@
+# Priority scan queue — queue.cyr surface (runtime only — full profile)
+
+include "src/lib.cyr"
+
+fn test_queue() {
+    test_group("queue");
+
+    var q = scan_queue_new(10);
+    assert(scan_queue_is_empty(q), "new queue is empty");
+    assert_eq(scan_queue_len(q), 0, "new queue len = 0");
+
+    # Enqueue
+    var id1 = scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+    assert(id1 >= 0, "enqueue returns id");
+    assert_eq(scan_queue_len(q), 1, "len after enqueue = 1");
+
+    # Dequeue
+    var req = scan_queue_dequeue(q);
+    assert(req != 0, "dequeue returns request");
+    assert(scan_queue_is_empty(q), "empty after dequeue");
+
+    # Priority order
+    scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, PRIORITY_LOW);
+    scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, PRIORITY_CRITICAL);
+    scan_queue_enqueue(q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+
+    var first = scan_queue_dequeue(q);
+    assert(first != 0, "dequeue critical");
+
+    # Capacity limit
+    var small_q = scan_queue_new(2);
+    scan_queue_enqueue(small_q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+    scan_queue_enqueue(small_q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+    var overflow = scan_queue_enqueue(small_q, SCAN_TARGET_MEMORY, 0, PRIORITY_NORMAL);
+    assert_eq(overflow, 0 - 1, "enqueue returns -1 when full");
+}
+
+fn main() {
+    phylax_init();
+
+    test_queue();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

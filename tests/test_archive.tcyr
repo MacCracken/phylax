@@ -1,0 +1,37 @@
+# Archive scanning — archive.cyr surface (ZIP / TAR / GZIP entry walking)
+
+include "src/lib.cyr"
+
+fn test_archive_scanning() {
+    test_group("archive");
+
+    # Build minimal stored ZIP with inner file
+    var zip = alloc(128);
+    for (var i = 0; i < 128; i = i + 1) { store8(zip + i, 0); }
+    # PK\x03\x04 signature
+    store8(zip, 0x50); store8(zip + 1, 0x4B); store8(zip + 2, 0x03); store8(zip + 3, 0x04);
+    # version, flags, method=0 (stored)
+    store8(zip + 8, 0);  # compression: stored
+    # sizes: compressed=4, uncompressed=4
+    store8(zip + 18, 4); store8(zip + 22, 4);
+    # filename length=4
+    store8(zip + 26, 4);
+    # filename "test"
+    store8(zip + 30, 116); store8(zip + 31, 101); store8(zip + 32, 115); store8(zip + 33, 116);
+    # file data: "ABCD"
+    store8(zip + 34, 65); store8(zip + 35, 66); store8(zip + 36, 67); store8(zip + 37, 68);
+
+    var findings = zip_scan_entries(zip, 128, 0, 3);
+    assert(vec_len(findings) >= 0, "zip scan doesn't crash");
+}
+
+fn main() {
+    phylax_init();
+
+    test_archive_scanning();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

@@ -1,0 +1,27 @@
+# Report rendering — report.cyr surface (JSON / Markdown / SARIF)
+
+include "src/lib.cyr"
+
+fn test_report() {
+    test_group("report");
+
+    # Empty report
+    var results = vec_new();
+    var report = report_from_results(12345, results);
+    assert(report != 0, "empty report created");
+
+    # Markdown render
+    var md = report_render_markdown(report);
+    assert(str_len(md) > 0, "markdown not empty");
+}
+
+fn main() {
+    phylax_init();
+
+    test_report();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

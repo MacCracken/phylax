@@ -1,0 +1,28 @@
+# SHA-256 — sigil dep, exercised through analyze.cyr's file_sha256
+
+include "src/lib.cyr"
+
+fn test_sha256() {
+    test_group("sha256");
+
+    # SHA-256 of empty string is known
+    var empty_hash = file_sha256(alloc(1), 0);
+    assert(str_eq(empty_hash, str_from("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")), "sha256 empty");
+
+    # Deterministic
+    var data = str_from("hello");
+    var h1 = file_sha256(str_data(data), str_len(data));
+    var h2 = file_sha256(str_data(data), str_len(data));
+    assert(str_eq(h1, h2), "sha256 deterministic");
+}
+
+fn main() {
+    phylax_init();
+
+    test_sha256();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

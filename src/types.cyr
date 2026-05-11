@@ -266,8 +266,13 @@ fn finding_fingerprint(f) {
     }
     s = str_cat(s, str_from("|"));
     s = str_cat(s, severity_name(load64(f + 16)));
-    # SHA-256 hash
-    return sha256_hex(str_data(s), str_len(s));
+    # SHA-256 hash — go through file_sha256 (analyze.cyr) rather than
+    # sigil's sha256_hex to avoid the bundled-hex_encode dispatch
+    # collision (sigil's sha256_hex returns a raw c-string; phylax
+    # expects a Str across all call sites). See file_sha256's comment
+    # for the full story. Forward-ref into analyze.cyr is fine —
+    # cyrius single-pass resolves at link time.
+    return file_sha256(str_data(s), str_len(s));
 }
 
 # ScanResult

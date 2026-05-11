@@ -1,0 +1,66 @@
+# YARA pattern matching + engine — yara.cyr surface
+
+include "src/lib.cyr"
+
+fn test_yara() {
+    test_group("yara");
+
+    # Engine creation
+    var engine = yara_engine_new();
+    assert(engine != 0, "engine created");
+
+    # Hex pattern
+    var hex_bytes = alloc(4);
+    store8(hex_bytes, 0x7f); store8(hex_bytes + 1, 0x45);
+    store8(hex_bytes + 2, 0x4c); store8(hex_bytes + 3, 0x46);
+
+    var pat = yara_pattern_from_bytes(str_from("$elf"), hex_bytes, 4);
+    assert(pat != 0, "pattern created");
+
+    # Pattern matching
+    var elf_data = alloc(8);
+    store8(elf_data, 0x7f); store8(elf_data + 1, 0x45);
+    store8(elf_data + 2, 0x4c); store8(elf_data + 3, 0x46);
+    store8(elf_data + 4, 0x02); store8(elf_data + 5, 0x01);
+
+    assert(yara_pattern_matches(pat, elf_data, 6), "pattern matches ELF");
+
+    # Non-matching data
+    var mz_data = alloc(4);
+    store8(mz_data, 0x4d); store8(mz_data + 1, 0x5a);
+    assert_eq(yara_pattern_matches(pat, mz_data, 4), 0, "pattern does not match PE");
+}
+
+fn test_yara_engine() {
+    test_group("yara_engine");
+
+    # get_yara_engine returns same pointer twice (singleton)
+    var e1 = get_yara_engine();
+    var e2 = get_yara_engine();
+    assert_eq(e1, e2, "yara engine is singleton");
+    assert(e1 != 0, "yara engine not null");
+
+    # Engine has built-in rules loaded
+    var nrules = yara_engine_rule_count(e1);
+    assert(nrules >= 7, "at least 7 built-in rules");
+
+    # yara_engine_scan on clean data returns 0 findings
+    var clean = alloc(64);
+    for (var i = 0; i < 64; i = i + 1) {
+        store8(clean + i, 0x41);  # fill with 'A'
+    }
+    var findings = yara_engine_scan(e1, clean, 64);
+    assert_eq(vec_len(findings), 0, "clean data has 0 findings");
+}
+
+fn main() {
+    phylax_init();
+
+    test_yara();
+    test_yara_engine();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

@@ -1,0 +1,44 @@
+# String extraction — strings.cyr
+
+include "src/lib.cyr"
+
+fn test_strings() {
+    test_group("strings");
+
+    # ASCII extraction
+    var data = alloc(24);
+    store8(data, 0); store8(data + 1, 0);
+    # "hello world" at offset 2
+    var hello = "hello world";
+    for (var i = 0; i < 11; i = i + 1) {
+        store8(data + 2 + i, load8(hello + i));
+    }
+    store8(data + 13, 0); store8(data + 14, 0);
+    # "test" at offset 17
+    store8(data + 15, 1); store8(data + 16, 2);
+    store8(data + 17, 0x74); store8(data + 18, 0x65);
+    store8(data + 19, 0x73); store8(data + 20, 0x74);
+    store8(data + 21, 0);
+
+    var strings = extract_ascii(data, 22, 4);
+    assert_eq(vec_len(strings), 2, "extracted 2 ascii strings");
+
+    # is_printable_ascii
+    assert(is_printable_ascii(0x41), "A is printable");
+    assert(is_printable_ascii(0x20), "space is printable");
+    assert(is_printable_ascii(0x7e), "~ is printable");
+    assert(is_printable_ascii(0x09), "tab is printable");
+    assert_eq(is_printable_ascii(0x00), 0, "null not printable");
+    assert_eq(is_printable_ascii(0x7f), 0, "DEL not printable");
+}
+
+fn main() {
+    phylax_init();
+
+    test_strings();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

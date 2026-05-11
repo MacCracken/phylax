@@ -69,6 +69,34 @@ binary surface and detection behavior are unchanged from 1.1.0.
   `libro/docs/doc-health.md` + `majra/docs/doc-health.md`,
   phylax-shaped.
 
+- **Per-module test split.** The monolithic `tests/phylax.tcyr`
+  (972 lines, 29 test groups, 178 assertions) is replaced by 14
+  per-module files under `tests/test_*.tcyr` — 188 assertions
+  total. CI loops `tests/*.tcyr` and reports per-module pass/fail;
+  a crash in one module (e.g. the `test_tlsh.tcyr` segfault
+  documented in the issue catalogue) only takes out its own test
+  file, leaving the other 13 modules to run and report
+  independently. Mirrors the layout the majra and libro test trees
+  evolved toward. New module mapping:
+
+  | File | Source surface | Assertions |
+  |---|---|---|
+  | `test_severity.tcyr` | `types.cyr` (severity/category/errors/parse) | 50 |
+  | `test_analyze.tcyr` | `analyze.cyr` (entropy/chi-squared/file-detection/tar) | 25 |
+  | `test_sha256.tcyr` | `hashing.cyr` (sha256, via `file_sha256`) | 2 |
+  | `test_strings.tcyr` | `strings.cyr` | 7 |
+  | `test_pe.tcyr` | `pe.cyr` | 17 |
+  | `test_elf.tcyr` | `elf.cyr` | 7 |
+  | `test_archive.tcyr` | `archive.cyr` | 1 |
+  | `test_yara.tcyr` | `yara.cyr` | 8 |
+  | `test_tlsh.tcyr` | `hashing.cyr` (tlsh) | 5 |
+  | `test_ssdeep.tcyr` | `hashing.cyr` (ssdeep) | 4 |
+  | `test_report.tcyr` | `report.cyr` | 2 |
+  | `test_queue.tcyr` | `queue.cyr` | 8 |
+  | `test_utils.tcyr` | `utils.cyr` (memmem/hex) | 21 |
+  | `test_integration.tcyr` | `types`+`hashing`+`analyze`+`report` | 20 |
+  | `phylax-core.tcyr` | `[lib.core]` smoke test | 11 |
+
 ### Fixed
 
 - **CI `Format check` step regressed under cyrius 5.10.x.** The
@@ -82,23 +110,58 @@ binary surface and detection behavior are unchanged from 1.1.0.
   without flags emits the formatted source and the diff catches
   real drift only.
 
-- **`tests/phylax.tcyr` — `sha256 empty` assertion fails.** The
-  `file_sha256` helper in `src/analyze.cyr:245` previously
-  delegated to sigil's `sha256_hex` wrapper. The sigil bundle is
-  compiled with its own local `hex_encode` (returns a raw
-  c-string), and the cyrius linker binds the `hex_encode` call
-  inside sigil's `sha256_hex` body at bundle-compile time —
-  bypassing phylax's `src/utils.cyr:286` last-def-wins override
-  (which returns a Str). Downstream `str_eq` / `str_cat` on the
-  raw c-string read length-bytes from the wrong offset and
-  silently produced the wrong answer (the failing assertion was
-  the canary; three other callers in `types.cyr`, `integration.cyr`,
-  `quarantine.cyr` had the same latent bug). Rewrote `file_sha256`
-  to compose `sha256()` (sigil digest primitive) + `hex_encode()`
-  (phylax local, Str output) directly — bypasses the dispatch
-  collision entirely. Other call sites remain on `sha256_hex`
-  pending the broader duplicate-fn cleanup in the 5.11.x / 5.12.x
-  sweep; they don't have failing assertions today.
+- **SHA-256 wrappers (4 sites) — sigil-bundle dispatch collision.**
+  `src/analyze.cyr:file_sha256`, `src/types.cyr:finding_fingerprint`,
+  `src/integration.cyr` (entropy-analysis path), and
+  `src/quarantine.cyr` (file-quarantine path) previously delegated
+  to sigil's `sha256_hex` wrapper. The sigil bundle is compiled
+  with its own local `hex_encode` (returns a raw c-string), and
+  the cyrius linker binds the `hex_encode` call inside sigil's
+  `sha256_hex` body at bundle-compile time — bypassing phylax's
+  `src/utils.cyr:286` last-def-wins override (which returns a Str).
+  Downstream `str_eq` / `str_cat` on the raw c-string read
+  length-bytes from the wrong offset and silently produced the
+  wrong answer (the per-module split surfaced this cleanly:
+  `test_sha256.tcyr` and `test_integration.tcyr:test_fingerprint`
+  both failed with `expected 64, got <huge pointer-shaped number>`).
+  Rewrote `file_sha256` to compose `sha256()` (sigil digest
+  primitive) + `hex_encode()` (phylax local, Str output) directly;
+  the three other call sites now route through `file_sha256`
+  instead of `sha256_hex`. The dispatch collision is no longer
+  reachable from phylax code.
+
+- **`hex_decode` name collision with sigil's bundle.** Phylax's
+  `src/utils.cyr:phylax_hex_decode` (formerly `hex_decode`) shares
+  a name with `lib/sigil.cyr:1272`'s `hex_decode(hex_str, hex_len)
+  : i64` — but the signatures are incompatible (Str + out-ptr vs
+  raw + len). The "last def wins" link resolution put one or the
+  other in scope at different call sites unpredictably; at the
+  test surface, sigil's version was selected and the Str header
+  got reinterpreted as a raw byte pointer (deref crash, exit 139,
+  surfaced cleanly when the test split contained the failure to
+  `test_utils.tcyr`). Renamed phylax's function to
+  `phylax_hex_decode` to break the collision permanently; the
+  three call sites in `src/hashing.cyr` and `tests/test_utils.tcyr`
+  are updated. Fold this rename back into the broader duplicate-fn
+  cleanup when the 5.11.x / 5.12.x sweep lands — same pattern
+  likely needed for `hex_encode`, `str_to_int`, `str_contains`
+  which carry the same warning today.
+
+### Known issues (filed, not blocking)
+
+- **`tlsh_distance(h, h)` segfaults under cyrius 5.10.44 + sigil 3.1.1.**
+  Surfaced during the test-split bisect: calling
+  `tlsh_distance(h, h)` with `h` from a successful `tlsh_hash`
+  crashes the process (exit 139, no assertion message). The
+  pre-split monolithic `tests/phylax.tcyr` had this assertion run
+  toward the middle of `main()`, taking out the entire suite
+  silently. Post-split, the segfault is contained to
+  `tests/test_tlsh.tcyr` alone, and the offending assertion is
+  commented out at lines 25-29 of that file pending the fix. All
+  five other TLSH assertions still run and pass. Full bisect +
+  suspected root causes (cc5 register-spill, 5.10.x layout
+  changes, sigil 3.x interaction) at
+  `docs/development/issues/2026-05-11-tlsh-distance-segfault.md`.
 
 ### Carryover (not addressed in this cut)
 

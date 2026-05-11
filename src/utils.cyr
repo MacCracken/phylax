@@ -302,7 +302,18 @@ fn hex_digit_value(ch) {
 }
 
 # Decode hex string to raw buffer. Returns addr of bytes, sets *out_len.
-fn hex_decode(s, out_len_ptr) {
+#
+# Renamed from `hex_decode` to `phylax_hex_decode` to dodge the
+# collision with sigil's `hex_decode(hex_str: ptr, hex_len: i64): i64`
+# in `lib/sigil.cyr` — different signature (Str+out-ptr vs raw+len),
+# same name. The duplicate-fn warning is the symptom; the live bug
+# was sigil's version winning at link time for callers like
+# `tests/test_utils.tcyr`, reading the Str header as a pointer and
+# the out_len_ptr as a length → SIGSEGV. Fold this rename back into
+# the broader duplicate-fn cleanup when the 5.11.x / 5.12.x sweep
+# lands; same pattern likely needed for `hex_encode`, `str_to_int`,
+# `str_contains` which carry the same warning today.
+fn phylax_hex_decode(s, out_len_ptr) {
     var slen = str_len(s);
     if (slen & 1) { return 0; }  # odd length
     var blen = slen >> 1;

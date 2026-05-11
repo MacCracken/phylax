@@ -1,0 +1,99 @@
+# PE parser + detection — pe.cyr surface
+
+include "src/lib.cyr"
+
+fn test_pe_parser() {
+    test_group("pe_parser");
+
+    # Not a PE
+    var elf_data = alloc(4);
+    store8(elf_data, 0x7f); store8(elf_data + 1, 0x45);
+    var pe = parse_pe(elf_data, 4);
+    assert_eq(pe, 0, "ELF data is not PE");
+
+    # Empty data
+    assert_eq(parse_pe(alloc(1), 0), 0, "empty is not PE");
+
+    # Too short MZ
+    var mz_short = alloc(2);
+    store8(mz_short, 0x4d); store8(mz_short + 1, 0x5a);
+    assert_eq(parse_pe(mz_short, 2), 0, "MZ too short");
+
+    # Minimal valid PE header
+    var data = alloc(512);
+    for (var i = 0; i < 512; i = i + 1) { store8(data + i, 0); }
+    # DOS header
+    store8(data, 0x4d); store8(data + 1, 0x5a);
+    # e_lfanew at 0x3C = 0x80
+    store8(data + 0x3C, 0x80);
+    # PE signature at 0x80
+    store8(data + 0x80, 0x50); store8(data + 0x81, 0x45);
+    # COFF: machine = i386 (0x014c)
+    store8(data + 0x84, 0x4c); store8(data + 0x85, 0x01);
+    # num_sections = 1
+    store8(data + 0x86, 0x01);
+    # optional header size = 0x70
+    store8(data + 0x94, 0x70);
+    # PE32 magic
+    store8(data + 0x98, 0x0b); store8(data + 0x99, 0x01);
+
+    var info = parse_pe(data, 512);
+    assert(info != 0, "minimal PE parsed");
+}
+
+fn test_pe_detection() {
+    test_group("pe_detection");
+
+    # Minimal PE data → detect_file_type returns FILETYPE_PE
+    var pe_data = alloc(4);
+    store8(pe_data, 0x4d); store8(pe_data + 1, 0x5a);
+    store8(pe_data + 2, 0x90); store8(pe_data + 3, 0x00);
+    assert_eq(detect_file_type(pe_data, 4), FILETYPE_PE, "detect PE from MZ");
+
+    # Verify filetype_is_executable for PE
+    assert(filetype_is_executable(FILETYPE_PE), "PE is executable");
+    assert(filetype_is_executable(FILETYPE_ELF), "ELF is executable");
+    assert(filetype_is_executable(FILETYPE_MACHO), "Mach-O is executable");
+    assert_eq(filetype_is_executable(FILETYPE_PDF), 0, "PDF not executable");
+    assert_eq(filetype_is_executable(FILETYPE_ZIP), 0, "ZIP not executable");
+
+    # parse_pe handles truncated data — too short for PE header
+    var short_mz = alloc(64);
+    for (var i = 0; i < 64; i = i + 1) { store8(short_mz + i, 0); }
+    store8(short_mz, 0x4d); store8(short_mz + 1, 0x5a);
+    # e_lfanew pointing past data
+    store8(short_mz + 0x3C, 0xFF);
+    assert_eq(parse_pe(short_mz, 64), 0, "PE truncated e_lfanew");
+
+    # parse_pe with invalid PE signature
+    var bad_pe = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) { store8(bad_pe + i, 0); }
+    store8(bad_pe, 0x4d); store8(bad_pe + 1, 0x5a);
+    store8(bad_pe + 0x3C, 0x80);
+    # Write wrong PE signature (not "PE\0\0")
+    store8(bad_pe + 0x80, 0x50); store8(bad_pe + 0x81, 0x00);
+    assert_eq(parse_pe(bad_pe, 256), 0, "PE bad signature");
+
+    # PE section flags — test the flag check functions
+    var sec = pe_section_new();
+    store64(sec + 40, PE_SCN_MEM_EXECUTE | PE_SCN_MEM_READ);
+    assert(pe_section_is_executable(sec), "section is executable");
+    assert_eq(pe_section_is_writable(sec), 0, "section not writable");
+    store64(sec + 40, PE_SCN_MEM_WRITE);
+    assert(pe_section_is_writable(sec), "section is writable");
+    assert_eq(pe_section_is_executable(sec), 0, "section not executable");
+    store64(sec + 40, PE_SCN_CNT_CODE);
+    assert(pe_section_contains_code(sec), "section contains code");
+}
+
+fn main() {
+    phylax_init();
+
+    test_pe_parser();
+    test_pe_detection();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

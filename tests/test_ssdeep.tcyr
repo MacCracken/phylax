@@ -1,0 +1,38 @@
+# SSDEEP (Context-Triggered Piecewise Hashing) — hashing.cyr surface
+
+include "src/lib.cyr"
+
+fn test_ssdeep() {
+    test_group("ssdeep");
+
+    # Empty returns 0
+    var empty_hash = ssdeep_hash(alloc(1), 0);
+    assert_eq(empty_hash, 0, "empty ssdeep = none");
+
+    # Single byte produces hash
+    var one = alloc(1);
+    store8(one, 0x42);
+    var h = ssdeep_hash(one, 1);
+    assert(h != 0, "single byte produces hash");
+
+    # Deterministic
+    var data = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) {
+        store8(data + i, i & 0xff);
+    }
+    var h1 = ssdeep_hash(data, 1024);
+    var h2 = ssdeep_hash(data, 1024);
+    assert(h1 != 0, "ssdeep hash produced");
+    assert(h2 != 0, "ssdeep hash produced 2");
+}
+
+fn main() {
+    phylax_init();
+
+    test_ssdeep();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

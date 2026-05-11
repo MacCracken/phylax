@@ -337,7 +337,7 @@ fn phylax_scan_handler(args, claims) {
     var dlen = str_len(data_str);
     var ftype = detect_file_type(data, dlen);
     var ent = shannon_entropy(data, dlen);
-    var hash = sha256_hex(data, dlen);
+    var hash = file_sha256(data, dlen);
     var suspicious = is_suspicious_entropy(ent);
 
     var result = str_from("{\"file_type\":\"");

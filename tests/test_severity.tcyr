@@ -1,0 +1,117 @@
+# Severity / category / errors / parse_severity — types.cyr surface
+
+include "src/lib.cyr"
+
+fn test_severity() {
+    test_group("severity");
+
+    # Ordering
+    assert(severity_gt(SEVERITY_CRITICAL, SEVERITY_HIGH), "critical > high");
+    assert(severity_gt(SEVERITY_HIGH, SEVERITY_MEDIUM), "high > medium");
+    assert(severity_gt(SEVERITY_MEDIUM, SEVERITY_LOW), "medium > low");
+    assert(severity_gt(SEVERITY_LOW, SEVERITY_INFO), "low > info");
+
+    # Rank values
+    assert_eq(severity_rank(SEVERITY_CRITICAL), 4, "critical rank");
+    assert_eq(severity_rank(SEVERITY_INFO), 0, "info rank");
+
+    # Names
+    assert(str_eq(severity_name(SEVERITY_CRITICAL), str_from("CRITICAL")), "critical name");
+    assert(str_eq(severity_name(SEVERITY_HIGH), str_from("HIGH")), "high name");
+    assert(str_eq(severity_name(SEVERITY_MEDIUM), str_from("MEDIUM")), "medium name");
+    assert(str_eq(severity_name(SEVERITY_LOW), str_from("LOW")), "low name");
+    assert(str_eq(severity_name(SEVERITY_INFO), str_from("INFO")), "info name");
+
+    # Category names
+    assert(str_eq(category_name(CATEGORY_MALWARE), str_from("Malware")), "malware name");
+    assert(str_eq(category_name(CATEGORY_SUSPICIOUS), str_from("Suspicious")), "suspicious name");
+    assert(str_eq(category_name(CATEGORY_CUSTOM_RULE), str_from("Custom Rule")), "custom rule name");
+}
+
+fn test_errors() {
+    test_group("errors");
+
+    assert_eq(ERR_IO, 1, "ERR_IO value");
+    assert_eq(ERR_FILE_TOO_LARGE, 2, "ERR_FILE_TOO_LARGE value");
+    assert_eq(ERR_TIMEOUT, 3, "ERR_TIMEOUT value");
+
+    assert(str_eq(err_name(ERR_IO), str_from("IO error")), "IO error name");
+    assert(str_eq(err_name(ERR_RULE_PARSE), str_from("rule parse error")), "rule parse error name");
+}
+
+fn test_parse_severity() {
+    test_group("parse_severity");
+
+    assert_eq(parse_severity("critical"), SEVERITY_CRITICAL, "parse critical");
+    assert_eq(parse_severity("high"), SEVERITY_HIGH, "parse high");
+    assert_eq(parse_severity("medium"), SEVERITY_MEDIUM, "parse medium");
+    assert_eq(parse_severity("low"), SEVERITY_LOW, "parse low");
+    assert_eq(parse_severity("info"), SEVERITY_INFO, "parse info");
+    assert_eq(parse_severity("bogus"), SEVERITY_INFO, "parse unknown = info");
+    assert_eq(parse_severity(0), SEVERITY_INFO, "parse null = info");
+}
+
+fn test_severity_names() {
+    test_group("severity_names");
+
+    # Every severity name is non-empty and distinct
+    var s_info = severity_name(SEVERITY_INFO);
+    var s_low = severity_name(SEVERITY_LOW);
+    var s_med = severity_name(SEVERITY_MEDIUM);
+    var s_high = severity_name(SEVERITY_HIGH);
+    var s_crit = severity_name(SEVERITY_CRITICAL);
+
+    assert(str_len(s_info) > 0, "INFO name not empty");
+    assert(str_len(s_low) > 0, "LOW name not empty");
+    assert(str_len(s_med) > 0, "MEDIUM name not empty");
+    assert(str_len(s_high) > 0, "HIGH name not empty");
+    assert(str_len(s_crit) > 0, "CRITICAL name not empty");
+
+    # Names are distinct
+    assert_eq(str_eq(s_info, s_low), 0, "INFO != LOW");
+    assert_eq(str_eq(s_low, s_med), 0, "LOW != MEDIUM");
+    assert_eq(str_eq(s_med, s_high), 0, "MEDIUM != HIGH");
+    assert_eq(str_eq(s_high, s_crit), 0, "HIGH != CRITICAL");
+
+    # gte comparisons
+    assert(severity_gte(SEVERITY_HIGH, SEVERITY_HIGH), "high >= high");
+    assert(severity_gte(SEVERITY_CRITICAL, SEVERITY_INFO), "critical >= info");
+    assert_eq(severity_gte(SEVERITY_LOW, SEVERITY_HIGH), 0, "low not >= high");
+}
+
+fn test_category_names() {
+    test_group("category_names");
+
+    # All category names are non-empty
+    assert(str_len(category_name(CATEGORY_MALWARE)) > 0, "malware name");
+    assert(str_len(category_name(CATEGORY_RANSOMWARE)) > 0, "ransomware name");
+    assert(str_len(category_name(CATEGORY_SUSPICIOUS)) > 0, "suspicious name");
+    assert(str_len(category_name(CATEGORY_EMBEDDED_PAYLOAD)) > 0, "embedded name");
+    assert(str_len(category_name(CATEGORY_VULNERABLE_DEPENDENCY)) > 0, "vuln dep name");
+    assert(str_len(category_name(CATEGORY_BEHAVIOR_ANOMALY)) > 0, "behavior name");
+    assert(str_len(category_name(CATEGORY_CUSTOM_RULE)) > 0, "custom rule name");
+
+    # Unknown category
+    assert(str_eq(category_name(99), str_from("Unknown")), "unknown category = Unknown");
+
+    # Category names match expected values
+    assert(str_eq(category_name(CATEGORY_RANSOMWARE), str_from("Ransomware")), "ransomware exact");
+    assert(str_eq(category_name(CATEGORY_EMBEDDED_PAYLOAD), str_from("Embedded Payload")), "embedded exact");
+    assert(str_eq(category_name(CATEGORY_BEHAVIOR_ANOMALY), str_from("Behavior Anomaly")), "behavior exact");
+    assert(str_eq(category_name(CATEGORY_VULNERABLE_DEPENDENCY), str_from("Vulnerable Dependency")), "vuln dep exact");
+}
+
+fn main() {
+    phylax_init();
+
+    test_severity();
+    test_errors();
+    test_parse_severity();
+    test_severity_names();
+    test_category_names();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

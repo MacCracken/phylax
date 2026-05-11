@@ -1,0 +1,158 @@
+# Entropy / chi-squared / file detection / TAR detection — analyze.cyr surface
+
+include "src/lib.cyr"
+
+fn test_entropy() {
+    test_group("entropy");
+
+    # Empty data
+    var empty = alloc(1);
+    var e = shannon_entropy(empty, 0);
+    assert_eq(f64_to(e), 0, "entropy of empty = 0");
+
+    # All zeros — entropy should be 0
+    var zeros = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) {
+        store8(zeros + i, 0);
+    }
+    var e0 = shannon_entropy(zeros, 1024);
+    assert_eq(f64_to(e0), 0, "entropy of zeros = 0");
+
+    # Two equally distributed values — entropy ~1.0
+    var two_vals = alloc(1024);
+    for (var i = 0; i < 512; i = i + 1) {
+        store8(two_vals + i, 0);
+    }
+    for (var i = 512; i < 1024; i = i + 1) {
+        store8(two_vals + i, 1);
+    }
+    var e1 = shannon_entropy(two_vals, 1024);
+    var e1_int = f64_to(f64_mul(e1, f64_from(100)));
+    assert(e1_int >= 95, "entropy of two values ~1.0");
+    assert(e1_int <= 105, "entropy of two values ~1.0 upper");
+
+    # Suspicious entropy threshold
+    assert_eq(is_suspicious_entropy(f64_from(5)), 0, "5.0 not suspicious");
+    assert(is_suspicious_entropy(f64_from(8)), "8.0 is suspicious");
+}
+
+fn test_chi_squared() {
+    test_group("chi_squared");
+
+    var empty = alloc(1);
+    var chi_empty = chi_squared(empty, 0);
+    assert_eq(f64_to(chi_empty), 0, "chi2 empty = 0");
+
+    # Uniform distribution — chi2 should be near 0
+    var uniform = alloc(25600);
+    for (var rep = 0; rep < 100; rep = rep + 1) {
+        for (var b = 0; b < 256; b = b + 1) {
+            store8(uniform + rep * 256 + b, b);
+        }
+    }
+    var chi_uniform = chi_squared(uniform, 25600);
+    assert(f64_lt(chi_uniform, f64_from(1)), "uniform chi2 < 1");
+
+    # All same value — chi2 very high
+    var same = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) {
+        store8(same + i, 0);
+    }
+    var chi_same = chi_squared(same, 1024);
+    assert(f64_gt(chi_same, f64_from(100000)), "single-value chi2 very high");
+
+    # Randomness classification
+    assert_eq(classify_randomness(f64_from(200)), RANDOMNESS_ENCRYPTED, "200 = encrypted");
+    assert_eq(classify_randomness(f64_from(1000)), RANDOMNESS_COMPRESSED, "1000 = compressed");
+    assert_eq(classify_randomness(f64_from(10000)), RANDOMNESS_NORMAL, "10000 = normal");
+}
+
+fn test_file_detection() {
+    test_group("file_detection");
+
+    # ELF magic
+    var elf = alloc(8);
+    store8(elf, 0x7f); store8(elf + 1, 0x45); store8(elf + 2, 0x4c); store8(elf + 3, 0x46);
+    store8(elf + 4, 0x02); store8(elf + 5, 0x01); store8(elf + 6, 0x01); store8(elf + 7, 0x00);
+    assert_eq(detect_file_type(elf, 8), FILETYPE_ELF, "detect ELF");
+
+    # PE magic (MZ)
+    var pe = alloc(4);
+    store8(pe, 0x4d); store8(pe + 1, 0x5a); store8(pe + 2, 0x90); store8(pe + 3, 0x00);
+    assert_eq(detect_file_type(pe, 4), FILETYPE_PE, "detect PE");
+
+    # PDF magic
+    var pdf = alloc(8);
+    store8(pdf, 0x25); store8(pdf + 1, 0x50); store8(pdf + 2, 0x44); store8(pdf + 3, 0x46);
+    assert_eq(detect_file_type(pdf, 8), FILETYPE_PDF, "detect PDF");
+
+    # ZIP magic
+    var zip = alloc(8);
+    store8(zip, 0x50); store8(zip + 1, 0x4b); store8(zip + 2, 0x03); store8(zip + 3, 0x04);
+    assert_eq(detect_file_type(zip, 8), FILETYPE_ZIP, "detect ZIP");
+
+    # GZIP magic
+    var gz = alloc(4);
+    store8(gz, 0x1f); store8(gz + 1, 0x8b);
+    assert_eq(detect_file_type(gz, 4), FILETYPE_GZIP, "detect GZIP");
+
+    # PNG magic
+    var png = alloc(4);
+    store8(png, 0x89); store8(png + 1, 0x50); store8(png + 2, 0x4e); store8(png + 3, 0x47);
+    assert_eq(detect_file_type(png, 4), FILETYPE_PNG, "detect PNG");
+
+    # JPEG magic
+    var jpeg = alloc(4);
+    store8(jpeg, 0xff); store8(jpeg + 1, 0xd8); store8(jpeg + 2, 0xff);
+    assert_eq(detect_file_type(jpeg, 4), FILETYPE_JPEG, "detect JPEG");
+
+    # Script magic (#!)
+    var script = alloc(12);
+    store8(script, 0x23); store8(script + 1, 0x21);
+    assert_eq(detect_file_type(script, 12), FILETYPE_SCRIPT, "detect Script");
+
+    # Unknown
+    var unk = alloc(4);
+    store8(unk, 0x00); store8(unk + 1, 0x00);
+    assert_eq(detect_file_type(unk, 4), FILETYPE_UNKNOWN, "detect Unknown");
+
+    # Too short
+    var tiny = alloc(1);
+    store8(tiny, 0x42);
+    assert_eq(detect_file_type(tiny, 1), FILETYPE_UNKNOWN, "too short = unknown");
+}
+
+fn test_tar_detection() {
+    test_group("tar_detection");
+
+    # Build a minimal TAR header with ustar magic
+    var tar = alloc(1024);
+    for (var i = 0; i < 1024; i = i + 1) { store8(tar + i, 0); }
+    # filename "test.txt"
+    store8(tar, 116); store8(tar + 1, 101); store8(tar + 2, 115); store8(tar + 3, 116);
+    # ustar magic at 257
+    store8(tar + 257, 117); store8(tar + 258, 115); store8(tar + 259, 116);
+    store8(tar + 260, 97); store8(tar + 261, 114);
+
+    assert(detect_tar(tar, 1024), "ustar header detected as TAR");
+    assert_eq(detect_file_type(tar, 1024), FILETYPE_TAR, "file type = TAR");
+
+    # Not TAR
+    var nottar = alloc(512);
+    for (var i = 0; i < 512; i = i + 1) { store8(nottar + i, 0x41); }
+    assert_eq(detect_tar(nottar, 512), 0, "random data not TAR");
+}
+
+fn main() {
+    phylax_init();
+
+    test_entropy();
+    test_chi_squared();
+    test_file_detection();
+    test_tar_detection();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);
