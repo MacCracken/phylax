@@ -12,11 +12,16 @@ carved-out data-format modules — both in **Fixed**.
 
 ### Changed
 
-- **Cyrius toolchain pin: 5.10.44 → 6.1.25.** Moves phylax onto the
-  6.1.x frontend/codegen line. `lib/` is a derived artifact, rehydrated
-  by `cyrius deps` against the pinned toolchain snapshot (stdlib) plus
-  the pinned git bundles; the dep contract is `cyrius.cyml` +
-  `cyrius.lock`.
+- **Cyrius toolchain pin: 5.10.44 → 6.1.27.** Moves phylax onto the
+  6.1.x frontend/codegen line, crossing three relevant slots: **6.1.25**
+  (the bayan data-format carve — see the `[deps]` reshape below),
+  **6.1.26** (the ganita math carve — a no-op for phylax, which uses only
+  the stdlib `math` primitive `f64_log2` in `shannon_entropy`; the carved
+  matrix/linalg/transcendental surface is unused, so no `ganita` dep is
+  added), and **6.1.27** (binary output cap raised 2 MB → 16 MB). `lib/`
+  is a derived artifact, rehydrated by `cyrius deps` against the pinned
+  toolchain snapshot (stdlib) plus the pinned git bundles; the dep
+  contract is `cyrius.cyml` + `cyrius.lock`.
 
 - **First-party dep pins, all bumped to latest released:**
   - **sakshi 2.2.4 → 2.2.10** — patch cycle, logging surface unchanged

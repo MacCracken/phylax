@@ -65,10 +65,16 @@ under cyrius 6.1.x and SIGILLs at runtime.
 
 ## Toolchain
 
-- **Cyrius**: 6.1.25 (pinned in `cyrius.cyml`)
-- **Watch**: ganita (math-domain) carve lands at cyrius 6.1.26, mirroring
-  the bayan pattern. phylax uses only f64 primitives (kept in stdlib), so
-  no migration is expected — confirm on the 6.1.26 bump.
+- **Cyrius**: 6.1.27 (pinned in `cyrius.cyml`)
+- **6.1.26 ganita carve — confirmed no-op for phylax.** matrix/linalg +
+  the advanced transcendentals (sinh/cosh/pow/asin/atan2/hypot/fibonacci/
+  binomial) were carved to the `ganita` sibling, but stdlib `math` keeps
+  the primitives — including the `f64_log2` polyfill phylax's
+  `shannon_entropy` uses. phylax touches no carved fn, so **no `ganita`
+  dep** is needed; `math` stays in `[deps] stdlib`.
+- **6.1.27** raised the binary output cap 2 MB → 16 MB (relocated
+  `output_buf` to the heap top, 8× larger). phylax's non-DCE test
+  binaries (~2 MB with the bayan bundle) now have ample headroom.
 
 ## Upgrade Notes
 
