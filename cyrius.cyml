@@ -62,10 +62,20 @@ modules = [
 [deps]
 stdlib = [
     "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args",
-    "assert", "hashmap", "json", "toml", "regex", "fs", "net",
+    "assert", "hashmap", "regex", "fs", "net",
     "tagged", "fnptr", "callback", "thread", "bench", "bounds",
-    "math", "process", "chrono", "base64", "csv",
-    "freelist", "bigint", "http", "mmap",
+    "math", "process", "chrono",
+    "freelist", "http", "mmap",
+    # The bayan carve (cyrius 6.1.25): `json`, `toml`, `csv`, `base64`,
+    # `bigint` (+ `cyml`, `u128`) were removed from the cyrius stdlib and
+    # folded into the single `lib/bayan.cyr` bundle in the `bayan` sibling
+    # repo. Those names no longer resolve as standalone stdlib modules
+    # under 6.1.25 — declaring `bayan` supplies all of them. phylax's
+    # existing `json_*` / `toml_*` / `base64_*` / `csv_*` / `bigint`
+    # call sites keep working through bayan's back-compat aliases; migrate
+    # to the canonical `bayan_*` names over the deprecation window. This
+    # also resolves the `bayan_json_get` symbol the sigil bundle references.
+    "bayan",
     # New transitive deps from sigil 3.x — pulls ct (constant-time
     # primitives), keccak (SHA-3 / SHAKE / Keccak-f1600 for ML-DSA),
     # and random (getrandom for keygen / nonces). Phylax itself only
@@ -82,10 +92,7 @@ stdlib = [
     # *unresolved* call is emitted as a `ud2` that builds fine but
     # SIGILLs (exit 132) the moment a crypto path — e.g. `sha256_hex` —
     # touches it. Declare it so the symbol resolves. See sigil CHANGELOG
-    # 3.7.8. (`bayan_json_get` also surfaces as undefined, but only on a
-    # DCE-pruned/unreachable path phylax never calls — pulling all of
-    # `bayan.cyr` in would bloat the non-DCE test binary past the 2 MB
-    # cap, so it stays undeclared.)
+    # 3.7.8.
     "thread_local"
 ]
 

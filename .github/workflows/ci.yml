@@ -32,7 +32,20 @@ jobs:
           echo "CYRIUS_HOME=$HOME/.cyrius" >> "$GITHUB_ENV"
 
       - name: Resolve dependencies
-        run: cyrius deps
+        # `lib/` is a derived artifact (gitignored, untracked since
+        # 445a60f) — the dep contract is cyrius.cyml + cyrius.lock,
+        # rehydrated here against the pinned toolchain snapshot (stdlib,
+        # incl. the carved `bayan` bundle) plus the pinned git bundles.
+        # `rm -rf lib` first is defensive: on a fresh runner there's no
+        # ./lib/, but a cached/self-hosted runner could carry a stale one
+        # that *shadows* the snapshot (declared stdlib names resolve to
+        # ./lib/<name>.cyr with no fall-through). Since cyrius 6.1.25's
+        # bayan carve deleted json/toml/csv/base64/bigint from stdlib, a
+        # stale ./lib/ supplying those would mask a manifest that hasn't
+        # migrated to `bayan`. Starting clean keeps resolution honest.
+        run: |
+          rm -rf lib
+          cyrius deps
 
       - name: Verify dep hashes
         # cyrius.lock pins sakshi/sigil/majra/bote hashes; CI fails if a

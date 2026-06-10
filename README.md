@@ -120,7 +120,7 @@ cyrius bench            # benchmark groups
 ### Dependencies
 
 - **Cyrius** 6.1.25 toolchain
-- **stdlib** (31 modules): string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, json, toml, regex, fs, net, tagged, fnptr, callback, thread, bench, bounds, math, process, chrono, base64, csv, freelist, bigint, http, mmap, ct, keccak, random, slice, thread_local
+- **stdlib** (31 modules): string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, regex, fs, net, tagged, fnptr, callback, thread, bench, bounds, math, process, chrono, freelist, http, mmap, ct, keccak, random, slice, thread_local, bayan — note `bayan` is the cyrius 6.1.25 carve that supplies the former `json`/`toml`/`csv`/`base64`/`bigint` stdlib modules
 - **sakshi** 2.2.10 — structured logging
 - **sigil** 3.7.8 — SHA-256 (SHA-NI dispatch)
 - **bote** 2.7.3 — MCP tool registry and dispatch

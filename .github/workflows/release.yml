@@ -44,7 +44,13 @@ jobs:
           echo "CYRIUS_HOME=$HOME/.cyrius" >> "$GITHUB_ENV"
 
       - name: Resolve deps
-        run: cyrius deps
+        # `lib/` is a derived artifact — wipe any checked-out copy so a
+        # stale tracked lib/ can't shadow the toolchain snapshot. Required
+        # since cyrius 6.1.25's bayan carve (json/toml/csv/base64/bigint
+        # folded into lib/bayan.cyr); see ci.yml for the full rationale.
+        run: |
+          rm -rf lib
+          cyrius deps
 
       - name: Verify dep hashes
         run: |

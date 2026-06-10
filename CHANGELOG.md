@@ -4,17 +4,19 @@ All notable changes to Phylax will be documented in this file.
 
 ## [1.2.0] - 2026-06-10
 
-Toolchain + dep pin sweep onto the cyrius 6.1.x line. No detection
-behavior changes in `src/`; the only source edit is the engine version
-string. The work was driven by a hard SIGILL regression that the bump
-surfaced and resolved (see **Fixed**).
+Toolchain + dep pin sweep onto the cyrius 6.1.x line, including the
+**bayan stdlib carve** migration. No detection behavior changes in
+`src/`; the only source edit is the engine version string. The bump
+surfaced two build-breaks the sweep resolves — a `sha256` SIGILL and the
+carved-out data-format modules — both in **Fixed**.
 
 ### Changed
 
 - **Cyrius toolchain pin: 5.10.44 → 6.1.25.** Moves phylax onto the
-  6.1.x frontend/codegen line. `cyrius lib sync` refreshes the vendored
-  `lib/` stdlib snapshot to the 6.1.25 set; `cyrius deps` rehydrates the
-  pinned git bundles on top.
+  6.1.x frontend/codegen line. `lib/` is a derived artifact, rehydrated
+  by `cyrius deps` against the pinned toolchain snapshot (stdlib) plus
+  the pinned git bundles; the dep contract is `cyrius.cyml` +
+  `cyrius.lock`.
 
 - **First-party dep pins, all bumped to latest released:**
   - **sakshi 2.2.4 → 2.2.10** — patch cycle, logging surface unchanged
@@ -22,7 +24,7 @@ surfaced and resolved (see **Fixed**).
   - **sigil 3.1.1 → 3.7.8** — phylax's only sigil surface is
     `sha256_hex`. The 3.7.x bundle defaults ML-DSA-65 on (since 3.7.6)
     and routes crypto through a `cbank` cache that references new
-    stdlib symbols; see **Fixed** and the stdlib additions below.
+    stdlib symbols; see **Fixed**.
   - **majra 2.4.4 → 2.4.5** — patch refresh, pubsub/counter surface
     unchanged at phylax's transitive call sites.
   - **bote 2.7.1 → 2.7.3** — bote 2.7.3 now pins libro 2.7.2 itself,
@@ -33,12 +35,32 @@ surfaced and resolved (see **Fixed**).
     the pin stays so the resolved version is explicit and doesn't drift
     silently with bote's transitive pin.
 
-- **Stdlib additions: `slice`, `thread_local`.** Stdlib modules are
-  opt-in via `[deps] stdlib`, not auto-resolved. The sigil 3.7.x
-  transitive surface needs two phylax hadn't declared: `slice`
-  (`lib/agnosys.cyr` uses slice subscripts → `_slice_idx_get_W`), and
-  `thread_local` (sigil's `cbank` crypto-cache path calls
-  `thread_local_*`).
+- **Stdlib `[deps]` set re-shaped for the cyrius 6.1.25 bayan carve.**
+  Stdlib modules are opt-in via `[deps] stdlib`, not auto-resolved.
+  - **Removed `json`, `toml`, `base64`, `csv`, `bigint`** — cyrius
+    6.1.25 carved these data-format modules out of stdlib (`lib/{json,
+    toml,csv,base64,bigint,cyml,u128}.cyr` deleted) and folded them into
+    the single `bayan` sibling bundle. They no longer resolve as
+    standalone stdlib names.
+  - **Added `bayan`** — supplies all of the above. phylax's existing
+    `json_*` / `toml_*` / `base64_*` / `csv_*` / `bigint` call sites
+    keep working through bayan's back-compat aliases (migration to the
+    canonical `bayan_*` names is deferred to the deprecation window).
+  - **Added `slice`** — sigil 3.7.x's transitive `lib/agnosys.cyr` uses
+    slice subscripts (`_slice_idx_get_W`).
+  - **Added `thread_local`** — sigil's `cbank` crypto-cache path calls
+    `thread_local_*` (see **Fixed**).
+  - Net effect: the DCE release binary is **smaller** (1.98 MB → 1.78 MB)
+    and the non-DCE test binaries fit comfortably under the output cap.
+
+- **CI / Release dep resolution wipes `lib/` before resolving.** Both
+  workflows now run `rm -rf lib && cyrius deps`. `lib/` is untracked
+  (since `445a60f`), so a fresh runner already starts clean — this is
+  defensive against a cached/self-hosted runner carrying a stale `lib/`
+  that would *shadow* the snapshot (declared stdlib names resolve to
+  `./lib/<name>.cyr` with no fall-through, masking the carve migration).
+  The primary clean-checkout fix is the `bayan` migration above; this is
+  dep-process hygiene.
 
 ### Fixed
 
@@ -47,21 +69,17 @@ surfaced and resolved (see **Fixed**).
   was an *unresolved* symbol, which cyrius 6.1.x emits as a `ud2` — the
   binary builds clean but SIGILLs the instant a crypto path touches it
   (here, the first `sha256_hex`). `tests/test_sha256.tcyr` reproduced it
-  as exit 132. Declaring `thread_local` resolves the symbol; the test
-  passes (`e3b0c442…` empty-string vector + determinism) and the
-  detection suite is green at 177 + 11 assertions. Root cause matches
+  as exit 132. Declaring `thread_local` resolves it; the test passes
+  (`e3b0c442…` empty-string vector + determinism). Root cause matches
   sigil's own CHANGELOG 3.7.8 note ("unresolved call to a `ud2`").
 
-### Known issues / carryover
-
-- **`bayan_json_get` undeclared — deferred to 1.2.1 pending cyrius
-  6.1.27.** sigil 3.7.x also references `bayan_json_get` on a
-  DCE-pruned/unreachable path phylax never calls, so it surfaces only as
-  a benign `undefined function` warning (DCE NOPs it in the real
-  binary). Declaring `bayan` to silence it pulls all of `bayan.cyr` in,
-  which pushes the non-DCE test binary past the current 2 MB output cap.
-  Holding `bayan` undeclared for the 1.2.0 cut; **1.2.1 picks it up once
-  cyrius 6.1.27 raises the binary cap and returns the needed dep.**
+- **Clean-checkout build failure from the bayan carve.** `cyrius deps`
+  on a fresh 6.1.25 runner failed with `cannot read
+  .../lib/{json,toml,base64,csv,bigint}.cyr` — phylax still listed those
+  carved-out names in `[deps] stdlib`, and a stale tracked `lib/` had
+  masked it locally. Migrating to `bayan` (above) + the CI `rm -rf lib`
+  step fixes resolution; the full suite is green at 177 + 11 assertions
+  and the build emits zero `undefined function` warnings.
 
 ## [1.1.1] - 2026-05-11
 
