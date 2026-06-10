@@ -1,8 +1,13 @@
 # Dependency Watch
 
-Status tracking for all dependencies.
+Status tracking for all dependencies. Current as of **phylax 1.2.0**
+(2026-06-10).
 
-## Cyrius Stdlib Modules (25)
+## Cyrius Stdlib Modules (35)
+
+Opt-in via `[deps] stdlib` in `cyrius.cyml` — stdlib modules are **not**
+auto-resolved; an undeclared-but-referenced symbol compiles to a `ud2`
+under cyrius 6.1.x and SIGILLs at runtime.
 
 | Module | Purpose |
 |--------|---------|
@@ -11,7 +16,7 @@ Status tracking for all dependencies.
 | `alloc` | Heap allocator (bump + arena) |
 | `vec` | Dynamic vectors |
 | `str` | Str type (fat pointer: data+len) |
-| `syscalls` | Linux x86_64 syscall bindings |
+| `syscalls` | Linux syscall bindings |
 | `io` | File I/O (open, read, write, close) |
 | `args` | Command-line arguments |
 | `assert` | Testing assertions |
@@ -32,21 +37,42 @@ Status tracking for all dependencies.
 | `chrono` | Time/date operations |
 | `base64` | Base64 encoding |
 | `csv` | CSV parsing |
+| `freelist` | Free-list allocator |
+| `bigint` | Arbitrary-precision integers |
+| `http` | HTTP client |
+| `mmap` | Memory mapping |
+| `ct` | Constant-time primitives (sigil 3.x PQ + AES-GCM surface) |
+| `keccak` | SHA-3 / SHAKE / Keccak-f1600 (sigil ML-DSA) |
+| `random` | getrandom for keygen / nonces (sigil) |
+| `slice` | Slice subscripts (`_slice_idx_get_W`; sigil 3.7.x via agnosys) |
+| `thread_local` | Thread-local storage (sigil 3.7.x `cbank` crypto cache) |
+
+> **Not declared (intentional):** `bayan` — sigil 3.7.x references
+> `bayan_json_get` on a DCE-pruned/unreachable path phylax never calls.
+> Declaring it pulls all of `bayan.cyr` in and overshoots the 2 MB
+> non-DCE test binary cap. Deferred to **1.2.1**, gated on cyrius 6.1.27
+> raising the cap. Until then it's a benign `undefined function` warning.
 
 ## External Dependencies
 
 | Dependency | Version | Purpose | Notes |
 |-----------|---------|---------|-------|
-| `sakshi` | 1.0.0 | Structured logging | Replaces Rust tracing/tracing-subscriber |
-| `sigil` | 2.1.2 | Cryptographic primitives | SHA-256 for file hashing and imphash |
+| `sakshi` | 2.2.10 | Structured logging | `dist/sakshi.cyr` bundle |
+| `sigil` | 3.7.8 | Cryptographic primitives | SHA-256 (SHA-NI dispatch); only `sha256_hex` consumed |
+| `majra` | 2.4.5 | Pubsub/counter | Transitive via bote `events_majra` |
+| `bote` | 2.7.3 | MCP tool registry/dispatch | Full profile only |
+| `libro` | 2.7.2 | Explicit pin for bote's transitive surface | Matches bote 2.7.3's own libro pin |
 
 ## Toolchain
 
-- **Cyrius**: 5.1.3 (pinned in `.cyrius-toolchain`)
-- **Minimum recommended**: 5.0.0 (IR, cyrius.cyml support)
+- **Cyrius**: 6.1.25 (pinned in `cyrius.cyml`)
+- **Next gate**: cyrius 6.1.27 — expected to raise the binary output cap
+  and return the `bayan` dep, unblocking the 1.2.1 cut.
 
 ## Upgrade Notes
 
-- `sakshi` 1.0.0 is stable — no breaking changes expected
-- `sigil` 2.x provides SHA-256, HMAC, and other cryptographic primitives
-- Stdlib modules are bundled with the Cyrius toolchain — version tracks the compiler
+- Stdlib modules are bundled with the Cyrius toolchain — refresh the
+  vendored `lib/` snapshot with `cyrius lib sync` after a toolchain pin
+  bump, then `cyrius deps` to rehydrate the pinned git bundles.
+- Dep tag bumps in `cyrius.cyml` must point to a GitHub-released tag,
+  never a local repo's in-progress `VERSION`.

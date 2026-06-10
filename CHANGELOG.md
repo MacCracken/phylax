@@ -2,6 +2,67 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.2.0] - 2026-06-10
+
+Toolchain + dep pin sweep onto the cyrius 6.1.x line. No detection
+behavior changes in `src/`; the only source edit is the engine version
+string. The work was driven by a hard SIGILL regression that the bump
+surfaced and resolved (see **Fixed**).
+
+### Changed
+
+- **Cyrius toolchain pin: 5.10.44 → 6.1.25.** Moves phylax onto the
+  6.1.x frontend/codegen line. `cyrius lib sync` refreshes the vendored
+  `lib/` stdlib snapshot to the 6.1.25 set; `cyrius deps` rehydrates the
+  pinned git bundles on top.
+
+- **First-party dep pins, all bumped to latest released:**
+  - **sakshi 2.2.4 → 2.2.10** — patch cycle, logging surface unchanged
+    at phylax's call sites.
+  - **sigil 3.1.1 → 3.7.8** — phylax's only sigil surface is
+    `sha256_hex`. The 3.7.x bundle defaults ML-DSA-65 on (since 3.7.6)
+    and routes crypto through a `cbank` cache that references new
+    stdlib symbols; see **Fixed** and the stdlib additions below.
+  - **majra 2.4.4 → 2.4.5** — patch refresh, pubsub/counter surface
+    unchanged at phylax's transitive call sites.
+  - **bote 2.7.1 → 2.7.3** — bote 2.7.3 now pins libro 2.7.2 itself,
+    so the phylax-side libro override is aligned to that (below).
+  - **libro 2.6.3 → 2.7.2** — kept as an explicit pin matching bote's
+    transitive pin. The original override rationale (bote shipping a
+    broken libro 2.6.2 with a bare `ct_eq` call) is resolved upstream;
+    the pin stays so the resolved version is explicit and doesn't drift
+    silently with bote's transitive pin.
+
+- **Stdlib additions: `slice`, `thread_local`.** Stdlib modules are
+  opt-in via `[deps] stdlib`, not auto-resolved. The sigil 3.7.x
+  transitive surface needs two phylax hadn't declared: `slice`
+  (`lib/agnosys.cyr` uses slice subscripts → `_slice_idx_get_W`), and
+  `thread_local` (sigil's `cbank` crypto-cache path calls
+  `thread_local_*`).
+
+### Fixed
+
+- **`sha256` SIGILL (exit 132) under cyrius 6.1.x + sigil 3.7.8.** With
+  `thread_local` undeclared, sigil's `cbank` call to `thread_local_*`
+  was an *unresolved* symbol, which cyrius 6.1.x emits as a `ud2` — the
+  binary builds clean but SIGILLs the instant a crypto path touches it
+  (here, the first `sha256_hex`). `tests/test_sha256.tcyr` reproduced it
+  as exit 132. Declaring `thread_local` resolves the symbol; the test
+  passes (`e3b0c442…` empty-string vector + determinism) and the
+  detection suite is green at 177 + 11 assertions. Root cause matches
+  sigil's own CHANGELOG 3.7.8 note ("unresolved call to a `ud2`").
+
+### Known issues / carryover
+
+- **`bayan_json_get` undeclared — deferred to 1.2.1 pending cyrius
+  6.1.27.** sigil 3.7.x also references `bayan_json_get` on a
+  DCE-pruned/unreachable path phylax never calls, so it surfaces only as
+  a benign `undefined function` warning (DCE NOPs it in the real
+  binary). Declaring `bayan` to silence it pulls all of `bayan.cyr` in,
+  which pushes the non-DCE test binary past the current 2 MB output cap.
+  Holding `bayan` undeclared for the 1.2.0 cut; **1.2.1 picks it up once
+  cyrius 6.1.27 raises the binary cap and returns the needed dep.**
+
 ## [1.1.1] - 2026-05-11
 
 Toolchain + dep pin sweep, dependency-resolution model cleanup, and

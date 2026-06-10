@@ -5,7 +5,7 @@ description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF par
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "5.10.44"
+cyrius = "6.1.25"
 
 [build]
 entry = "src/main.cyr"
@@ -72,39 +72,54 @@ stdlib = [
     # consumes `sha256_hex`, but the sigil bundle's PQ + AES-GCM
     # surfaces reference these symbols and the linker needs them
     # declared even if DCE prunes the call sites.
-    "ct", "keccak", "random"
+    "ct", "keccak", "random",
+    # sigil 3.7.x's transitive agnosys surface uses slice subscripts
+    # (`lib/agnosys.cyr` references `_slice_idx_get_W` helpers), which
+    # require the `slice` stdlib module to be included for the link.
+    "slice",
+    # sigil 3.7.x's crypto-bank (`cbank`) caching path calls
+    # `thread_local_*` (from `thread_local.cyr`). Under cyrius 6.1.x an
+    # *unresolved* call is emitted as a `ud2` that builds fine but
+    # SIGILLs (exit 132) the moment a crypto path — e.g. `sha256_hex` —
+    # touches it. Declare it so the symbol resolves. See sigil CHANGELOG
+    # 3.7.8. (`bayan_json_get` also surfaces as undefined, but only on a
+    # DCE-pruned/unreachable path phylax never calls — pulling all of
+    # `bayan.cyr` in would bloat the non-DCE test binary past the 2 MB
+    # cap, so it stays undeclared.)
+    "thread_local"
 ]
 
 [deps.sakshi]
 git = "https://github.com/MacCracken/sakshi.git"
-tag = "2.2.4"
+tag = "2.2.10"
 modules = ["dist/sakshi.cyr"]
 
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
-tag = "3.1.1"
+tag = "3.7.8"
 modules = ["dist/sigil.cyr"]
 
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
-tag = "2.4.4"
+tag = "2.4.5"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
-tag = "2.7.1"
+tag = "2.7.3"
 modules = ["src/registry.cyr", "src/dispatch.cyr", "src/error.cyr", "src/schema.cyr", "src/audit.cyr", "src/content.cyr", "src/jsonx.cyr", "src/protocol.cyr", "src/codec.cyr", "src/events.cyr", "src/events_majra.cyr"]
 
-# Direct override for the transitive libro pin bote-2.6.3+ ships
-# (`[deps.libro]` at libro 2.6.2 inside bote's manifest). libro 2.6.2
-# calls bare `ct_eq(...)` at `dist/libro.cyr:116` — the stdlib only
-# provides `ct_eq_bytes` / `ct_eq_bytes_lens`, so the link fails with
-# `undefined function 'ct_eq' (will crash at runtime)`. libro 2.6.3
-# fixed the call site to use `ct_eq_bytes_lens`. Phylax itself doesn't
-# consume the libro surface, but bote's bundle references libro
-# symbols transitively, so the dist module gets linked. Hold this
-# override until bote bumps its libro pin.
+# Explicit libro pin, held for the bote transitive surface. The
+# original reason for this override — bote-2.6.3+ shipped a transitive
+# `[deps.libro]` at libro 2.6.2, whose bare `ct_eq(...)` call at
+# `dist/libro.cyr:116` failed to link against the stdlib's
+# `ct_eq_bytes` / `ct_eq_bytes_lens` — is resolved upstream: bote 2.7.3
+# now pins libro 2.7.2 itself. We keep the direct pin aligned to that
+# same 2.7.2 so the resolved version is explicit at phylax's manifest
+# and doesn't silently drift with bote's transitive pin. Phylax itself
+# doesn't consume the libro surface; bote's bundle references libro
+# symbols transitively, so the dist module gets linked.
 [deps.libro]
 git = "https://github.com/MacCracken/libro.git"
-tag = "2.6.3"
+tag = "2.7.2"
 modules = ["dist/libro.cyr"]

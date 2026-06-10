@@ -112,19 +112,20 @@ Native `.yar` syntax is also supported via `phylax rules validate`.
 Phylax is written in [Cyrius](https://github.com/MacCracken/cyrius) and compiles to a single static binary.
 
 ```bash
-cyrius build            # build (804KB static binary)
-cyrius test             # run 86 tests across 16 groups
-cyrius bench            # 12 benchmark groups
+cyrius build            # build (~1.9MB static binary)
+cyrius test             # run 177 tests across 14 module suites
+cyrius bench            # benchmark groups
 ```
 
 ### Dependencies
 
-- **Cyrius** 5.1.7 toolchain
-- **stdlib** (28 modules): string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, json, toml, regex, fs, net, tagged, fnptr, callback, thread, bench, bounds, math, process, chrono, base64, csv, http, cstr
-- **sakshi** 1.0.0 — structured logging
-- **sigil** 2.1.2 — SHA-256
-- **bote** 2.5.1 — MCP tool registry and dispatch
-- **majra** 2.2.0 — build system
+- **Cyrius** 6.1.25 toolchain
+- **stdlib** (31 modules): string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, json, toml, regex, fs, net, tagged, fnptr, callback, thread, bench, bounds, math, process, chrono, base64, csv, freelist, bigint, http, mmap, ct, keccak, random, slice, thread_local
+- **sakshi** 2.2.10 — structured logging
+- **sigil** 3.7.8 — SHA-256 (SHA-NI dispatch)
+- **bote** 2.7.3 — MCP tool registry and dispatch
+- **majra** 2.4.5 — pubsub/counter (transitive via bote)
+- **libro** 2.7.2 — explicit pin for bote's transitive surface
 
 Zero external runtime dependencies. No libc, no allocator, no async runtime.
 
