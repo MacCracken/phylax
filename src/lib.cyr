@@ -1,4 +1,15 @@
 # phylax — all modules, no entry point
+#
+# Explicit opt-in for sigil's crypto-bank (`cbank()`) path: sigil's
+# `sha256` routes through `thread_local_*` (per-thread crypto banks).
+# cyrius stdlib is opt-in and only auto-associates modules referenced
+# by first-party source; nothing in phylax's own source calls
+# `thread_local_*` (only the bundled sigil surface does), so under
+# cyrius 6.2.x the module is not auto-included and the calls lower to a
+# `ud2` that SIGILLs (exit 132) the moment `sha256` runs. Including it
+# here defines the symbols. (`thread` already auto-associates via
+# cli.cyr's `thread_create` use.) See sigil README "opt-in stdlib".
+include "lib/thread_local.cyr"
 include "src/syscall_x86_64_linux.cyr"
 include "src/syscall_aarch64_linux.cyr"
 include "src/types.cyr"

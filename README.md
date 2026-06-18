@@ -119,13 +119,13 @@ cyrius bench            # benchmark groups
 
 ### Dependencies
 
-- **Cyrius** 6.1.27 toolchain
+- **Cyrius** 6.2.20 toolchain
 - **stdlib** (31 modules): string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, regex, fs, net, tagged, fnptr, callback, thread, bench, bounds, math, process, chrono, freelist, http, mmap, ct, keccak, random, slice, thread_local, bayan — note `bayan` is the cyrius 6.1.25 carve that supplies the former `json`/`toml`/`csv`/`base64`/`bigint` stdlib modules
-- **sakshi** 2.2.10 — structured logging
-- **sigil** 3.7.8 — SHA-256 (SHA-NI dispatch)
-- **bote** 2.7.3 — MCP tool registry and dispatch
-- **majra** 2.4.5 — pubsub/counter (transitive via bote)
-- **libro** 2.7.2 — explicit pin for bote's transitive surface
+- **sakshi** 2.3.1 — structured logging
+- **sigil** 3.8.0 — SHA-256 (SHA-NI dispatch)
+- **bote** 2.7.6 — MCP tool registry and dispatch
+- **majra** 2.4.7 — pubsub/counter (transitive via bote)
+- **libro** 2.7.4 — explicit pin for bote's transitive surface
 
 Zero external runtime dependencies. No libc, no allocator, no async runtime.
 

@@ -1,13 +1,17 @@
 # Dependency Watch
 
-Status tracking for all dependencies. Current as of **phylax 1.2.0**
-(2026-06-10).
+Status tracking for all dependencies. Current as of **phylax 1.2.1**
+(2026-06-17).
 
 ## Cyrius Stdlib Modules (31)
 
 Opt-in via `[deps] stdlib` in `cyrius.cyml` — stdlib modules are **not**
 auto-resolved; an undeclared-but-referenced symbol compiles to a `ud2`
-under cyrius 6.1.x and SIGILLs at runtime.
+under cyrius 6.1.x and SIGILLs at runtime. **As of cyrius 6.2.x** a
+declared module is only auto-associated when *first-party source*
+references it — a symbol referenced only inside a dep bundle (e.g.
+sigil's `cbank` → `thread_local_*`) is not pulled by the declaration
+alone and must be explicitly `include`d. See `thread_local` below.
 
 | Module | Purpose |
 |--------|---------|
@@ -40,7 +44,7 @@ under cyrius 6.1.x and SIGILLs at runtime.
 | `keccak` | SHA-3 / SHAKE / Keccak-f1600 (sigil ML-DSA) |
 | `random` | getrandom for keygen / nonces (sigil) |
 | `slice` | Slice subscripts (`_slice_idx_get_W`; sigil 3.7.x via agnosys) |
-| `thread_local` | Thread-local storage (sigil 3.7.x `cbank` crypto cache) |
+| `thread_local` | Thread-local storage (sigil `cbank` crypto cache). **Explicitly `include`d in `src/lib.cyr` + `src/lib_core.cyr`** — under cyrius 6.2.x the `[deps] stdlib` declaration alone no longer pulls it (only sigil's bundle references it; no first-party caller), so the declaration is kept (so `cyrius deps` stages the file) and the explicit include defines the symbols. |
 | `bayan` | Data-format bundle (cyrius 6.1.25 carve) — json / toml / csv / base64 / bigint / cyml / u128, canonical `bayan_*` + legacy aliases |
 
 > **The bayan carve (cyrius 6.1.25).** `json`, `toml`, `csv`, `base64`,
@@ -57,15 +61,15 @@ under cyrius 6.1.x and SIGILLs at runtime.
 
 | Dependency | Version | Purpose | Notes |
 |-----------|---------|---------|-------|
-| `sakshi` | 2.2.10 | Structured logging | `dist/sakshi.cyr` bundle |
-| `sigil` | 3.7.8 | Cryptographic primitives | SHA-256 (SHA-NI dispatch); only `sha256_hex` consumed |
-| `majra` | 2.4.5 | Pubsub/counter | Transitive via bote `events_majra` |
-| `bote` | 2.7.3 | MCP tool registry/dispatch | Full profile only |
-| `libro` | 2.7.2 | Explicit pin for bote's transitive surface | Matches bote 2.7.3's own libro pin |
+| `sakshi` | 2.3.1 | Structured logging | `dist/sakshi.cyr` bundle |
+| `sigil` | 3.8.0 | Cryptographic primitives | SHA-256 (SHA-NI dispatch); only `sha256` consumed; bundle inlined (3.7.11+) |
+| `majra` | 2.4.7 | Pubsub/counter | Transitive via bote `events_majra` |
+| `bote` | 2.7.6 | MCP tool registry/dispatch | Full profile only |
+| `libro` | 2.7.4 | Explicit pin for bote's transitive surface | Matches bote 2.7.6's own libro pin |
 
 ## Toolchain
 
-- **Cyrius**: 6.1.27 (pinned in `cyrius.cyml`)
+- **Cyrius**: 6.2.20 (pinned in `cyrius.cyml`)
 - **6.1.26 ganita carve — confirmed no-op for phylax.** matrix/linalg +
   the advanced transcendentals (sinh/cosh/pow/asin/atan2/hypot/fibonacci/
   binomial) were carved to the `ganita` sibling, but stdlib `math` keeps

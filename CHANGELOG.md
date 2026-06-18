@@ -2,6 +2,73 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.2.1] - 2026-06-17
+
+Toolchain + dep pin sweep onto the cyrius 6.2.x line, with the latest
+first-party dep tags. No detection behavior changes in `src/`; the
+source edits are the engine version string plus a single explicit
+stdlib `include` (the `thread_local` opt-in below). The bump surfaced
+two build-breaks the sweep resolves — both rooted in cyrius 6.2.x making
+stdlib auto-association first-party-only — captured in **Fixed**.
+
+### Changed
+
+- **Cyrius toolchain pin: 6.1.27 → 6.2.20.** Stays on the 6.2.x
+  frontend/codegen line. Nothing between the two slots carves stdlib
+  surface phylax consumes (the bayan carve at 6.1.25 already landed in
+  1.2.0); the relevant 6.2.x deltas are internal — the aarch64-Linux
+  socket-syscall ESYSXLAT renumbers (6.2.10), the macOS/Windows clock
+  reroute fixes (6.2.13–6.2.16), and the sigil 3.8.0 vendored refold
+  (6.2.13). `lib/` remains a derived artifact, rehydrated by `cyrius
+  deps` against the pinned snapshot + git bundles.
+
+- **First-party dep pins, all bumped to latest released:**
+  - **sakshi 2.2.10 → 2.3.1** — patch/minor cycle, logging surface
+    unchanged at phylax's call sites.
+  - **sigil 3.7.8 → 3.8.0** — phylax's only sigil surface is `sha256`.
+    3.8.0's bundle is correctly inlined (the 3.7.11 distlib-inliner fix
+    is in) and its `cbank` crypto-cache path still routes through
+    `thread_local_*`; see **Fixed**.
+  - **majra 2.4.5 → 2.4.7** — patch refresh, pubsub/counter surface
+    unchanged at phylax's transitive call sites.
+  - **bote 2.7.3 → 2.7.6** — bote 2.7.6 now pins libro 2.7.4 itself,
+    so the phylax-side libro override is aligned to that (below).
+  - **libro 2.7.2 → 2.7.4** — kept as an explicit pin matching bote's
+    transitive pin so the resolved version is explicit and doesn't drift
+    silently with bote's transitive pin.
+
+### Fixed
+
+- **`sha256` SIGILL (exit 132) under cyrius 6.2.x — `thread_local` opt-in
+  is now explicit.** cyrius 6.2.x only auto-associates a declared stdlib
+  module when *first-party source* references it; modules referenced
+  only inside a dep bundle no longer get pulled. Nothing in phylax's own
+  source calls `thread_local_*` — only the bundled sigil `cbank` path
+  does — so the `thread_local` declaration in `[deps] stdlib` (added in
+  1.2.0) stopped pulling the module, its calls lowered to a `ud2`, and
+  the first `sha256` SIGILLed. Fix: explicit `include "lib/thread_local.cyr"`
+  at the top of `src/lib.cyr` and `src/lib_core.cyr` (sigil's documented
+  opt-in pattern — "cyrius stdlib is opt-in, not auto-associated").
+  `tests/test_sha256.tcyr` passes again (`e3b0c442…` empty-string vector
+  + determinism); the build emits zero `undefined function` warnings.
+  (`thread` still auto-associates via `cli.cyr`'s `thread_create` use, so
+  only `thread_local` needs the explicit include.)
+
+- **Stale sigil 3.7.8 bundle no longer builds under 6.2.x.** The 3.7.8
+  `dist/sigil.cyr` carried un-inlined `include "src/*.cyr"` lines (the
+  distlib-inliner bug fixed in sigil 3.7.11), which fail under 6.2.x with
+  `cannot open include file: src/sha_ni.cyr`. Bumping to sigil 3.8.0 (a
+  properly inlined bundle) is what makes the toolchain bump build at all.
+
+### Note for consumers
+
+`dist/phylax.cyr` / `dist/phylax-core.cyr` are pure source concatenations
+and do not embed stdlib. Downstream consumers that reach phylax's
+`sha256` path (daimon, aegis, t-ron) must, like all sigil consumers on
+cyrius ≥ 6.2.x, `include "lib/thread_local.cyr"` themselves alongside the
+sigil bundle — the same opt-in they already owe for the rest of the
+stdlib surface.
+
 ## [1.2.0] - 2026-06-10
 
 Toolchain + dep pin sweep onto the cyrius 6.1.x line, including the
