@@ -46,6 +46,14 @@
 - GZIP/ZIP deflate decompression for compressed entry scanning
 - Inflate algorithm implementation in Cyrius
 
+### Dep hygiene — drop transitive agnosys (agnosys → agnodrm decomposition)
+- phylax has **no own** `[deps.agnosys]`; its agnosys was purely transitive
+  through sigil (the `lib/agnosys.cyr` slice-subscript note at `cyrius.cyml:86`).
+- sigil **3.8.1** internalized its trust/firmware modules and dropped
+  `[deps.agnosys]` entirely. Bump `[deps.sigil]` **3.8.0 → 3.8.1** to pick up the
+  agnosys-free sigil; this removes phylax's last transitive agnosys edge. No
+  phylax source change — pin bump + re-vendor only.
+
 ## v1.0 Criteria
 
 - All v0.9.x items complete

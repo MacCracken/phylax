@@ -2,6 +2,34 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.2.2] - 2026-06-30
+
+Tier-4 (consumer) step of the coordinated base-security-stack migration
+to cyrius **6.3.15** (sakshi 2.4.3 → sigil 3.9.8 → majra 2.5.0 → libro
+2.7.9 → bote 2.7.7 → **phylax 1.2.2**). Toolchain pin + dependency
+refresh, plus one real latent-bug fix the 6.3.x arity check surfaced. All
+188 assertions across the 15 test files pass on the new stack.
+
+### Changed
+
+- **Cyrius toolchain pin: 6.2.20 → 6.3.15.**
+- **Dependencies**: sakshi 2.4.3, sigil 3.9.8, majra 2.5.0, bote 2.7.7,
+  libro 2.7.9 (the migrated tiers below phylax).
+- **`[deps] stdlib`**: added `atomic` + `sync` — patra 1.12.7 (pulled
+  transitively through libro's dist bundle on 6.3.x) declares
+  `lib/sync.cyr` as a hard stdlib dep, and `sync` builds on `atomic`.
+
+### Fixed
+
+- **Quarantine index was never persisted to disk** (`src/quarantine.cyr`
+  `quarantine_save_index`). The call `file_write(load64(mgr + 16),
+  json_str)` was doubly wrong: `mgr + 16` holds the `index.json` *path*
+  (set via `path_join` in the ctor, read back by `phylax_read_file`), not
+  an fd, and the `len` argument was omitted entirely — so on 6.2.x the
+  write silently no-op'd. Corrected to `file_write_all(path, json_str,
+  str_len(json_str))`, which opens/writes/closes by path (matching the
+  read side). 6.3.x's stricter arity check surfaced the latent bug.
+
 ## [1.2.1] - 2026-06-17
 
 Toolchain + dep pin sweep onto the cyrius 6.2.x line, with the latest

@@ -5,7 +5,7 @@ description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF par
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "6.2.20"
+cyrius = "6.3.15"
 
 [build]
 entry = "src/main.cyr"
@@ -63,7 +63,7 @@ modules = [
 stdlib = [
     "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args",
     "assert", "hashmap", "regex", "fs", "net",
-    "tagged", "fnptr", "callback", "thread", "bench", "bounds",
+    "tagged", "fnptr", "callback", "atomic", "sync", "thread", "bench", "bounds",
     "math", "process", "chrono",
     "freelist", "http", "mmap",
     # The bayan carve (cyrius 6.1.25): `json`, `toml`, `csv`, `base64`,
@@ -98,22 +98,26 @@ stdlib = [
 
 [deps.sakshi]
 git = "https://github.com/MacCracken/sakshi.git"
-tag = "2.3.1"
+path = "../sakshi"
+tag = "2.4.3"
 modules = ["dist/sakshi.cyr"]
 
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
-tag = "3.8.0"
+path = "../sigil"
+tag = "3.9.8"
 modules = ["dist/sigil.cyr"]
 
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
-tag = "2.4.7"
+path = "../majra"
+tag = "2.5.0"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
-tag = "2.7.6"
+path = "../bote"
+tag = "2.7.7"
 modules = ["src/registry.cyr", "src/dispatch.cyr", "src/error.cyr", "src/schema.cyr", "src/audit.cyr", "src/content.cyr", "src/jsonx.cyr", "src/protocol.cyr", "src/codec.cyr", "src/events.cyr", "src/events_majra.cyr"]
 
 # Explicit libro pin, held for the bote transitive surface. The
@@ -128,5 +132,6 @@ modules = ["src/registry.cyr", "src/dispatch.cyr", "src/error.cyr", "src/schema.
 # symbols transitively, so the dist module gets linked.
 [deps.libro]
 git = "https://github.com/MacCracken/libro.git"
-tag = "2.7.4"
+path = "../libro"
+tag = "2.7.9"
 modules = ["dist/libro.cyr"]

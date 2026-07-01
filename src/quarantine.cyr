@@ -140,7 +140,13 @@ fn quarantine_save_index(mgr) {
         vec_push(items, m);
     }
     var json_str = json_build(items);
-    file_write(load64(mgr + 16), json_str);
+    # mgr+16 is the index.json PATH (set via path_join in the ctor, read
+    # back by phylax_read_file), not an fd — so write the whole file by
+    # path. The prior `file_write(path, json_str)` was doubly wrong: it
+    # passed a path where an fd is expected AND omitted the length arg, so
+    # the index was silently never persisted. 6.3.x's arity check surfaced
+    # it. (migration 1.2.2)
+    file_write_all(load64(mgr + 16), json_str, str_len(json_str));
 }
 
 # Quarantine a file: move it into the quarantine directory, record metadata.
