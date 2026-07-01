@@ -63,7 +63,7 @@ modules = [
 stdlib = [
     "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args",
     "assert", "hashmap", "regex", "fs", "net",
-    "tagged", "fnptr", "callback", "atomic", "sync", "thread", "bench", "bounds",
+    "tagged", "fnptr", "atomic", "sync", "thread", "bench", "bounds",
     "math", "process", "chrono",
     "freelist", "http", "mmap",
     # The bayan carve (cyrius 6.1.25): `json`, `toml`, `csv`, `base64`,

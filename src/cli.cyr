@@ -424,6 +424,16 @@ var IN_MOVED_TO    = 0x00000080;
 var WATCH_MASK     = 0x0000018A;  # IN_MODIFY | IN_CLOSE_WRITE | IN_CREATE | IN_MOVED_TO
 
 fn cmd_watch(paths, recursive, extensions, rules_path) {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no inotify (no sys_inotify_init / sys_inotify_add_watch in the
+    # frozen syscall surface), so the live directory-watch subcommand is
+    # unavailable there. Fail closed with a clear message rather than dragging
+    # the Linux inotify calls into the --agnos build; one-shot `scan` still works.
+    var am = str_from("phylax: watch mode is unavailable on AGNOS (no inotify) — use one-shot scan");
+    sakshi_error(str_data(am), str_len(am));
+    return 1;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var msg = str_from("phylax: starting file watcher");
     sakshi_info(str_data(msg), str_len(msg));
 
@@ -571,6 +581,7 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
     }
 
     return 0;
+    #endif
 }
 
 

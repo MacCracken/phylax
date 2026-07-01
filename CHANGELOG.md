@@ -2,6 +2,26 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.2.3] - 2026-07-01
+
+**AGNOS cross-build readiness.** phylax now compiles cleanly under
+`cyrius build --agnos`. Host build byte-identical (the agnos change is
+`#ifdef CYRIUS_TARGET_AGNOS`-gated); 188 assertions still pass.
+
+### Changed
+- **Dropped the unused `callback` stdlib dependency** (`cyrius.cyml`). phylax
+  used none of `callback.cyr`'s helpers, but including it dragged in its
+  `fork_with_pre_exec` (`sys_fork` / `sys_execve`) — undefined on agnos's frozen
+  syscall surface — which blocked the `--agnos` build. Removing the unused dep
+  clears it (no unnecessary dependencies). Root-cause stdlib gap filed upstream:
+  `cyrius .../issues/2026-07-01-callback-fork-with-pre-exec-unguarded-agnos.md`.
+
+### Fixed
+- **`--agnos` build**: guarded `cmd_watch` (`src/cli.cyr`), the inotify-based
+  directory watcher, behind `#ifndef CYRIUS_TARGET_AGNOS`. agnos has no inotify
+  (`sys_inotify_init` / `sys_inotify_add_watch`), so `watch` fail-closes there
+  with a clear message; the one-shot `scan` path is unaffected.
+
 ## [1.2.2] - 2026-06-30
 
 Tier-4 (consumer) step of the coordinated base-security-stack migration
