@@ -2,6 +2,75 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.2.4] - 2026-07-17
+
+Toolchain + dependency sweep onto cyrius **6.4.66**, refreshing all five
+first-party dep pins to their latest released tags. The bote 2.x → 3.x
+major bump required a consumption-model change (hand-picked src modules →
+the upstream core bundle), and the sweep surfaced a latent error-constant
+collision now fixed by namespacing phylax's error codes. All 188
+assertions across the 15 test files pass on the new stack; build, lint,
+vet, deny, and dist-freshness gates clean.
+
+### Breaking
+
+- **Error codes renamed `ERR_*` → `PHYLAX_ERR_*`** (`src/types.cyr`). All
+  eleven constants (`PHYLAX_ERR_NONE` … `PHYLAX_ERR_AGENT`) are namespaced,
+  mirroring bote's `BOTE_ERR_*` and libro's `LIBRO_ERR_*`. Consumers that
+  reference phylax's bare `ERR_*` constants from `dist/phylax.cyr` must
+  rename to the `PHYLAX_ERR_*` form. See **Fixed** for the motivation.
+
+### Changed
+
+- **Cyrius toolchain pin: 6.3.15 → 6.4.66.** No phylax source change
+  required for the bump itself — the 6.4.65 `thread_local_alloc()`
+  addition and the TLOCAL_MAX_SLOTS 16→128 growth land transparently
+  through the `lib/thread_local.cyr` opt-in phylax already includes.
+  cyrius 6.3.32 also made `sync.cyr` the sole owner of `mutex_*`,
+  eliminating the three `duplicate fn 'mutex_*'` build warnings phylax
+  emitted since 1.2.2.
+- **Dependencies** (all bumped to latest released tags): sakshi 2.4.3 →
+  **2.4.6**, sigil 3.9.8 → **3.12.1**, majra 2.5.0 → **2.5.1**, bote
+  2.7.7 → **3.1.4**, libro 2.7.9 → **2.8.2**.
+- **bote consumption model: 11 hand-picked `src/*.cyr` modules →
+  `dist/bote-core.cyr`.** bote 3.0.0 reorganized its layout — `dispatch.cyr`
+  now pulls `prompts.cyr` + `resources.cyr` (added to bote's `[lib.core]`),
+  whose `prompt_registry_*` / `resource_registry_*` / `prompt_def_name`
+  symbols the old hand-picked list omitted, so a naive tag-only bump fails
+  to link with 5 undefined functions. The upstream transport-free core
+  bundle is self-contained on `hashmap` + `bayan` (both already declared)
+  and exports the three symbols phylax consumes (`tool_def_new`,
+  `registry_register`, `dispatcher_handle`) with unchanged signatures —
+  `src/integration.cyr` is untouched. The 28-module `dist/bote.cyr` was
+  deliberately not used (it drags in the full transport + libro/majra
+  stack for three functions).
+- **`[deps.majra]` and `[deps.libro]` are now vestigial.** Switching bote
+  to `dist/bote-core.cyr` (which excludes `events_majra.cyr` /
+  `audit_libro.cyr`) removes the last transitive references to majra and
+  libro from phylax's link closure; phylax calls neither directly, so both
+  now stage but DCE-prune. Kept and version-tracked (aligned to bote
+  3.1.4's own transitive pins) as candidates for a dedicated dep-pruning
+  pass.
+
+### Fixed
+
+- **Error-constant collision** surfaced by the dep refresh
+  (`src/types.cyr`, `src/yara.cyr`, `tests/test_severity.tcyr`). phylax's
+  bare `ERR_*` codes collided with the identically-named constants other
+  bundled deps define — notably sakshi's `ERR_TIMEOUT = 5` vs phylax's
+  `ERR_TIMEOUT = 3` — producing a `duplicate symbol 'ERR_TIMEOUT' …
+  conflicting value (last definition wins)` link warning, i.e. link order
+  could silently substitute the wrong value into phylax's `err_name`.
+  Namespacing to `PHYLAX_ERR_*` (see **Breaking**) removes the collision.
+
+### Performance
+
+No regression on the new stack (12-benchmark suite): `sha256_4k` 19.8µs
+(sigil 3.12.1's `thread_local_alloc`-based crypto-bank path — healthy, no
+SIGILL), `entropy_1k` 14.8µs, `entropy_1m` 4.14ms, `chi_squared` 19.0µs,
+`file_detection` 395ns, `memmem_4k` 8.4µs, `hex_encode_256` 4.15µs,
+`extract_ascii` 37.1µs, `ssdeep_4k` 98.8µs, `tlsh_1k` 366µs.
+
 ## [1.2.3] - 2026-07-01
 
 **AGNOS cross-build readiness.** phylax now compiles cleanly under

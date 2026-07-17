@@ -31,12 +31,12 @@ fn test_severity() {
 fn test_errors() {
     test_group("errors");
 
-    assert_eq(ERR_IO, 1, "ERR_IO value");
-    assert_eq(ERR_FILE_TOO_LARGE, 2, "ERR_FILE_TOO_LARGE value");
-    assert_eq(ERR_TIMEOUT, 3, "ERR_TIMEOUT value");
+    assert_eq(PHYLAX_ERR_IO, 1, "PHYLAX_ERR_IO value");
+    assert_eq(PHYLAX_ERR_FILE_TOO_LARGE, 2, "PHYLAX_ERR_FILE_TOO_LARGE value");
+    assert_eq(PHYLAX_ERR_TIMEOUT, 3, "PHYLAX_ERR_TIMEOUT value");
 
-    assert(str_eq(err_name(ERR_IO), str_from("IO error")), "IO error name");
-    assert(str_eq(err_name(ERR_RULE_PARSE), str_from("rule parse error")), "rule parse error name");
+    assert(str_eq(err_name(PHYLAX_ERR_IO), str_from("IO error")), "IO error name");
+    assert(str_eq(err_name(PHYLAX_ERR_RULE_PARSE), str_from("rule parse error")), "rule parse error name");
 }
 
 fn test_parse_severity() {

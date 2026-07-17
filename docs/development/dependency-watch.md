@@ -61,15 +61,25 @@ alone and must be explicitly `include`d. See `thread_local` below.
 
 | Dependency | Version | Purpose | Notes |
 |-----------|---------|---------|-------|
-| `sakshi` | 2.3.1 | Structured logging | `dist/sakshi.cyr` bundle |
-| `sigil` | 3.8.0 | Cryptographic primitives | SHA-256 (SHA-NI dispatch); only `sha256` consumed; bundle inlined (3.7.11+) |
-| `majra` | 2.4.7 | Pubsub/counter | Transitive via bote `events_majra` |
-| `bote` | 2.7.6 | MCP tool registry/dispatch | Full profile only |
-| `libro` | 2.7.4 | Explicit pin for bote's transitive surface | Matches bote 2.7.6's own libro pin |
+| `sakshi` | 2.4.6 | Structured logging | `dist/sakshi.cyr` bundle |
+| `sigil` | 3.12.1 | Cryptographic primitives | SHA-256 (SHA-NI dispatch); only `sha256` consumed; bundle inlined; imposes cyrius ≥ 6.4.65 (bundle calls `thread_local_alloc`) |
+| `majra` | 2.5.1 | Pubsub/counter | **Vestigial** — bote-core dropped `events_majra`, so nothing references it; staged + DCE-pruned |
+| `bote` | 3.1.4 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle; the 11 hand-picked `src/*.cyr` modules no longer link under bote 3.x (dispatch pulls new `prompts`/`resources`) |
+| `libro` | 2.8.2 | Belt-and-suspenders pin | Aligned to bote 3.1.4's transitive libro; not referenced by phylax or bote-core (DCE-pruned) |
 
 ## Toolchain
 
-- **Cyrius**: 6.2.20 (pinned in `cyrius.cyml`)
+- **Cyrius**: 6.4.66 (pinned in `cyrius.cyml`)
+- **6.4.65 thread-local slot allocator** — `lib/thread_local.cyr` gained
+  `thread_local_alloc()` (allocator ≥ slot 16; frozen 0-15 for legacy
+  hardcoded slots) and grew TLOCAL_MAX_SLOTS 16 → 128. sigil 3.12.1's
+  crypto-bank now claims its slot from the allocator instead of the
+  hardcoded slot 8, so phylax's `sha256` path requires cyrius ≥ 6.4.65.
+  Lands transparently through the `include "lib/thread_local.cyr"` opt-in
+  phylax already carries — no source change.
+- **6.3.32** made `sync.cyr` the sole owner of `mutex_*` (folded into
+  `thread.cyr`), retiring the three `duplicate fn 'mutex_*'` build
+  warnings phylax emitted since the `atomic`+`sync` additions in 1.2.2.
 - **6.1.26 ganita carve — confirmed no-op for phylax.** matrix/linalg +
   the advanced transcendentals (sinh/cosh/pow/asin/atan2/hypot/fibonacci/
   binomial) were carved to the `ganita` sibling, but stdlib `math` keeps

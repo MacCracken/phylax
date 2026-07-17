@@ -707,7 +707,7 @@ fn yara_engine_scan(engine, data, data_len) {
 #   value = "4D 5A"
 fn yara_engine_load_rules_toml(engine, toml_str) {
     var sections = toml_parse(toml_str);
-    if (sections == 0) { return Err(ERR_RULE_PARSE); }
+    if (sections == 0) { return Err(PHYLAX_ERR_RULE_PARSE); }
 
     # Walk all sections in order. [[rule]] starts a new rule,
     # [[rule.patterns]] adds a pattern to the current rule.
@@ -840,7 +840,7 @@ fn yara_engine_load_rules_toml(engine, toml_str) {
         nrules = nrules + 1;
     }
 
-    if (nrules == 0) { return Err(ERR_RULE_PARSE); }
+    if (nrules == 0) { return Err(PHYLAX_ERR_RULE_PARSE); }
     return Ok(nrules);
 }
 

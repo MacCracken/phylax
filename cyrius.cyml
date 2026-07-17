@@ -5,7 +5,7 @@ description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF par
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "6.3.15"
+cyrius = "6.4.66"
 
 [build]
 entry = "src/main.cyr"
@@ -99,39 +99,64 @@ stdlib = [
 [deps.sakshi]
 git = "https://github.com/MacCracken/sakshi.git"
 path = "../sakshi"
-tag = "2.4.3"
+tag = "2.4.6"
 modules = ["dist/sakshi.cyr"]
 
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
 path = "../sigil"
-tag = "3.9.8"
+tag = "3.12.1"
 modules = ["dist/sigil.cyr"]
 
+# majra pub/sub + counter. Historically load-bearing because bote's
+# hand-picked `events_majra.cyr` module (in the old src-module list)
+# called `pubsub_publish`. As of the bote 3.1.4 switch to
+# `dist/bote-core.cyr` — which excludes `events_majra.cyr` — nothing
+# in phylax's link closure references majra (phylax src calls no
+# `pubsub_*`/`counter_*`), so these modules now stage but DCE-prune.
+# Kept + version-tracked for now; a candidate for removal in a
+# dedicated dep-pruning pass (not folded into this pin sweep).
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
 path = "../majra"
-tag = "2.5.0"
+tag = "2.5.1"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
+# bote 3.x reorganized its module layout: `dispatch.cyr` now pulls
+# `prompts.cyr` + `resources.cyr` (added to bote's [lib.core] at 3.0.0),
+# whose `prompt_registry_*` / `resource_registry_*` / `prompt_def_name`
+# symbols the old hand-picked 11-src-module list omitted — so a naive
+# tag-only bump fails to link with 5 undefined functions. Switch to
+# bote's upstream-maintained transport-free core bundle
+# (`dist/bote-core.cyr`, 11 modules). It is self-contained on `hashmap`
+# + `bayan` (both already declared in [deps] stdlib) — no libro/majra/
+# net/tls transport surface — and exports the three symbols phylax
+# actually consumes (`tool_def_new`, `registry_register`,
+# `dispatcher_handle`), all with unchanged signatures. src/integration.cyr
+# needs no change. (The full `dist/bote.cyr`, 28 modules, is deliberately
+# NOT used — it references libro/majra symbols and drags the whole
+# transport + audit stack in for three functions.)
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
 path = "../bote"
-tag = "2.7.7"
-modules = ["src/registry.cyr", "src/dispatch.cyr", "src/error.cyr", "src/schema.cyr", "src/audit.cyr", "src/content.cyr", "src/jsonx.cyr", "src/protocol.cyr", "src/codec.cyr", "src/events.cyr", "src/events_majra.cyr"]
+tag = "3.1.4"
+modules = ["dist/bote-core.cyr"]
 
-# Explicit libro pin, held for the bote transitive surface. The
-# original reason for this override — bote-2.6.3+ shipped a transitive
-# `[deps.libro]` at libro 2.6.2, whose bare `ct_eq(...)` call at
-# `dist/libro.cyr:116` failed to link against the stdlib's
-# `ct_eq_bytes` / `ct_eq_bytes_lens` — is resolved upstream: bote 2.7.6
-# now pins libro 2.7.4 itself. We keep the direct pin aligned to that
-# same 2.7.4 so the resolved version is explicit at phylax's manifest
-# and doesn't silently drift with bote's transitive pin. Phylax itself
-# doesn't consume the libro surface; bote's bundle references libro
-# symbols transitively, so the dist module gets linked.
+# Explicit libro pin — now a pure belt-and-suspenders alignment, not
+# load-bearing. History: the override existed because bote-2.6.3+ shipped
+# a transitive libro 2.6.2 whose bare `ct_eq(...)` failed to link against
+# the stdlib's `ct_eq_bytes` / `ct_eq_bytes_lens`; that is long resolved
+# (libro ≥2.7.4 calls `ct_eq_bytes_lens` directly, which resolves against
+# the declared `ct` stdlib module). Since phylax moved bote onto
+# `dist/bote-core.cyr` (which excludes `audit_libro.cyr`), nothing in
+# phylax's link closure references libro at all — phylax never called it
+# directly, and the core bundle no longer pulls it — so this module now
+# stages but DCE-prunes. Kept to (a) document the resolved version
+# explicitly at phylax's manifest and (b) stay aligned with bote 3.1.4's
+# own transitive libro pin (2.8.2), so the two never diverge. Like
+# [deps.majra] above, a candidate for a dedicated dep-pruning pass.
 [deps.libro]
 git = "https://github.com/MacCracken/libro.git"
 path = "../libro"
-tag = "2.7.9"
+tag = "2.8.2"
 modules = ["dist/libro.cyr"]
