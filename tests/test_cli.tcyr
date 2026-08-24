@@ -1,0 +1,176 @@
+# CLI pipeline — cli.cyr surface (rules validate, scan pipeline, arg helpers)
+#
+# cli.cyr is the binary-only module, so it is included on top of src/lib.cyr
+# here; this file's main() shadows cli.cyr's (last definition wins).
+#
+# The point of this file is the cstr/Str boundary. Argv values reach the CLI
+# as raw NUL-terminated cstrs, while everything downstream of collect_files
+# is a Str fat pointer {data, len}. Reading one as the other takes the eight
+# bytes past a cstr's NUL as a length, which is how `rules validate` and the
+# unknown-command path SIGSEGV'd through 1.2.5.
+
+include "src/lib.cyr"
+include "src/cli.cyr"
+
+var TMP_DIR   = "/tmp/phylax-test-cli";
+var TMP_RULE  = "/tmp/phylax-test-cli/t.yar";
+var TMP_PLAIN = "/tmp/phylax-test-cli/plain.txt";
+var TMP_EXE   = "/tmp/phylax-test-cli/fake.exe";
+
+fn write_fixture(path, content) {
+    file_write_all(path, str_data(content), str_len(content));
+    return 0;
+}
+
+fn setup_fixtures() {
+    sys_mkdir(TMP_DIR, 448);
+    write_fixture(TMP_RULE, str_from("rule t { strings: $a = \"MZ\" condition: $a }\n"));
+    write_fixture(TMP_PLAIN, str_from("hello\n"));
+
+    # An MZ header followed by a NOP run — trips the built-in IsPE and
+    # NopSled rules, so the scan actually produces findings to render.
+    var n = 256;
+    var buf = alloc(n);
+    store8(buf, 0x4D);      # 'M'
+    store8(buf + 1, 0x5A);  # 'Z'
+    for (var i = 2; i < n; i = i + 1) { store8(buf + i, 0x90); }
+    file_write_all(TMP_EXE, buf, n);
+    return 0;
+}
+
+# ----------------------------------------------------------------
+# rules validate — argv cstrs through to the report lines
+# ----------------------------------------------------------------
+
+fn test_rules_validate() {
+    test_group("rules_validate");
+
+    # arg_collect_positional hands cmd_rules_validate raw argv cstrs, so
+    # that is exactly what this feeds it.
+    var files = vec_new();
+    vec_push(files, TMP_RULE);
+    assert_eq(cmd_rules_validate(files), 0, "valid rule file returns 0");
+
+    # A path that cannot be read must report and return 1, not crash on
+    # phylax_read_file's 0 return.
+    var missing = vec_new();
+    vec_push(missing, "/tmp/phylax-test-cli/definitely-not-here.yar");
+    assert_eq(cmd_rules_validate(missing), 1, "unreadable file returns 1");
+
+    # A readable file with no rules in it warns but is not an error.
+    var norules = vec_new();
+    vec_push(norules, TMP_PLAIN);
+    assert_eq(cmd_rules_validate(norules), 0, "file with no rules returns 0");
+
+    # Mixed batch: the error count survives a later success.
+    var mixed = vec_new();
+    vec_push(mixed, "/tmp/phylax-test-cli/definitely-not-here.yar");
+    vec_push(mixed, TMP_RULE);
+    assert_eq(cmd_rules_validate(mixed), 1, "one bad file in a batch returns 1");
+}
+
+# ----------------------------------------------------------------
+# collect_files / run_scan — the cstr -> Str handoff
+# ----------------------------------------------------------------
+
+fn test_collect_files() {
+    test_group("collect_files");
+
+    # paths in, argv-style cstrs; files out, Strs.
+    var paths = vec_new();
+    vec_push(paths, TMP_DIR);
+    var files = collect_files(paths, MAX_SCAN_FILE_SIZE);
+    assert(vec_len(files) >= 2, "collected both fixture files");
+
+    var first = vec_get(files, 0);
+    assert(str_len(first) > 0, "collected path is a non-empty Str");
+    assert_eq(load8(str_data(first)), 47, "collected path is absolute");
+}
+
+fn test_run_scan_target_is_str() {
+    test_group("run_scan_target");
+
+    # ScanTarget.data is a Str. It reaches the report renderers directly,
+    # so run_scan must store the Str path, not the cstr it hands to
+    # phylax_read_file.
+    var result = run_scan(str_from(TMP_PLAIN), 0);
+    assert(result != 0, "run_scan returned a result");
+
+    var tdata = load64(load64(result) + 8);
+    assert(tdata != 0, "target.data is populated");
+    assert(str_eq(tdata, str_from(TMP_PLAIN)), "target.data is the path as a Str");
+
+    # And it survives the full render pipeline that `phylax report` runs —
+    # with a target that actually produces findings, which is the case that
+    # crashed every renderer through 1.2.5.
+    var hit = run_scan(str_from(TMP_EXE), 0);
+    assert(vec_len(load64(hit + 8)) > 0, "the MZ/NOP fixture produced findings");
+
+    var results = vec_new();
+    vec_push(results, result);
+    vec_push(results, hit);
+    var report = report_from_results(str_from("phylax-cli-test"), results);
+
+    var js = report_render_json(report);
+    assert(json_v_is_obj(json_v_parse(js)) == 1, "json renders and reparses from run_scan results");
+    assert(str_contains(js, str_from(TMP_EXE)), "json names the scanned path");
+
+    var sf = report_render_sarif(report);
+    assert(json_v_is_obj(json_v_parse(sf)) == 1, "sarif renders and reparses from run_scan results");
+    assert(str_contains(sf, str_from(TMP_EXE)), "sarif names the scanned path");
+
+    var md = report_render_markdown(report);
+    assert(str_contains(md, str_from(TMP_EXE)), "markdown names the scanned path");
+}
+
+fn test_run_scan_rules_path() {
+    test_group("run_scan_rules");
+
+    # rules_path stays a raw argv cstr all the way to phylax_read_file.
+    var result = run_scan(str_from(TMP_PLAIN), TMP_RULE);
+    assert(result != 0, "run_scan with --rules returned a result");
+
+    # A rules path that does not exist must be skipped, not dereferenced.
+    var missing = run_scan(str_from(TMP_PLAIN), "/tmp/phylax-test-cli/nope.yar");
+    assert(missing != 0, "run_scan with a missing --rules file returned a result");
+
+    # An empty rules path is the "flag present but blank" case.
+    var blank = run_scan(str_from(TMP_PLAIN), "");
+    assert(blank != 0, "run_scan with a blank --rules path returned a result");
+}
+
+# ----------------------------------------------------------------
+# --extensions filter
+# ----------------------------------------------------------------
+
+fn test_path_has_extension() {
+    test_group("path_extension");
+
+    assert_eq(path_has_extension(str_from("notes.txt"), str_from("txt")), 1, "bare suffix matches");
+    assert_eq(path_has_extension(str_from("notes.txt"), str_from(".txt")), 1, "dotted suffix matches");
+    assert_eq(path_has_extension(str_from("notes.txt"), str_from("exe")), 0, "wrong suffix does not match");
+    assert_eq(path_has_extension(str_from("txt"), str_from("txt")), 0, "suffix without a dot does not match");
+    assert_eq(path_has_extension(str_from("notes.txt"), str_from("")), 0, "empty suffix never matches");
+    assert_eq(path_has_extension(str_from("notes.txt"), 0), 0, "null suffix never matches");
+
+    # This is what main() builds from `--extensions txt,exe`.
+    var exts = str_split(str_from("txt,exe"), str_from(","));
+    assert_eq(vec_len(exts), 2, "--extensions splits into two entries");
+    assert_eq(path_has_extension(str_from("a.exe"), vec_get(exts, 1)), 1, "split entry matches");
+}
+
+fn main() {
+    phylax_init();
+    setup_fixtures();
+
+    test_rules_validate();
+    test_collect_files();
+    test_run_scan_target_is_str();
+    test_run_scan_rules_path();
+    test_path_has_extension();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

@@ -51,21 +51,22 @@
   modules and dropped `[deps.agnosys]`, and phylax has been well past that tag
   for several releases (3.12.9 as of 1.2.5). No transitive agnosys edge remains.
 
-### Fix the JSON and SARIF report renderers (SIGSEGV)
-- `report --format json` and `report --format sarif` segfault (exit 139); so does
-  `rules validate <file>`. `report --format markdown` — and therefore bare
-  `report`, which defaults to markdown — is fine, which is how this hid.
-- Pre-existing and long-standing: reproduced identically on the 1.2.4 build, so
-  it is not toolchain drift. Note the crash loses buffered stdout, so a
-  redirected run yields an empty file and can look like "no output" rather than
-  a crash.
-- `tests/test_report.tcyr` asserts only `report_render_markdown` despite its
-  header claiming JSON / Markdown / SARIF coverage — the two crashing renderers
-  have **no test at all**. Any fix must land with per-renderer assertions.
-- Suspect (unconfirmed): `arg_find_option` (`src/cli.cyr:897`) returns a raw
-  `argv` C-string, while `cmd_report` (`src/cli.cyr:379`) feeds it to `streq`
-  and the renderers as a `Str`. The no-flag default at `src/cli.cyr:1251` is a
-  bare literal, which is the path that works.
+### ~~Fix the JSON and SARIF report renderers (SIGSEGV)~~ (RESOLVED)
+- Fixed on main immediately after the 1.2.5 sweep — see the CHANGELOG
+  `[Unreleased]` stanza and `docs/adr/0001-string-and-json-representation-boundaries.md`.
+- Root cause was two representation mistakes, not one: raw argv C-strings handed
+  to functions expecting `Str` fat pointers, and a HashMap handed to `json_build`,
+  which wants a flat `Vec` of `{key, value}` pairs. Both classes were also live in
+  `quarantine.cyr` and `integration.cyr`.
+- The pass found **three more crashes** than the original filing: markdown itself
+  segfaulted once a scan produced a finding (the empty-report case was the only
+  one the old test covered), `Session`/`Generated` rendered as pointer values, and
+  `phylax <unknown-command>` crashed on certain argument lengths.
+- Renderers now build a `json_v_*` tagged-value tree, so nesting, numbers and
+  booleans are real and strings are escaped at build time. Verified: output parses
+  as JSON, and the SARIF is valid 2.1.0 with a boolean `executionSuccessful`.
+- Coverage: suite **188 → 342 assertions across 15 → 17 files**; JSON/SARIF output
+  is parsed back rather than length-checked.
 
 ### Dep pruning — the vestigial majra/libro blocks, and the sigil double-stage
 - `[deps.majra]` and `[deps.libro]` are referenced by nothing in phylax's link

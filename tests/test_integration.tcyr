@@ -6,7 +6,10 @@ include "src/lib.cyr"
 fn test_fingerprint() {
     test_group("fingerprint");
 
-    var target = scan_target_file("test.bin");
+    # ScanTarget.data is a Str, not a raw cstr — finding_fingerprint and all
+    # three report renderers read it as one.
+    var target = scan_target_file(str_from("test.bin"));
+    assert(str_eq(load64(target + 8), str_from("test.bin")), "target.data is a Str");
     var f = finding_new(target, CATEGORY_MALWARE, SEVERITY_HIGH, str_from("test_rule"), str_from("test desc"));
     var fp = finding_fingerprint(f);
     assert_eq(str_len(fp), 64, "fingerprint is 64 chars");
@@ -30,7 +33,7 @@ fn test_baseline() {
     assert_eq(baseline_len(b), 1, "baseline has 1 entry");
 
     # Suppression by rule name
-    var target = scan_target_file("test.bin");
+    var target = scan_target_file(str_from("test.bin"));
     var f = finding_new(target, CATEGORY_SUSPICIOUS, SEVERITY_LOW, str_from("test_rule"), str_from("desc"));
     assert(baseline_is_suppressed(b, f), "finding suppressed by rule name");
 
@@ -64,7 +67,7 @@ fn test_scan_pipeline() {
     test_group("scan_pipeline");
 
     # scan_result_new creates valid result
-    var target = scan_target_file("test.bin");
+    var target = scan_target_file(str_from("test.bin"));
     var result = scan_result_new(target);
     assert(result != 0, "scan_result created");
     assert_eq(scan_result_has_threats(result), 0, "new result has no threats");

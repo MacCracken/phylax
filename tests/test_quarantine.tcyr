@@ -1,0 +1,156 @@
+# File isolation — quarantine.cyr surface (index round-trip, release, id checks)
+#
+# The index round-trip is the point of this file. Through 1.2.5 the save side
+# handed json_build a Vec of HashMaps (it only understands a Vec of Str pairs)
+# and wrote to a Str where file_open wants a cstr, so the index was never
+# persisted; the load side then ran map_get over json_parse's flat pair Vec.
+# Neither half had a test.
+
+include "src/lib.cyr"
+
+var Q_ROOT   = "/tmp/phylax-test-quarantine";
+var Q_STORE  = "/tmp/phylax-test-quarantine/store";
+var Q_INDEX  = "/tmp/phylax-test-quarantine/store/index.json";
+var Q_SOURCE = "/tmp/phylax-test-quarantine/victim.bin";
+
+fn q_write(path, content) {
+    file_write_all(path, str_data(content), str_len(content));
+    return 0;
+}
+
+fn q_setup() {
+    sys_mkdir(Q_ROOT, 448);
+    # Start from a clean store so a rerun does not inherit a stale index.
+    sys_unlink(Q_INDEX);
+    q_write(Q_SOURCE, str_from("malicious payload\n"));
+    return 0;
+}
+
+# ----------------------------------------------------------------
+# ID validation
+# ----------------------------------------------------------------
+
+fn test_quarantine_id() {
+    test_group("quarantine_id");
+
+    assert_eq(quarantine_validate_id(str_from("")), 0, "empty id rejected");
+    assert_eq(quarantine_validate_id(str_from("../etc/passwd")), 0, "traversal rejected");
+    assert_eq(quarantine_validate_id(str_from("a/b")), 0, "forward slash rejected");
+    assert_eq(quarantine_validate_id(str_from("a\\b")), 0, "backslash rejected");
+    assert_eq(quarantine_validate_id(str_from("abc..def")), 0, "embedded .. rejected");
+    assert_eq(quarantine_validate_id(str_from("1a2b3c-1")), 1, "generated-style id accepted");
+
+    var mgr = quarantine_new(str_from(Q_STORE));
+    var id1 = quarantine_gen_id(mgr);
+    var id2 = quarantine_gen_id(mgr);
+    assert_eq(quarantine_validate_id(id1), 1, "generated id is valid");
+    assert_eq(str_eq(id1, id2), 0, "consecutive ids differ");
+}
+
+# ----------------------------------------------------------------
+# Index round-trip
+# ----------------------------------------------------------------
+
+fn test_quarantine_roundtrip() {
+    test_group("quarantine_roundtrip");
+
+    q_setup();
+
+    var mgr = quarantine_new(str_from(Q_STORE));
+    assert(mgr != 0, "manager created");
+    assert_eq(quarantine_count(mgr), 0, "fresh store is empty");
+
+    var entry = quarantine_file(mgr, str_from(Q_SOURCE), str_from("unit test"));
+    assert(entry != 0, "file quarantined");
+    assert_eq(quarantine_count(mgr), 1, "one entry after quarantine");
+    assert(str_eq(load64(entry + 8), str_from(Q_SOURCE)), "entry keeps the original path");
+    assert(str_eq(load64(entry + 24), str_from("unit test")), "entry keeps the reason");
+    assert_eq(load64(entry + 48), 18, "entry records the file size");
+    assert_eq(str_len(load64(entry + 40)), 64, "entry records a sha256 hex digest");
+
+    # The source is gone and the quarantined copy exists.
+    assert(phylax_file_size(Q_SOURCE) <= 0, "source file was moved away");
+    assert(phylax_file_size(str_to_cstr(load64(entry + 16))) > 0, "quarantined copy exists");
+
+    # The index must actually be on disk and be valid JSON.
+    var idx = phylax_read_file(Q_INDEX);
+    assert(idx != 0, "index.json was written");
+    assert(str_len(idx) > 0, "index.json is not empty");
+    var parsed = json_v_parse(idx);
+    assert(json_v_is_arr(parsed) == 1, "index.json is a JSON array");
+    assert_eq(json_v_arr_len(parsed), 1, "index holds one record");
+
+    var rec = json_v_arr_get(parsed, 0);
+    assert(str_eq(json_v_str(json_v_obj_get(rec, "original_path")), str_from(Q_SOURCE)),
+      "record.original_path round-trips");
+    assert(str_eq(json_v_str(json_v_obj_get(rec, "reason")), str_from("unit test")),
+      "record.reason round-trips");
+    assert(json_v_is_int(json_v_obj_get(rec, "size")) == 1, "record.size stays a JSON number");
+    assert_eq(json_v_int(json_v_obj_get(rec, "size")), 18, "record.size value");
+    assert(json_v_is_int(json_v_obj_get(rec, "timestamp")) == 1, "record.timestamp stays a JSON number");
+
+    # A second manager over the same directory must rebuild the entry.
+    var reloaded = quarantine_new(str_from(Q_STORE));
+    assert_eq(quarantine_count(reloaded), 1, "reloaded manager sees the entry");
+    var re = vec_get(quarantine_list(reloaded), 0);
+    assert(str_eq(load64(re), load64(entry)), "reloaded id matches");
+    assert(str_eq(load64(re + 8), str_from(Q_SOURCE)), "reloaded original_path matches");
+    assert(str_eq(load64(re + 40), load64(entry + 40)), "reloaded sha256 matches");
+    assert_eq(load64(re + 48), 18, "reloaded size is an integer, not a Str pointer");
+    assert_eq(load64(re + 32), load64(entry + 32), "reloaded timestamp matches");
+}
+
+# ----------------------------------------------------------------
+# Release
+# ----------------------------------------------------------------
+
+fn test_quarantine_release() {
+    test_group("quarantine_release");
+
+    q_setup();
+    var mgr = quarantine_new(str_from(Q_STORE));
+    var entry = quarantine_file(mgr, str_from(Q_SOURCE), str_from("release test"));
+    assert(entry != 0, "file quarantined for release");
+
+    assert_eq(quarantine_release(mgr, str_from("../escape")), 0, "release rejects a traversal id");
+    assert_eq(quarantine_release(mgr, str_from("no-such-id")), 0, "release rejects an unknown id");
+    assert_eq(quarantine_count(mgr), 1, "failed releases leave the entry in place");
+
+    assert_eq(quarantine_release(mgr, load64(entry)), 1, "release by id succeeds");
+    assert_eq(quarantine_count(mgr), 0, "entry removed after release");
+    assert(phylax_file_size(Q_SOURCE) > 0, "file is back at its original path");
+
+    # The emptied index must round-trip too.
+    var reloaded = quarantine_new(str_from(Q_STORE));
+    assert_eq(quarantine_count(reloaded), 0, "reloaded manager sees an empty store");
+}
+
+# ----------------------------------------------------------------
+# Missing source
+# ----------------------------------------------------------------
+
+fn test_quarantine_missing_source() {
+    test_group("quarantine_missing");
+
+    var mgr = quarantine_new(str_from(Q_STORE));
+    var before = quarantine_count(mgr);
+    # phylax_read_file returns 0 here, not an empty Str.
+    var entry = quarantine_file(mgr, str_from("/tmp/phylax-test-quarantine/absent.bin"),
+      str_from("missing"));
+    assert_eq(entry, 0, "quarantining a missing file returns 0");
+    assert_eq(quarantine_count(mgr), before, "no entry recorded for a missing file");
+}
+
+fn main() {
+    phylax_init();
+
+    test_quarantine_id();
+    test_quarantine_roundtrip();
+    test_quarantine_release();
+    test_quarantine_missing_source();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

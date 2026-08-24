@@ -2,6 +2,179 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [Unreleased]
+
+Crash-fix pass over the report renderers and the CLI argument paths. Four
+`phylax` invocations exited 139 (SIGSEGV); all four trace to two
+representation mistakes — a HashMap handed to a builder that wants a flat
+`Vec` of `Str` pairs, and raw argv C strings handed to functions that want
+`Str` fat pointers. Both classes were also live in `quarantine.cyr` and
+`integration.cyr`. The test suite grows from 188 assertions across 15 files
+to **342 across 17**; every renderer now has its own assertions and the
+JSON/SARIF output is parsed back rather than length-checked.
+
+### Fixed
+
+- **`phylax report --format json|sarif` segfaulted on every input**
+  (`src/report.cyr`). Both renderers built their document with `map_new()` /
+  `map_set()` and serialized it with `json_build()`. `json_build` takes a
+  `Vec` of 16-byte `{key: Str, value: Str}` pairs; given a HashMap it reads
+  the map header's `cap` field (offset 8) as a vec length and walks the
+  24-byte entry array on an 8-byte stride, dereferencing empty slots as pair
+  pointers. It also cannot express nesting, integers or booleans, which is
+  what these documents are made of. Both renderers now build a
+  `json_v_*` tagged-value tree, so `summary`, `results`, `findings`,
+  `runs` and `locations` are real nested containers, counts and timestamps
+  are JSON numbers, `executionSuccessful` is a JSON boolean, and strings are
+  escaped at build time (a path containing `"` or `\` previously produced
+  output no parser would accept).
+- **`phylax report --format markdown` segfaulted as soon as a scan produced
+  a finding** (`src/report.cyr`, `src/cli.cyr`). The findings table appended
+  `ScanTarget.data` with `str_cat`, but `run_scan` stored the C-string form
+  of the path there, so `str_cat` read the eight bytes past the path's NUL as
+  a length. Only the empty-report case survived — which is exactly the case
+  the old test covered. `ScanTarget.data` is now documented and used as a
+  `Str` everywhere (`src/types.cyr`); `run_scan` stores the `Str` path and
+  keeps a separate cstr for the syscalls.
+- **Markdown report printed pointer values for `Session` and `Generated`**
+  (`src/report.cyr`). Both fields are `Str`, but were rendered with
+  `str_from_int`, so a report read `- **Session**: 140538351267216`.
+- **`phylax rules validate <file>` segfaulted on every file**
+  (`src/cli.cyr`). `arg_collect_positional` yields raw argv cstrs;
+  `cmd_rules_validate` passed them straight into `str_cat` for its `[OK]` /
+  `[FAIL]` / `[WARN]` lines. It also called `str_len` on
+  `phylax_read_file`'s return without checking for the 0 it returns on a
+  failed read.
+- **`phylax <unknown-command>` segfaulted when the argument contained the
+  wrong trailing bytes** (`src/cli.cyr`). `str_cat(str_from("Unknown
+  command: "), cmd)` on the argv cstr; short arguments happened to find a
+  small value past the NUL and merely printed an empty name, longer ones
+  crashed.
+- **`phylax watch` scanned the wrong path and ignored `--extensions`**
+  (`src/cli.cyr`). The event loop extracted the changed filename into a
+  buffer and then discarded it, scanning the watched *directory* instead,
+  and the extension filter was a loop that unconditionally set
+  `should_scan = 1`. The watch registration also passed argv cstrs to
+  `dir_list` / `path_join` / `str_cat`, and keyed its watch-descriptor map
+  with `str_from_int` values through the cstr-keyed `map_new()` (the stdlib
+  documents that this silently drops entries; it is now `map_new_str()`).
+  A new `path_has_extension` accepts `txt` and `.txt` alike.
+- **`phylax rules list <file>` and `--rules <file>` read a cstr as a `Str`**
+  (`src/cli.cyr`). `str_len` on an argv pointer yielded whatever eight bytes
+  followed the NUL, so a rules file could be silently skipped depending on
+  argv layout. Both now use `strlen`, and guard `phylax_read_file`'s 0.
+- **`--hoosh-url` and `--extensions` mixed representations**
+  (`src/cli.cyr`). `--hoosh-url` was a `Str` when defaulted and a cstr when
+  supplied, then `str_len`'d; `--extensions` was `str_split`'d as a cstr.
+  Both are normalized to `Str` at the argument-parsing boundary.
+- **The quarantine index was never written and never loaded**
+  (`src/quarantine.cyr`). Three separate faults on one path:
+  `quarantine_save_index` fed `json_build` a `Vec` of HashMaps; it passed
+  the `Str` header pointer to `file_write_all`, which wants a raw buffer, so
+  the bytes written were the fat-pointer header rather than the JSON; and it
+  passed a `Str` path to `file_open`, which wants a cstr. `quarantine_new`
+  then ran `map_get` over `json_parse`'s flat pair `Vec`. The index is now a
+  proper JSON array of objects built and parsed with `json_v_*`, with
+  `timestamp` and `size` preserved as integers, and round-trips under test.
+- **`quarantine_file` segfaulted on every call** (`src/quarantine.cyr`).
+  `quarantine_gen_id` built its identifier with `str_cat(fmt_hex(ts), …)`.
+  `fmt_hex` *prints* to stdout and returns 0, so the id generator wrote
+  stray hex digits to stdout and then dereferenced 0 as a `Str`. It now uses
+  `fmt_hex_buf`, the buffer-filling variant.
+- **Every Hoosh and Daimon request body was built with the wrong builder**
+  (`src/integration.cyr`). `hoosh_triage_finding`, `daimon_register`,
+  `daimon_heartbeat` and `daimon_deregister` all passed a HashMap to
+  `json_build` — the same SIGSEGV as the report renderers. The response side
+  was equally wrong: it handed the whole HTTP response struct to
+  `json_parse` instead of the body, then ran `map_get` over the flat pair
+  `Vec` that `json_parse` returns. Bodies now build with `json_v_*`;
+  responses parse `str_new(http_body(resp), http_body_len(resp))` with
+  `json_v_parse` and read `choices[0].message.content` / `agent_id`
+  through `json_v_obj_get`. The `Content-Type` argument was also being
+  passed a full `Str` header line where `http_post` wants a bare cstr media
+  type, and the URL was a `Str` where a cstr is required.
+- **`parse_triage_response` read `confidence` as a pointer**
+  (`src/integration.cyr`). `json_parse` returns `Str` values, so the
+  `0..100` clamp compared a heap address; it now reads a real integer.
+
+### Security
+
+- **`http_post` bounded its request-header buffer** (`src/utils.cyr`). The
+  4 KiB scratch buffer was filled with `memcpy` from a caller-supplied URL's
+  host and path (`--hoosh-url`, config file) with no length check. The
+  combined header length is now validated against the buffer before any
+  copy, and an oversized request is refused with a logged error.
+- **`http_post`'s error returns left the response struct half-initialized**
+  (`src/utils.cyr`). The bad-URL, socket-failure and connect-failure paths
+  set only `status`, leaving the body pointer and body length as whatever
+  the bump allocator last had there. Callers that read the body — which the
+  fixed `integration.cyr` now does — would take a wild pointer and a garbage
+  length. All early returns go through a single zeroed `http_post_err()`.
+
+### Changed
+
+- **`ScanTarget.data` is a `Str`** (`src/types.cyr`). The field was
+  produced as a cstr by `run_scan` and as a `Str` by `archive.cyr`, and
+  consumed both ways. It is now documented as a `Str` (0 for
+  `SCAN_TARGET_MEMORY`) and used consistently; `finding_fingerprint` and all
+  three renderers read it directly. Consumers constructing a `ScanTarget`
+  must pass `str_from(path)` rather than a bare literal.
+- **`md_escape_pipe` does what its name says** (`src/report.cyr`). It was
+  dead code that allocated a one-byte buffer per character in a loop and
+  returned its input unchanged. It now escapes `|` and folds CR/LF to a
+  space, and the markdown findings table actually calls it, so a rule name
+  or description containing a pipe no longer breaks the table.
+- **SARIF `startTimeUtc` is RFC 3339** (`src/report.cyr`). SARIF §3.30.7
+  requires a `dateTime`; the field carried phylax's human
+  `YYYY-MM-DD HH:MM:SS` form, which no SARIF validator accepts.
+
+### Performance
+
+- **Markdown rendering is no longer quadratic in finding count**
+  (`src/report.cyr`). `report_render_markdown` accumulated with `str_cat`,
+  which copies the entire buffer on every append; it now uses
+  `str_builder`. Measured on a synthetic report (`report_markdown_100`,
+  1000 iterations):
+
+  | Findings | `str_cat` (1.2.5) | `str_builder` | Speedup |
+  |----------|-------------------|---------------|---------|
+  | 10       | 189.06 µs         | 15.74 µs      | 12.0×   |
+  | 100      | 9.045 ms          | 119.39 µs     | 75.8×   |
+
+  A 10× larger report cost 47.8× more time before and 7.6× more now.
+
+- New benchmarks for all three renderers at 100 findings:
+  `report_json_100` 782.86 µs, `report_sarif_100` 1.002 ms,
+  `report_markdown_100` 118.11 µs. These paths had no benchmark before
+  because two of the three could not run.
+
+- No change to the detection benchmarks: `entropy_1k` 14.86 µs, `entropy_1m`
+  3.95 ms, `chi_squared` 17.84 µs, `file_detection` 1.36 µs, `sha256_4k`
+  19.47 µs, `memmem_4k` 8.37 µs, `hex_encode_256` 4.84 µs, `extract_ascii`
+  34.37 µs, `ssdeep_4k` 98.56 µs, `tlsh_1k` 367.51 µs.
+
+### Tests
+
+- **`tests/test_report.tcyr`: 2 → 85 assertions.** The file claimed to cover
+  "JSON / Markdown / SARIF" but only called `report_render_markdown`, on an
+  empty report. Each renderer now has its own group; JSON and SARIF output is
+  parsed back with `json_v_parse` and walked field by field (nesting, number
+  vs string tags, severity→SARIF-level mapping, `artifactLocation.uri`,
+  RFC 3339 `startTimeUtc`), plus metacharacter round-trips, markdown pipe
+  escaping, and null-`ScanTarget.data` handling for all three.
+- **`tests/test_cli.tcyr` (new, 27 assertions).** First test to include
+  `src/cli.cyr`, so the argv-cstr boundary is covered directly:
+  `cmd_rules_validate` over valid / unreadable / rule-less / mixed batches,
+  `collect_files`' cstr→`Str` handoff, `run_scan` storing a `Str` target
+  and surviving all three renderers with real findings, `--rules` with
+  missing and blank paths, and `path_has_extension`.
+- **`tests/test_quarantine.tcyr` (new, 43 assertions).** `quarantine.cyr`
+  had no test at all. Covers id validation and generation, the full
+  index save→reload round-trip (including that `size` and `timestamp` come
+  back as integers), release-by-id with traversal and unknown-id rejection,
+  and the missing-source path.
+- `tests/test_integration.tcyr` updated for the `ScanTarget.data` contract
+  and pins it with an assertion.
 ## [1.2.5] - 2026-08-23
 
 Toolchain + dependency sweep onto cyrius **6.5.35** (a minor-line move, 6.4.66
@@ -134,15 +307,17 @@ side.**
 
 ### Known, not fixed
 
-- **`report --format json` and `report --format sarif` segfault (exit 139), as
-  does `rules validate <file>`.** `report --format markdown` — and therefore
-  bare `report`, which defaults to markdown — is fine, which is how this hid.
-  **Pre-existing and unrelated to this sweep**: reproduced identically on the
-  1.2.4 build. `tests/test_report.tcyr` exercises only `report_render_markdown`
-  despite its header claiming JSON / Markdown / SARIF coverage, so the two
-  crashing renderers have no test at all. Note the crash loses buffered stdout,
-  so a redirected run yields an empty file. Tracked for a dedicated fix with
-  per-renderer test coverage.
+- ~~**`report --format json` and `report --format sarif` segfault (exit 139), as
+  does `rules validate <file>`.**~~ **FIXED — see the `[Unreleased]` section
+  above**, which landed on main directly after this sweep. Recorded here as
+  found because the diagnosis belongs with the release that surfaced it: it was
+  **pre-existing and unrelated to this sweep** (reproduced identically on the
+  1.2.4 build), and it hid because `tests/test_report.tcyr` exercised only
+  `report_render_markdown` despite its header claiming JSON / Markdown / SARIF
+  coverage. The fix pass found three further crashes this note had missed,
+  including markdown itself once a scan produced a finding. Note the crash loses
+  buffered stdout, so a redirected run yields an empty file rather than an
+  obvious failure.
 - `bench-latest.md` is still the 2026-03-26 Rust-era table (criterion
   benchmark names that no longer exist in this tree). Not regenerated here
   because `scripts/bench-history.sh` overwrites it from a `bench-history.csv`

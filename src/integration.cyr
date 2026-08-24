@@ -36,12 +36,15 @@ fn parse_triage_response(content, finding_id, model) {
     store64(result, finding_id);
     store64(result + 32, model);
 
-    # Try JSON parse first
-    var parsed = json_parse(content);
-    if (parsed != 0) {
-        store64(result + 8, map_get(parsed, "classification"));
-        store64(result + 16, map_get(parsed, "confidence"));
-        store64(result + 24, map_get(parsed, "explanation"));
+    # Try JSON parse first. This must be the tagged-value parser: `json_parse`
+    # returns a FLAT Vec of {key,value} Str pairs, and running map_get() over
+    # a Vec reads its 24-byte header as a HashMap header (load64(v + 24) is
+    # already past the end) before probing a bogus entries array.
+    var parsed = json_v_parse(content);
+    if (json_v_is_obj(parsed) == 1) {
+        store64(result + 8, json_v_str(json_v_obj_get(parsed, "classification")));
+        store64(result + 16, json_v_int(json_v_obj_get(parsed, "confidence")));
+        store64(result + 24, json_v_str(json_v_obj_get(parsed, "explanation")));
 
         # Validate classification — default to needs_review if unrecognized
         if (load64(result + 8) == 0) {
@@ -98,55 +101,62 @@ fn parse_triage_response(content, finding_id, model) {
     return result;
 }
 
+var HOOSH_SYSTEM_PROMPT = "You are a cybersecurity threat triage assistant. Respond with valid JSON only.";
+
 # Send a finding to Hoosh (OpenAI-compatible endpoint) for LLM triage.
 # Returns a TriageResult, or 0 on network/parse failure.
 fn hoosh_triage_finding(base_url, model, finding) {
-    # Build the chat completion request body
-    var messages = vec_new();
-    var sys_msg = map_new();
-    map_set(sys_msg, "role", str_from("system"));
-    map_set(sys_msg, "content", str_from("You are a cybersecurity threat triage assistant. Respond with valid JSON only."));
-    vec_push(messages, sys_msg);
+    # Build the chat completion request body. A nested body needs the
+    # tagged-value tree — `json_build` only emits a flat {"k":"v"} object
+    # from a Vec of Str pairs, and handed a HashMap it walks the map's
+    # entry array as if it were that pair Vec (SIGSEGV on the empty slots).
+    var messages = json_v_arr_new();
+    var sys_msg = json_v_obj_new();
+    json_v_obj_set(sys_msg, str_from("role"), json_v_str_new(str_from("system")));
+    json_v_obj_set(sys_msg, str_from("content"), json_v_str_new(str_from(HOOSH_SYSTEM_PROMPT)));
+    json_v_arr_push(messages, sys_msg);
 
-    var user_msg = map_new();
-    map_set(user_msg, "role", str_from("user"));
-    map_set(user_msg, "content", build_triage_prompt(finding));
-    vec_push(messages, user_msg);
+    var user_msg = json_v_obj_new();
+    json_v_obj_set(user_msg, str_from("role"), json_v_str_new(str_from("user")));
+    json_v_obj_set(user_msg, str_from("content"), json_v_str_new(build_triage_prompt(finding)));
+    json_v_arr_push(messages, user_msg);
 
-    var body = map_new();
-    map_set(body, "model", model);
-    map_set(body, "messages", messages);
-    map_set(body, "temperature", 0);
+    var body = json_v_obj_new();
+    json_v_obj_set(body, str_from("model"), json_v_str_new(model));
+    json_v_obj_set(body, str_from("messages"), messages);
+    json_v_obj_set(body, str_from("temperature"), json_v_int_new(0));
 
-    var url = str_cat(base_url, str_from("/v1/chat/completions"));
-    var body_str = json_build(body);
-    var headers = str_from("Content-Type: application/json");
+    # http_post takes (cstr url, Str body, cstr content_type) — see utils.cyr.
+    var url = str_to_cstr(str_cat(base_url, str_from("/v1/chat/completions")));
+    var body_str = json_v_build(body);
 
-    var resp = http_post(url, body_str, headers);
+    var resp = http_post(url, body_str, "application/json");
     if (resp == 0) {
         var msg = str_from("hoosh: HTTP request failed");
         sakshi_error(str_data(msg), str_len(msg));
         return 0;
     }
 
-    # Parse response JSON
-    var resp_obj = json_parse(resp);
-    if (resp_obj == 0) {
+    # Parse response JSON. http_body() hands back a raw pointer + length into
+    # the receive buffer, not a Str — the previous code passed the whole
+    # response struct to the parser.
+    var resp_obj = json_v_parse(str_new(http_body(resp), http_body_len(resp)));
+    if (json_v_is_obj(resp_obj) == 0) {
         var msg = str_from("hoosh: failed to parse response");
         sakshi_error(str_data(msg), str_len(msg));
         return 0;
     }
 
     # Extract content from choices[0].message.content
-    var choices = map_get(resp_obj, "choices");
-    if (choices == 0) { return 0; }
-    if (vec_len(choices) == 0) { return 0; }
+    var choices = json_v_obj_get(resp_obj, "choices");
+    if (json_v_is_arr(choices) == 0) { return 0; }
+    if (json_v_arr_len(choices) == 0) { return 0; }
 
-    var choice = vec_get(choices, 0);
-    var message = map_get(choice, "message");
+    var choice = json_v_arr_get(choices, 0);
+    var message = json_v_obj_get(choice, "message");
     if (message == 0) { return 0; }
 
-    var content = map_get(message, "content");
+    var content = json_v_str(json_v_obj_get(message, "content"));
     if (content == 0) { return 0; }
 
     var finding_id = str_cat(load64(finding + 24), str_from("-"));
@@ -182,39 +192,38 @@ fn daimon_validate_agent_id(agent_id) {
 # Register this agent with the Daimon orchestrator.
 # Returns the assigned agent_id as a Str, or 0 on failure.
 fn daimon_register(base_url) {
-    var url = str_cat(base_url, str_from("/v1/agents/register"));
+    var url = str_to_cstr(str_cat(base_url, str_from("/v1/agents/register")));
 
-    var body = map_new();
-    map_set(body, "name", str_from("phylax"));
-    map_set(body, "version", VERSION);
+    var body = json_v_obj_new();
+    json_v_obj_set(body, str_from("name"), json_v_str_new(str_from("phylax")));
+    json_v_obj_set(body, str_from("version"), json_v_str_new(VERSION));
 
-    var caps = vec_new();
-    vec_push(caps, str_from("file_scan"));
-    vec_push(caps, str_from("yara"));
-    vec_push(caps, str_from("entropy"));
-    vec_push(caps, str_from("pe_parse"));
-    vec_push(caps, str_from("elf_parse"));
-    vec_push(caps, str_from("quarantine"));
-    map_set(body, "capabilities", caps);
+    var caps = json_v_arr_new();
+    json_v_arr_push(caps, json_v_str_new(str_from("file_scan")));
+    json_v_arr_push(caps, json_v_str_new(str_from("yara")));
+    json_v_arr_push(caps, json_v_str_new(str_from("entropy")));
+    json_v_arr_push(caps, json_v_str_new(str_from("pe_parse")));
+    json_v_arr_push(caps, json_v_str_new(str_from("elf_parse")));
+    json_v_arr_push(caps, json_v_str_new(str_from("quarantine")));
+    json_v_obj_set(body, str_from("capabilities"), caps);
 
-    var body_str = json_build(body);
-    var headers = str_from("Content-Type: application/json");
+    var body_str = json_v_build(body);
 
-    var resp = http_post(url, body_str, headers);
+    var resp = http_post(url, body_str, "application/json");
     if (resp == 0) {
         var msg = str_from("daimon: registration failed - no response");
         sakshi_error(str_data(msg), str_len(msg));
         return 0;
     }
 
-    var resp_obj = json_parse(resp);
-    if (resp_obj == 0) {
+    var resp_obj = json_v_parse(str_new(http_body(resp), http_body_len(resp)));
+    if (json_v_is_obj(resp_obj) == 0) {
         var msg = str_from("daimon: registration failed - bad response");
         sakshi_error(str_data(msg), str_len(msg));
         return 0;
     }
 
-    var agent_id = map_get(resp_obj, "agent_id");
+    var agent_id = json_v_str(json_v_obj_get(resp_obj, "agent_id"));
     if (agent_id == 0) {
         var msg = str_from("daimon: registration failed - no agent_id");
         sakshi_error(str_data(msg), str_len(msg));
@@ -243,14 +252,13 @@ fn daimon_heartbeat(base_url, agent_id) {
     url = str_cat(url, agent_id);
     url = str_cat(url, str_from("/heartbeat"));
 
-    var body = map_new();
-    map_set(body, "status", str_from("active"));
-    map_set(body, "timestamp", clock_epoch_secs());
+    var body = json_v_obj_new();
+    json_v_obj_set(body, str_from("status"), json_v_str_new(str_from("active")));
+    json_v_obj_set(body, str_from("timestamp"), json_v_int_new(clock_epoch_secs()));
 
-    var body_str = json_build(body);
-    var headers = str_from("Content-Type: application/json");
+    var body_str = json_v_build(body);
 
-    var resp = http_post(url, body_str, headers);
+    var resp = http_post(str_to_cstr(url), body_str, "application/json");
     if (resp == 0) {
         var msg = str_from("daimon: heartbeat failed");
         sakshi_warn(str_data(msg), str_len(msg));
@@ -273,13 +281,12 @@ fn daimon_deregister(base_url, agent_id) {
     url = str_cat(url, agent_id);
     url = str_cat(url, str_from("/deregister"));
 
-    var body = map_new();
-    map_set(body, "agent_id", agent_id);
+    var body = json_v_obj_new();
+    json_v_obj_set(body, str_from("agent_id"), json_v_str_new(agent_id));
 
-    var body_str = json_build(body);
-    var headers = str_from("Content-Type: application/json");
+    var body_str = json_v_build(body);
 
-    var resp = http_post(url, body_str, headers);
+    var resp = http_post(str_to_cstr(url), body_str, "application/json");
     if (resp == 0) {
         var msg = str_from("daimon: deregister failed");
         sakshi_warn(str_data(msg), str_len(msg));

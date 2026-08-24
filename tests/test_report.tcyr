@@ -1,24 +1,326 @@
 # Report rendering — report.cyr surface (JSON / Markdown / SARIF)
+#
+# Each renderer gets its own assertions. Through 1.2.5 this file only
+# exercised report_render_markdown on an EMPTY report, which is the one
+# combination that happened not to crash: JSON and SARIF fed a HashMap to
+# json_build (a flat pair-Vec builder) and SIGSEGV'd, and markdown SIGSEGV'd
+# as soon as a report carried a finding. Every renderer is now checked
+# against a report that has findings, and the JSON/SARIF output is parsed
+# back with json_v_parse rather than eyeballed for length.
 
 include "src/lib.cyr"
 
-fn test_report() {
-    test_group("report");
+# ----------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------
 
-    # Empty report
+# Build a ScanResult carrying `n` findings against `path`, plus one extra
+# finding whose severity is `sev`.
+fn mk_result(path, rule, desc, sev) {
+    var target = scan_target_file(path);
+    var result = scan_result_new(target);
+    var f = finding_new(target, CATEGORY_MALWARE, sev, rule, desc);
+    store64(f + 48, 1767225600);  # deterministic timestamp
+    vec_push(load64(result + 8), f);
+    return result;
+}
+
+fn mk_report(result) {
     var results = vec_new();
-    var report = report_from_results(12345, results);
-    assert(report != 0, "empty report created");
+    vec_push(results, result);
+    return report_from_results(str_from("phylax-test"), results);
+}
 
-    # Markdown render
-    var md = report_render_markdown(report);
+# Fetch a nested JSON string value: obj[key] as a Str (0 if absent/wrong tag).
+fn jstr(obj, key) {
+    return json_v_str(json_v_obj_get(obj, key));
+}
+
+# ----------------------------------------------------------------
+# report_from_results — summary accounting
+# ----------------------------------------------------------------
+
+fn test_report_summary() {
+    test_group("report_summary");
+
+    var empty = report_from_results(str_from("phylax-empty"), vec_new());
+    assert(empty != 0, "empty report created");
+    assert_eq(load64(empty + 32), 0, "empty report has 0 total findings");
+    assert_eq(load64(load64(empty + 40)), 0, "empty report scanned 0 targets");
+
+    var results = vec_new();
+    vec_push(results, mk_result(str_from("/t/a.bin"), str_from("r1"), str_from("d1"), SEVERITY_CRITICAL));
+    vec_push(results, mk_result(str_from("/t/b.bin"), str_from("r2"), str_from("d2"), SEVERITY_LOW));
+    vec_push(results, scan_result_new(scan_target_file(str_from("/t/clean.bin"))));
+    var rep = report_from_results(str_from("phylax-test"), results);
+
+    var s = load64(rep + 40);
+    assert_eq(load64(rep + 32), 2, "total findings = 2");
+    assert_eq(load64(s), 3, "targets_scanned = 3");
+    assert_eq(load64(s + 8), 1, "targets_clean = 1");
+    assert_eq(load64(s + 16), 2, "targets_with_findings = 2");
+    assert_eq(load64(s + 24), 1, "critical_count = 1");
+    assert_eq(load64(s + 48), 1, "low_count = 1");
+    assert_eq(load64(s + 32), 0, "high_count = 0");
+}
+
+# ----------------------------------------------------------------
+# report_render_json
+# ----------------------------------------------------------------
+
+fn test_report_json_empty() {
+    test_group("report_json_empty");
+
+    var rep = report_from_results(str_from("phylax-empty"), vec_new());
+    var out = report_render_json(rep);
+    assert(str_len(out) > 0, "json render not empty");
+
+    var root = json_v_parse(out);
+    assert(json_v_is_obj(root) == 1, "empty json parses back as an object");
+    assert(str_eq(jstr(root, "session_id"), str_from("phylax-empty")), "session_id round-trips");
+    assert(str_len(jstr(root, "generated_at")) == 19, "generated_at is a 19-char timestamp");
+    assert(str_eq(jstr(root, "engine_version"), VERSION), "engine_version is VERSION");
+    assert(json_v_is_int(json_v_obj_get(root, "total_findings")) == 1, "total_findings is a JSON number");
+    assert_eq(json_v_int(json_v_obj_get(root, "total_findings")), 0, "total_findings = 0");
+    assert(json_v_is_arr(json_v_obj_get(root, "results")) == 1, "results is a JSON array");
+    assert_eq(json_v_arr_len(json_v_obj_get(root, "results")), 0, "results array is empty");
+}
+
+fn test_report_json_findings() {
+    test_group("report_json_findings");
+
+    var rep = mk_report(mk_result(str_from("/tmp/evil.bin"), str_from("EvilRule"),
+        str_from("looks bad"), SEVERITY_HIGH));
+    var root = json_v_parse(report_render_json(rep));
+    assert(json_v_is_obj(root) == 1, "findings json parses back as an object");
+    assert_eq(json_v_int(json_v_obj_get(root, "total_findings")), 1, "total_findings = 1");
+
+    # Summary is a nested object, not a stringified blob.
+    var sm = json_v_obj_get(root, "summary");
+    assert(json_v_is_obj(sm) == 1, "summary is a nested object");
+    assert_eq(json_v_int(json_v_obj_get(sm, "targets_scanned")), 1, "summary.targets_scanned = 1");
+    assert_eq(json_v_int(json_v_obj_get(sm, "high")), 1, "summary.high = 1");
+    assert_eq(json_v_int(json_v_obj_get(sm, "critical")), 0, "summary.critical = 0");
+
+    var results = json_v_obj_get(root, "results");
+    assert_eq(json_v_arr_len(results), 1, "one result");
+    var r0 = json_v_arr_get(results, 0);
+    assert(str_eq(jstr(r0, "target"), str_from("/tmp/evil.bin")), "result.target is the scanned path");
+
+    var findings = json_v_obj_get(r0, "findings");
+    assert(json_v_is_arr(findings) == 1, "findings is a nested array");
+    assert_eq(json_v_arr_len(findings), 1, "one finding");
+
+    var f0 = json_v_arr_get(findings, 0);
+    assert(str_eq(jstr(f0, "rule_name"), str_from("EvilRule")), "finding.rule_name");
+    assert(str_eq(jstr(f0, "description"), str_from("looks bad")), "finding.description");
+    assert(str_eq(jstr(f0, "severity"), str_from("HIGH")), "finding.severity is the name, not the enum");
+    assert(str_eq(jstr(f0, "category"), str_from("Malware")), "finding.category is the name");
+    assert(json_v_is_int(json_v_obj_get(f0, "timestamp")) == 1, "finding.timestamp is a JSON number");
+    assert_eq(json_v_int(json_v_obj_get(f0, "timestamp")), 1767225600, "finding.timestamp value");
+}
+
+fn test_report_json_escaping() {
+    test_group("report_json_escaping");
+
+    # A rule name / description with JSON metacharacters must survive the
+    # round trip. The old json_build emitted them raw, producing output no
+    # parser would accept.
+    var rep = mk_report(mk_result(str_from("C:\\tmp\\a.exe"), str_from("say \"hi\""),
+        str_from("tab\there\nnewline"), SEVERITY_MEDIUM));
+    var out = report_render_json(rep);
+    var root = json_v_parse(out);
+    assert(json_v_is_obj(root) == 1, "json with metacharacters still parses");
+
+    var f0 = json_v_arr_get(json_v_obj_get(json_v_arr_get(json_v_obj_get(root, "results"), 0), "findings"), 0);
+    assert(str_eq(jstr(f0, "rule_name"), str_from("say \"hi\"")), "quotes round-trip");
+    assert(str_eq(jstr(f0, "description"), str_from("tab\there\nnewline")), "tab/newline round-trip");
+    var r0 = json_v_arr_get(json_v_obj_get(root, "results"), 0);
+    assert(str_eq(jstr(r0, "target"), str_from("C:\\tmp\\a.exe")), "backslashes round-trip");
+}
+
+fn test_report_json_null_target() {
+    test_group("report_json_null_target");
+
+    # scan_target_memory() stores 0 for ScanTarget.data — the renderers must
+    # emit "" for it rather than dereferencing address 8.
+    var target = scan_target_memory();
+    var result = scan_result_new(target);
+    vec_push(load64(result + 8), finding_new(target, CATEGORY_SUSPICIOUS, SEVERITY_LOW,
+        str_from("MemRule"), str_from("in-memory hit")));
+    var rep = mk_report(result);
+
+    var root = json_v_parse(report_render_json(rep));
+    assert(json_v_is_obj(root) == 1, "memory-target json parses");
+    var r0 = json_v_arr_get(json_v_obj_get(root, "results"), 0);
+    assert_eq(str_len(jstr(r0, "target")), 0, "null target renders as empty string");
+}
+
+# ----------------------------------------------------------------
+# report_render_sarif
+# ----------------------------------------------------------------
+
+fn test_report_sarif_empty() {
+    test_group("report_sarif_empty");
+
+    var rep = report_from_results(str_from("phylax-empty"), vec_new());
+    var out = report_render_sarif(rep);
+    assert(str_len(out) > 0, "sarif render not empty");
+
+    var root = json_v_parse(out);
+    assert(json_v_is_obj(root) == 1, "empty sarif parses back as an object");
+    assert(str_eq(jstr(root, "version"), str_from("2.1.0")), "sarif version is 2.1.0");
+    assert(str_len(jstr(root, "$schema")) > 0, "sarif carries a $schema");
+
+    var runs = json_v_obj_get(root, "runs");
+    assert(json_v_is_arr(runs) == 1, "runs is an array");
+    assert_eq(json_v_arr_len(runs), 1, "exactly one run");
+    var run = json_v_arr_get(runs, 0);
+    assert_eq(json_v_arr_len(json_v_obj_get(run, "results")), 0, "no results for an empty report");
+
+    var driver = json_v_obj_get(json_v_obj_get(run, "tool"), "driver");
+    assert(str_eq(jstr(driver, "name"), str_from("phylax")), "tool.driver.name = phylax");
+    assert(str_eq(jstr(driver, "version"), VERSION), "tool.driver.version = VERSION");
+}
+
+fn test_report_sarif_findings() {
+    test_group("report_sarif_findings");
+
+    var results = vec_new();
+    vec_push(results, mk_result(str_from("/tmp/crit.bin"), str_from("CritRule"), str_from("very bad"), SEVERITY_CRITICAL));
+    vec_push(results, mk_result(str_from("/tmp/med.bin"), str_from("MedRule"), str_from("maybe bad"), SEVERITY_MEDIUM));
+    vec_push(results, mk_result(str_from("/tmp/info.bin"), str_from("InfoRule"), str_from("fyi"), SEVERITY_INFO));
+    var rep = report_from_results(str_from("phylax-test"), results);
+
+    var root = json_v_parse(report_render_sarif(rep));
+    assert(json_v_is_obj(root) == 1, "sarif with findings parses");
+    var run = json_v_arr_get(json_v_obj_get(root, "runs"), 0);
+    var sr = json_v_obj_get(run, "results");
+    assert_eq(json_v_arr_len(sr), 3, "three sarif results");
+
+    # Severity -> SARIF level mapping
+    var r0 = json_v_arr_get(sr, 0);
+    assert(str_eq(jstr(r0, "ruleId"), str_from("CritRule")), "ruleId is the rule name");
+    assert(str_eq(jstr(r0, "level"), str_from("error")), "CRITICAL maps to level error");
+    assert(str_eq(jstr(json_v_arr_get(sr, 1), "level"), str_from("warning")), "MEDIUM maps to level warning");
+    assert(str_eq(jstr(json_v_arr_get(sr, 2), "level"), str_from("note")), "INFO maps to level note");
+
+    # message.text
+    assert(str_eq(jstr(json_v_obj_get(r0, "message"), "text"), str_from("very bad")), "message.text is the description");
+
+    # locations[0].physicalLocation.artifactLocation.uri
+    var locs = json_v_obj_get(r0, "locations");
+    assert(json_v_is_arr(locs) == 1, "locations is an array");
+    assert_eq(json_v_arr_len(locs), 1, "one location");
+    var art = json_v_obj_get(json_v_obj_get(json_v_arr_get(locs, 0), "physicalLocation"), "artifactLocation");
+    assert(str_eq(jstr(art, "uri"), str_from("/tmp/crit.bin")), "artifactLocation.uri is the target path");
+
+    # properties
+    var props = json_v_obj_get(r0, "properties");
+    assert(str_eq(jstr(props, "severity"), str_from("CRITICAL")), "properties.severity");
+    assert(str_eq(jstr(props, "category"), str_from("Malware")), "properties.category");
+    assert(json_v_is_int(json_v_obj_get(props, "timestamp")) == 1, "properties.timestamp is a number");
+
+    # invocations
+    var inv = json_v_arr_get(json_v_obj_get(run, "invocations"), 0);
+    assert(json_v_is_bool(json_v_obj_get(inv, "executionSuccessful")) == 1, "executionSuccessful is a JSON bool");
+    assert_eq(json_v_bool(json_v_obj_get(inv, "executionSuccessful")), 1, "executionSuccessful = true");
+}
+
+fn test_report_sarif_rfc3339() {
+    test_group("report_sarif_rfc3339");
+
+    # SARIF §3.30.7 startTimeUtc is an RFC 3339 dateTime: 'T' separator, 'Z' zone.
+    var ts = sarif_rfc3339(phylax_timestamp(1767225600));
+    assert_eq(str_len(ts), 20, "rfc3339 stamp is 20 chars");
+    assert_eq(load8(str_data(ts) + 10), 84, "date/time separator is 'T'");
+    assert_eq(load8(str_data(ts) + 19), 90, "zone designator is 'Z'");
+    assert(str_eq(ts, str_from("2026-01-01T00:00:00Z")), "rfc3339 stamp matches epoch 1767225600");
+
+    var rep = report_from_results(str_from("phylax-test"), vec_new());
+    var root = json_v_parse(report_render_sarif(rep));
+    var inv = json_v_arr_get(json_v_obj_get(json_v_arr_get(json_v_obj_get(root, "runs"), 0), "invocations"), 0);
+    assert_eq(str_len(jstr(inv, "startTimeUtc")), 20, "sarif startTimeUtc is rfc3339");
+}
+
+# ----------------------------------------------------------------
+# report_render_markdown
+# ----------------------------------------------------------------
+
+fn test_report_markdown() {
+    test_group("report_markdown");
+
+    var rep = report_from_results(str_from("phylax-md"), vec_new());
+    var md = report_render_markdown(rep);
     assert(str_len(md) > 0, "markdown not empty");
+    assert(str_contains(md, str_from("# Phylax Threat Report")), "markdown has the title");
+    # session_id is a Str — it must render as text, not as its pointer value.
+    assert(str_contains(md, str_from("- **Session**: phylax-md")), "session id rendered as text");
+    assert(str_contains(md, str_from("## Summary")), "markdown has a summary section");
+    assert(str_contains(md, str_from("| Targets Scanned | 0 |")), "summary row rendered");
+}
+
+fn test_report_markdown_findings() {
+    test_group("report_markdown_findings");
+
+    var rep = mk_report(mk_result(str_from("/tmp/evil.bin"), str_from("EvilRule"),
+        str_from("looks bad"), SEVERITY_HIGH));
+    var md = report_render_markdown(rep);
+    assert(str_contains(md, str_from("- **Total Findings**: 1")), "total findings rendered");
+    assert(str_contains(md, str_from("| High | 1 |")), "high count rendered");
+    assert(str_contains(md,
+        str_from("| /tmp/evil.bin | HIGH | Malware | EvilRule | looks bad |")),
+      "finding row rendered with all five cells");
+}
+
+fn test_report_markdown_escaping() {
+    test_group("report_markdown_escaping");
+
+    # A '|' in a cell would open a phantom column; a newline would end the row.
+    var raw = str_from("a|b");
+    assert(str_eq(md_escape_pipe(raw), str_from("a\\|b")), "pipe is backslash-escaped");
+    assert(str_eq(md_escape_pipe(str_from("a\nb")), str_from("a b")), "newline folds to a space");
+    assert(str_eq(md_escape_pipe(str_from("a\rb")), str_from("a b")), "carriage return folds to a space");
+    var clean = str_from("nothing to do");
+    assert(str_eq(md_escape_pipe(clean), clean), "clean text passes through");
+    assert_eq(str_len(md_escape_pipe(0)), 0, "null Str escapes to empty");
+
+    var rep = mk_report(mk_result(str_from("/tmp/x.bin"), str_from("Pipe|Rule"),
+        str_from("has | pipe"), SEVERITY_LOW));
+    var md = report_render_markdown(rep);
+    assert(str_contains(md, str_from("| Pipe\\|Rule | has \\| pipe |")), "table cells escaped in the row");
+}
+
+fn test_report_markdown_null_target() {
+    test_group("report_markdown_null_target");
+
+    var target = scan_target_memory();
+    var result = scan_result_new(target);
+    vec_push(load64(result + 8), finding_new(target, CATEGORY_SUSPICIOUS, SEVERITY_LOW,
+        str_from("MemRule"), str_from("in-memory hit")));
+    var md = report_render_markdown(mk_report(result));
+    assert(str_contains(md, str_from("|  | LOW | Suspicious | MemRule | in-memory hit |")),
+      "null target renders as an empty cell");
 }
 
 fn main() {
     phylax_init();
 
-    test_report();
+    test_report_summary();
+
+    test_report_json_empty();
+    test_report_json_findings();
+    test_report_json_escaping();
+    test_report_json_null_target();
+
+    test_report_sarif_empty();
+    test_report_sarif_findings();
+    test_report_sarif_rfc3339();
+
+    test_report_markdown();
+    test_report_markdown_findings();
+    test_report_markdown_escaping();
+    test_report_markdown_null_target();
 
     return assert_summary();
 }

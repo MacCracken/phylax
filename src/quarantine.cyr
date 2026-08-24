@@ -19,9 +19,27 @@ struct QuarantineManager {
     next_counter;    # i64 — monotonic counter for ID generation
 }
 
+# Every path in this module is a Str, matching the struct comments above.
+# The syscall wrappers (sys_mkdir, sys_rename, file_write_all, and
+# phylax_read_file) all take NUL-terminated cstrs, so each of those call
+# sites converts explicitly with str_to_cstr — a Str handed straight to a
+# syscall passes the 16-byte fat-pointer header as if it were the path.
+
 # ================================================================
 # Quarantine — ID generation
 # ================================================================
+
+# Format an i64 as a lowercase hex Str.
+#
+# NOT fmt_hex — that one PRINTS to stdout and returns 0, so the pre-1.2.6
+# `str_cat(fmt_hex(ts), ...)` here both spewed the digits to stdout and then
+# dereferenced 0 as a Str, making every quarantine_file() call SIGSEGV.
+# fmt_hex_buf is the buffer-filling variant and returns the length.
+fn quarantine_hex(n) {
+    var buf = alloc(17);
+    var len = fmt_hex_buf(n, buf);
+    return str_new(buf, len);
+}
 
 # Generate a UUID-like identifier from timestamp and counter.
 # Format: hex(timestamp)-hex(counter) — not a true UUID but unique enough.
@@ -30,8 +48,8 @@ fn quarantine_gen_id(mgr) {
     var ctr = load64(mgr + 24);
     store64(mgr + 24, load64(mgr + 24) + 1);
 
-    var id_str = str_cat(fmt_hex(ts), str_from("-"));
-    id_str = str_cat(id_str, fmt_hex(ctr));
+    var id_str = str_cat(quarantine_hex(ts), str_from("-"));
+    id_str = str_cat(id_str, quarantine_hex(ctr));
     return id_str;
 }
 
@@ -93,27 +111,29 @@ fn quarantine_new(dir) {
     # shim, and `lib/syscalls_x86_64_linux.cyr` defines it as a direct
     # `syscall(SYS_MKDIR, path, mode)`. Going through the wrapper keeps
     # this path arch-portable.
-    sys_mkdir(dir, 448);
+    sys_mkdir(str_to_cstr(dir), 448);
 
-    # Try to load existing index — if file doesn't exist, start fresh
-    # (file_read_all returns empty string on failure)
-    var idx_data = phylax_read_file(load64(mgr + 16));
-    if (str_len(idx_data) > 0) {
-        # Parse the JSON index to restore entries
-        # For simplicity, we count entries from stored counter hints
-        var parsed = json_parse(idx_data);
-        if (parsed != 0) {
-            var count = vec_len(parsed);
+    # Try to load an existing index — a missing/unreadable file just means
+    # a fresh manager (phylax_read_file returns 0, not an empty Str).
+    var idx_data = phylax_read_file(str_to_cstr(load64(mgr + 16)));
+    if (idx_data != 0 && str_len(idx_data) > 0) {
+        # The index is a JSON array of objects, so it needs the tagged-value
+        # parser. `json_parse` returns a FLAT Vec of {key,value} Str pairs
+        # with no nesting — the pre-1.2.6 code ran map_get() over those
+        # 16-byte pairs as if each were a HashMap, reading past their end.
+        var root = json_v_parse(idx_data);
+        if (json_v_is_arr(root) == 1) {
+            var count = json_v_arr_len(root);
             for (var i = 0; i < count; i = i + 1) {
-                var item = vec_get(parsed, i);
+                var item = json_v_arr_get(root, i);
                 var entry = alloc(56);
-                store64(entry, map_get(item, "id"));
-                store64(entry + 8, map_get(item, "original_path"));
-                store64(entry + 16, map_get(item, "quarantine_path"));
-                store64(entry + 24, map_get(item, "reason"));
-                store64(entry + 32, map_get(item, "timestamp"));
-                store64(entry + 40, map_get(item, "sha256"));
-                store64(entry + 48, map_get(item, "size"));
+                store64(entry, json_v_str(json_v_obj_get(item, "id")));
+                store64(entry + 8, json_v_str(json_v_obj_get(item, "original_path")));
+                store64(entry + 16, json_v_str(json_v_obj_get(item, "quarantine_path")));
+                store64(entry + 24, json_v_str(json_v_obj_get(item, "reason")));
+                store64(entry + 32, json_v_int(json_v_obj_get(item, "timestamp")));
+                store64(entry + 40, json_v_str(json_v_obj_get(item, "sha256")));
+                store64(entry + 48, json_v_int(json_v_obj_get(item, "size")));
                 vec_push(load64(mgr + 8), entry);
             }
             store64(mgr + 24, count + 1);
@@ -123,30 +143,36 @@ fn quarantine_new(dir) {
     return mgr;
 }
 
-# Save the current index to disk as JSON.
+# Save the current index to disk as a JSON array of objects.
 fn quarantine_save_index(mgr) {
-    var items = vec_new();
+    var items = json_v_arr_new();
     var count = vec_len(load64(mgr + 8));
     for (var i = 0; i < count; i = i + 1) {
         var e = vec_get(load64(mgr + 8), i);
-        var m = map_new();
-        map_set(m, "id", load64(e));
-        map_set(m, "original_path", load64(e + 8));
-        map_set(m, "quarantine_path", load64(e + 16));
-        map_set(m, "reason", load64(e + 24));
-        map_set(m, "timestamp", load64(e + 32));
-        map_set(m, "sha256", load64(e + 40));
-        map_set(m, "size", load64(e + 48));
-        vec_push(items, m);
+        var m = json_v_obj_new();
+        json_v_obj_set(m, str_from("id"), report_json_str(load64(e)));
+        json_v_obj_set(m, str_from("original_path"), report_json_str(load64(e + 8)));
+        json_v_obj_set(m, str_from("quarantine_path"), report_json_str(load64(e + 16)));
+        json_v_obj_set(m, str_from("reason"), report_json_str(load64(e + 24)));
+        json_v_obj_set(m, str_from("timestamp"), json_v_int_new(load64(e + 32)));
+        json_v_obj_set(m, str_from("sha256"), report_json_str(load64(e + 40)));
+        json_v_obj_set(m, str_from("size"), json_v_int_new(load64(e + 48)));
+        json_v_arr_push(items, m);
     }
-    var json_str = json_build(items);
+    # `json_build` can only emit a flat {"k":"v"} object from a Vec of Str
+    # pairs — fed this Vec of maps it read each map header as a pair and
+    # dereferenced the entries pointer as a Str. json_v_build nests, keeps
+    # timestamp/size as integers, and escapes paths.
+    var json_str = json_v_build(items);
     # mgr+16 is the index.json PATH (set via path_join in the ctor, read
     # back by phylax_read_file), not an fd — so write the whole file by
     # path. The prior `file_write(path, json_str)` was doubly wrong: it
     # passed a path where an fd is expected AND omitted the length arg, so
     # the index was silently never persisted. 6.3.x's arity check surfaced
-    # it. (migration 1.2.2)
-    file_write_all(load64(mgr + 16), json_str, str_len(json_str));
+    # it. (migration 1.2.2) file_open still wants a cstr, so convert.
+    # file_write_all takes a RAW buffer pointer, so pass str_data(json_str),
+    # not the Str header — the header's own 16 bytes are not the payload.
+    file_write_all(str_to_cstr(load64(mgr + 16)), str_data(json_str), str_len(json_str));
 }
 
 # Quarantine a file: move it into the quarantine directory, record metadata.
@@ -156,8 +182,9 @@ fn quarantine_file(mgr, source_path, reason) {
     var dest_path = path_join(load64(mgr), id);
 
     # Read file to compute size and sha256
-    var data = phylax_read_file(source_path);
-    var data_len = str_len(data);
+    var data = phylax_read_file(str_to_cstr(source_path));
+    var data_len = 0;
+    if (data != 0) { data_len = str_len(data); }
     if (data_len == 0) {
         var msg = str_from("quarantine: cannot read source file");
         sakshi_error(str_data(msg), str_len(msg));
@@ -173,7 +200,7 @@ fn quarantine_file(mgr, source_path, reason) {
     # provided by `src/syscall_x86_64_linux.cyr` / `src/syscall_aarch64_linux.cyr`
     # (aarch64 composes through SYS_RENAMEAT since bare rename was
     # dropped on the generic-table arches).
-    var rc = sys_rename(source_path, dest_path);
+    var rc = sys_rename(str_to_cstr(source_path), str_to_cstr(dest_path));
     if (rc < 0) {
         var msg = str_from("quarantine: rename failed");
         sakshi_error(str_data(msg), str_len(msg));
@@ -229,7 +256,7 @@ fn quarantine_release(mgr, id) {
 
     # Move file back to original location (sys_rename composes through
     # SYS_RENAMEAT on aarch64; see quarantine_file above).
-    var rc = sys_rename(load64(entry + 16), load64(entry + 8));
+    var rc = sys_rename(str_to_cstr(load64(entry + 16)), str_to_cstr(load64(entry + 8)));
     if (rc < 0) {
         var msg = str_from("quarantine_release: rename failed");
         sakshi_error(str_data(msg), str_len(msg));
