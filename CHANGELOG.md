@@ -2,6 +2,153 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.2.5] - 2026-08-23
+
+Toolchain + dependency sweep onto cyrius **6.5.35** (a minor-line move, 6.4.66
+→ 6.5.35, 58 releases) with all five first-party dep pins at their latest
+released tags. The structural change is that **sakshi and sigil are no longer
+git deps** — the 6.5.x toolchain snapshot vendors both, and declaring a folded
+module as a git dep silently omits it from the generated consumer sidecars.
+Two latent defects fell out of the sweep and are fixed here: the CI format
+gate had been quietly broken by an upstream breaking change, and the version
+string the binary prints (and stamps into every report) had drifted two
+releases behind `VERSION`. All 188 assertions across the 15 test files pass;
+build, fmt, lint, vet, deny and dist-freshness gates clean.
+
+### Changed
+
+- **Cyrius toolchain pin: 6.4.66 → 6.5.35.** No phylax source change required
+  for the bump itself. 6.5.0's `public` / `private` file-scoped visibility is
+  opt-in per file, so nothing in the tree changed behaviour on adoption.
+- **Dependencies** (all at latest released tags): sakshi 2.4.6 → **2.4.11**,
+  sigil 3.12.1 → **3.12.9**, majra 2.5.1 → **2.7.0**, bote 3.1.4 → **3.3.7**,
+  libro 2.8.2 → **2.8.12**. majra and libro are moved to exactly the tags bote
+  3.3.7 pins transitively, so the two never diverge inside one link.
+- **`sakshi` and `sigil` moved from `[deps.X]` git blocks into `[deps] stdlib`.**
+  The 6.5.x snapshot folds both (`lib/sakshi.cyr`, `lib/sigil.cyr`), and it
+  folds precisely the versions this repo had been pinning forward by hand —
+  sakshi 2.4.11 and sigil 3.12.9 — so the fold costs no version movement.
+  The declaration *shape* is what mattered: `cyrius distlib` classifies a git
+  dep out of the stdlib leaves, so both names were missing from
+  `dist/phylax.deps` / `dist/phylax-core.deps` entirely. A consumer
+  provisioning strictly from a sidecar would link with `sha256_*` / `sakshi_*`
+  undefined. Diagnosed upstream in a clean room by majra 2.6.8; phylax's
+  sidecars now carry both. `[deps.X]` git blocks drop 5 → 3.
+- **Consumer sidecars went from 1 declared leaf to 32 (full) and 15 (core).**
+  Both sidecars had been emitting only `thread_local`; cyrius 6.5.29's fix for
+  empty named-profile sidecars is what makes the rest resolve. This is the
+  half of the fold that consumers (daimon, aegis, t-ron) actually feel.
+- **63 lines reformatted across 10 files** by 6.5.28's paren-aware formatter,
+  which now tracks continuation indent inside unclosed parens (canonical is 2
+  spaces per open-paren level, 4 accepted). Whitespace-only: `git diff -w` is
+  empty and the DCE binary is byte-identical across the reformat.
+
+### Fixed
+
+- **The CI format gate was broken by cyrius 6.5.28 and would have failed the
+  whole tree while silently rewriting it.** 6.5.28 made `cyrius fmt <file>`
+  rewrite the file **in place**, and changed stdout from the formatted source
+  to a one-line report. The step's `diff <(cyrius fmt "$f") "$f"` pattern
+  therefore broke two ways at once: the bare invocation reformats the very
+  checkout it is auditing, and the diff then compares a one-line report
+  against every non-empty source file. Adding `--dry` fixes only the first
+  half — it reports without writing, but does not restore a pipeable stream.
+  The step now uses `cyrius fmt --check`, which exits non-zero and names the
+  first differing `file:line` itself. (`--check` was unusable when this gate
+  was written — it was silent on clean files in 5.10.x — and 6.5.28 fixed that
+  too.)
+- **`--version` and every report's `scanner_version` had drifted two releases
+  behind.** `src/types.cyr` hardcodes the version string and does not derive it
+  from `VERSION`; it still read `1.2.3` while `VERSION` said `1.2.4`, so the
+  1.2.4 binary and every JSON / SARIF / Markdown report it stamped claimed to
+  be 1.2.3. Corrected to 1.2.5, and the CI "Verify version consistency" job now
+  compares `src/types.cyr` against `VERSION` instead of only grepping
+  CHANGELOG, so the two cannot separate again.
+- **A reachable undefined function (`chan_try_send`) is gone from the build.**
+  It was reaching codegen as a trapping `ud2` under the old stack — a build
+  that printed OK and would SIGILL if that path were ever taken. bote 3.3.7
+  resolves it, and cyrius 6.5.x independently now *refuses* to emit a binary
+  with reachable undefined functions, converting this whole failure class from
+  a runtime SIGILL into a build error.
+
+### Performance
+
+**No change. The sweep is performance-neutral, and the raw numbers say
+otherwise only because the harness changed underneath them.**
+
+cyrius **6.5.19** rewrote `bench_run`: it now auto-batches (sizing chunks so
+one clock pair is ≤1 % of the window) and subtracts a **measured** timer floor,
+where it previously wrapped a clock pair around every single iteration. On this
+box one clock read costs ~1.34 µs, so every pre-6.5.19 row carried that floor.
+Subtracting exactly one floor from each old number reconciles all twelve rows
+to within ±3 %:
+
+| bench | raw before | before − floor | after | delta |
+|---|---|---|---|---|
+| entropy_1k | 15.841 µs | 14.502 µs | 13.682 µs | −5.7 % |
+| entropy_1m | 3.913 ms | 3.912 ms | 3.836 ms | −1.9 % |
+| chi_squared | 17.903 µs | 16.564 µs | 17.002 µs | +2.6 % |
+| file_detection | 1.366 µs | 27 ns | 24 ns | −11.1 % |
+| sha256_4k | 20.199 µs | 18.860 µs | 18.866 µs | +0.0 % |
+| memmem_4k | 8.419 µs | 7.080 µs | 7.133 µs | +0.7 % |
+| hex_encode_256 | 4.892 µs | 3.553 µs | 3.465 µs | −2.5 % |
+| extract_ascii | 35.174 µs | 33.835 µs | 34.139 µs | +0.9 % |
+| ssdeep_4k | 99.903 µs | 98.564 µs | 97.753 µs | −0.8 % |
+| tlsh_1k | 370.588 µs | 369.249 µs | 367.218 µs | −0.6 % |
+| queue_enqueue | 63.123 µs | 61.784 µs | 62.949 µs | +1.9 % |
+| queue_dequeue | 9.245 ms | 9.244 ms | 9.296 ms | +0.6 % |
+
+`file_detection` is the row that makes the point: 1.366 µs → 24 ns reads as a
+57× win and is nothing of the kind — the old row was ~98 % timer. It was
+verified not to be dead-code elimination before the floor was blamed: an
+instrumented copy accumulating `detect_file_type` into a global sink measured
+the same 26 ns as the discarding original (vs 13 ns for the `alloc` alone), and
+the sink held the expected 300,000. **Do not compare any bench row in this
+repo across the 6.5.19 boundary without subtracting one floor from the older
+side.**
+
+### Notes
+
+- **The DCE binary grew ~16 %, 2,207,520 → 2,562,016 bytes**, and this is
+  upstream dep shape rather than anything phylax does. libro 2.8.12 pulls sigil
+  as a *git* dep (`src/sha256.cyr`, `src/hex.cyr`, `src/sha_ni.cyr`,
+  `dist/sigil-mldsa.cyr`), which stages those granular leaves as
+  `lib/sigil_*.cyr` alongside the folded `lib/sigil.cyr` monolith — both at
+  3.12.9, so the duplicate `sha256_hex` / `sha512_hex` / `hex_decode_into`
+  definitions are behaviourally inert, but they are carried twice. Dropping
+  phylax's own `[deps.majra]` / `[deps.libro]` blocks does **not** avoid this:
+  measured, it leaves the transitive pull intact via bote 3.3.7, surrenders
+  version control, and stages a *larger* majra bundle (locked files 65 → 79).
+  The fix belongs upstream in libro, now that sigil is folded.
+- **The manifest's `stdlib` array does not skip comments, and mis-parses two
+  ways.** An opening square bracket inside an in-array comment ends the array
+  (the entries below it vanish, no error, green build — this silently dropped
+  `sakshi` and `sigil` from the sidecars on the first attempt), and a
+  double-quoted phrase inside one is collected as a module name (resolution
+  then fails on a path built from prose). Both were hit while writing this
+  release; `cyrius.cyml` now carries the rationale below the array rather than
+  inside it, with a warning not to move it back.
+- `cyrius.lock` grows 59 → 65 entries. `dist/` bundles rebuilt at v1.2.5
+  (line counts unchanged at 7,394 / 6,541; byte counts move only with the
+  reformat and the version string).
+
+### Known, not fixed
+
+- **`report --format json` and `report --format sarif` segfault (exit 139), as
+  does `rules validate <file>`.** `report --format markdown` — and therefore
+  bare `report`, which defaults to markdown — is fine, which is how this hid.
+  **Pre-existing and unrelated to this sweep**: reproduced identically on the
+  1.2.4 build. `tests/test_report.tcyr` exercises only `report_render_markdown`
+  despite its header claiming JSON / Markdown / SARIF coverage, so the two
+  crashing renderers have no test at all. Note the crash loses buffered stdout,
+  so a redirected run yields an empty file. Tracked for a dedicated fix with
+  per-renderer test coverage.
+- `bench-latest.md` is still the 2026-03-26 Rust-era table (criterion
+  benchmark names that no longer exist in this tree). Not regenerated here
+  because `scripts/bench-history.sh` overwrites it from a `bench-history.csv`
+  that is gitignored, which would replace the historical table with a
+  single-column one.
+
 ## [1.2.4] - 2026-07-17
 
 Toolchain + dependency sweep onto cyrius **6.4.66**, refreshing all five

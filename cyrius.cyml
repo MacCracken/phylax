@@ -5,7 +5,7 @@ description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF par
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "6.4.66"
+cyrius = "6.5.35"
 
 [build]
 entry = "src/main.cyr"
@@ -93,20 +93,60 @@ stdlib = [
     # SIGILLs (exit 132) the moment a crypto path — e.g. `sha256_hex` —
     # touches it. Declare it so the symbol resolves. See sigil CHANGELOG
     # 3.7.8.
-    "thread_local"
+    "thread_local",
+    # sakshi + sigil are FOLDED STDLIB MODULES on the 6.5.x line -- they used
+    # to be git-dep blocks. Full rationale below the closing bracket, under
+    # THE FOLDED MODULES. Order matters here: ct/keccak/random precede sigil
+    # and fnptr/atomic precede sakshi, because cyrius is single-pass.
+    # Keep double quotes and square brackets out of comments in this array --
+    # see that note for why both are parsed rather than skipped.
+    "sakshi",
+    "sigil"
 ]
 
-[deps.sakshi]
-git = "https://github.com/MacCracken/sakshi.git"
-path = "../sakshi"
-tag = "2.4.6"
-modules = ["dist/sakshi.cyr"]
-
-[deps.sigil]
-git = "https://github.com/MacCracken/sigil.git"
-path = "../sigil"
-tag = "3.12.1"
-modules = ["dist/sigil.cyr"]
+# THE FOLDED MODULES -- sakshi and sigil
+#
+# WARNING: none of this note may be moved up into the stdlib array above.
+# The array walker DOES NOT SKIP COMMENTS, and it mis-parses two ways -- both
+# were hit while writing this manifest, and each is silent:
+#
+#   1. An opening square bracket ENDS the array. The walk runs to the next
+#      one, so a comment naming a bracketed section truncates the list at that
+#      line. Cost: the entries below it vanished and the regenerated sidecars
+#      came out missing exactly sakshi and sigil -- no error, green build.
+#   2. A double-quoted phrase BECOMES AN ENTRY. A comment quoting a name is
+#      collected as a module, and resolution then fails on a path built from
+#      prose (`cannot read .../lib/THE FOLDED # MODULES.cyr`). This one at
+#      least fails loudly.
+#
+# The first is the same always-green shape the fold below exists to prevent,
+# so it is recorded here rather than fixed and forgotten. (Upstream anchored
+# the KEY scan in cyrius 6.5.28; the array walk still does neither of these.
+# majra's manifest is unaffected because its equivalent note already sits
+# outside the array.)
+#
+# Both modules used to be git-dep blocks in this manifest. The toolchain
+# snapshot now vendors them, and 6.5.35 folds exactly the versions this repo
+# used to pin forward by hand: sakshi 2.4.11 and sigil 3.12.9.
+#
+# WARNING: the declaration SHAPE is load-bearing, not just the version.
+# `cyrius distlib` classifies a git dep OUT of the stdlib leaves, so a folded
+# module declared as a git dep is omitted from the generated
+# `dist/phylax.deps` / `dist/phylax-core.deps` sidecars entirely. A consumer
+# (daimon, aegis, t-ron) provisioning strictly from the sidecar then links
+# with `sha256_*` / `sakshi_*` undefined -- and an undefined fn used to lower
+# to a trapping `ud2`, so the build printed OK and the failure landed at
+# RUNTIME as a SIGILL on the first hash or log call. Same shape as the
+# `thread_local` note above, one level out. Diagnosed upstream in a clean room
+# by majra 2.6.8; phylax's sidecars carry both names as of 1.2.5.
+# (cyrius 6.5.x now also refuses to emit a binary with reachable undefined
+# functions, which turns that class of failure from a runtime SIGILL into a
+# build error -- belt to the sidecar's braces, not a replacement for it.)
+#
+# WARNING: do NOT re-add git-dep blocks for them to "pin" them independently.
+# A git dep overlays the snapshot, so a lagging pin silently DOWNGRADES a
+# folded module for every build. sigil and sakshi track the toolchain fold
+# now -- the `cyrius` pin is the only knob that moves them.
 
 # majra pub/sub + counter. Historically load-bearing because bote's
 # hand-picked `events_majra.cyr` module (in the old src-module list)
@@ -114,12 +154,15 @@ modules = ["dist/sigil.cyr"]
 # `dist/bote-core.cyr` — which excludes `events_majra.cyr` — nothing
 # in phylax's link closure references majra (phylax src calls no
 # `pubsub_*`/`counter_*`), so these modules now stage but DCE-prune.
-# Kept + version-tracked for now; a candidate for removal in a
-# dedicated dep-pruning pass (not folded into this pin sweep).
+# Still true at bote 3.3.7. Kept + version-tracked for now, and moved
+# to 2.7.0 to match the majra that bote 3.3.7 itself pins, so the two
+# never diverge inside one link. A candidate for removal in a
+# dedicated dep-pruning pass (not folded into this pin sweep) — see
+# the note over `[deps.libro]` for what that pass would also reclaim.
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
 path = "../majra"
-tag = "2.5.1"
+tag = "2.7.0"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
 # bote 3.x reorganized its module layout: `dispatch.cyr` now pulls
@@ -139,7 +182,7 @@ modules = ["src/pubsub.cyr", "src/counter.cyr"]
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
 path = "../bote"
-tag = "3.1.4"
+tag = "3.3.7"
 modules = ["dist/bote-core.cyr"]
 
 # Explicit libro pin — now a pure belt-and-suspenders alignment, not
@@ -152,11 +195,27 @@ modules = ["dist/bote-core.cyr"]
 # phylax's link closure references libro at all — phylax never called it
 # directly, and the core bundle no longer pulls it — so this module now
 # stages but DCE-prunes. Kept to (a) document the resolved version
-# explicitly at phylax's manifest and (b) stay aligned with bote 3.1.4's
-# own transitive libro pin (2.8.2), so the two never diverge. Like
-# [deps.majra] above, a candidate for a dedicated dep-pruning pass.
+# explicitly at phylax's manifest and (b) stay aligned with bote 3.3.7's
+# own transitive libro pin (2.8.12), so the two never diverge. Like the
+# majra block above, a candidate for a dedicated dep-pruning pass.
+#
+# WARNING, measured at 1.2.5: deleting this block does NOT reclaim
+# anything. The pull survives transitively through bote 3.3.7, phylax
+# merely loses control of the version, and a LARGER majra bundle gets
+# staged (locked files 65 -> 79). So the block stays until the real fix
+# lands upstream, which is this:
+#
+# libro 2.8.12 declares sigil as a GIT dep (`src/sha256.cyr`,
+# `src/hex.cyr`, `src/sha_ni.cyr`, `dist/sigil-mldsa.cyr`), so those
+# granular leaves stage as `lib/sigil_*.cyr` ALONGSIDE the folded
+# `lib/sigil.cyr` monolith. Both are 3.12.9, so the duplicate
+# `sha256_hex` / `sha512_hex` / `hex_decode_into` definitions are
+# behaviourally inert -- but they cost ~350 KB of DCE binary
+# (2,207,520 -> 2,562,016 B across the 1.2.5 sweep). Now that sigil is a
+# folded stdlib module, libro's git dep should follow sakshi's and be
+# dropped; file upstream rather than working around it here.
 [deps.libro]
 git = "https://github.com/MacCracken/libro.git"
 path = "../libro"
-tag = "2.8.2"
+tag = "2.8.12"
 modules = ["dist/libro.cyr"]

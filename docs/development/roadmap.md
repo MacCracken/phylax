@@ -46,13 +46,40 @@
 - GZIP/ZIP deflate decompression for compressed entry scanning
 - Inflate algorithm implementation in Cyrius
 
-### Dep hygiene — drop transitive agnosys (agnosys → agnodrm decomposition)
-- phylax has **no own** `[deps.agnosys]`; its agnosys was purely transitive
-  through sigil (the `lib/agnosys.cyr` slice-subscript note at `cyrius.cyml:86`).
-- sigil **3.8.1** internalized its trust/firmware modules and dropped
-  `[deps.agnosys]` entirely. Bump `[deps.sigil]` **3.8.0 → 3.8.1** to pick up the
-  agnosys-free sigil; this removes phylax's last transitive agnosys edge. No
-  phylax source change — pin bump + re-vendor only.
+### ~~Dep hygiene — drop transitive agnosys~~ (RESOLVED)
+- Closed by the ordinary pin sweeps: sigil 3.8.1 internalized its trust/firmware
+  modules and dropped `[deps.agnosys]`, and phylax has been well past that tag
+  for several releases (3.12.9 as of 1.2.5). No transitive agnosys edge remains.
+
+### Fix the JSON and SARIF report renderers (SIGSEGV)
+- `report --format json` and `report --format sarif` segfault (exit 139); so does
+  `rules validate <file>`. `report --format markdown` — and therefore bare
+  `report`, which defaults to markdown — is fine, which is how this hid.
+- Pre-existing and long-standing: reproduced identically on the 1.2.4 build, so
+  it is not toolchain drift. Note the crash loses buffered stdout, so a
+  redirected run yields an empty file and can look like "no output" rather than
+  a crash.
+- `tests/test_report.tcyr` asserts only `report_render_markdown` despite its
+  header claiming JSON / Markdown / SARIF coverage — the two crashing renderers
+  have **no test at all**. Any fix must land with per-renderer assertions.
+- Suspect (unconfirmed): `arg_find_option` (`src/cli.cyr:897`) returns a raw
+  `argv` C-string, while `cmd_report` (`src/cli.cyr:379`) feeds it to `streq`
+  and the renderers as a `Str`. The no-flag default at `src/cli.cyr:1251` is a
+  bare literal, which is the path that works.
+
+### Dep pruning — the vestigial majra/libro blocks, and the sigil double-stage
+- `[deps.majra]` and `[deps.libro]` are referenced by nothing in phylax's link
+  closure (staged, DCE-pruned) and have been flagged for a dedicated pruning
+  pass since 1.2.4.
+- ⚠ Measured at 1.2.5: **simply deleting the two blocks does not help.** The
+  pull survives transitively through bote 3.3.7, phylax loses control of the
+  versions, and a *larger* majra bundle is staged (locked files 65 → 79).
+- The real cost is upstream: libro 2.8.12 declares sigil as a **git** dep, so
+  granular `lib/sigil_*.cyr` leaves stage alongside the folded `lib/sigil.cyr`
+  monolith. Both are 3.12.9, so the duplicate `sha256_hex` / `sha512_hex` /
+  `hex_decode_into` definitions are inert, but they cost ~350 KB of DCE binary
+  (2,207,520 → 2,562,016 B). File upstream against libro: now that sigil is a
+  folded stdlib module, its git dep should follow sakshi's and be dropped.
 
 ## v1.0 Criteria
 

@@ -61,15 +61,60 @@ alone and must be explicitly `include`d. See `thread_local` below.
 
 | Dependency | Version | Purpose | Notes |
 |-----------|---------|---------|-------|
-| `sakshi` | 2.4.6 | Structured logging | `dist/sakshi.cyr` bundle |
-| `sigil` | 3.12.1 | Cryptographic primitives | SHA-256 (SHA-NI dispatch); only `sha256` consumed; bundle inlined; imposes cyrius ≥ 6.4.65 (bundle calls `thread_local_alloc`) |
-| `majra` | 2.5.1 | Pubsub/counter | **Vestigial** — bote-core dropped `events_majra`, so nothing references it; staged + DCE-pruned |
-| `bote` | 3.1.4 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle; the 11 hand-picked `src/*.cyr` modules no longer link under bote 3.x (dispatch pulls new `prompts`/`resources`) |
-| `libro` | 2.8.2 | Belt-and-suspenders pin | Aligned to bote 3.1.4's transitive libro; not referenced by phylax or bote-core (DCE-pruned) |
+| `sakshi` | 2.4.11 | Structured logging | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. Tracks the toolchain fold. |
+| `sigil` | 3.12.9 | Cryptographic primitives | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. SHA-256 (SHA-NI dispatch); only `sha256` consumed. 6.5.35 vendors exactly 3.12.9. |
+| `majra` | 2.7.0 | Pubsub/counter | **Vestigial** — bote-core dropped `events_majra`, so nothing references it; staged + DCE-pruned. Aligned to bote 3.3.7's transitive majra. |
+| `bote` | 3.3.7 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle; the 11 hand-picked `src/*.cyr` modules no longer link under bote 3.x (dispatch pulls new `prompts`/`resources`). 3.3.6 grew the core profile 11 → 12 modules (`content.cyr`). |
+| `libro` | 2.8.12 | Belt-and-suspenders pin | Aligned to bote 3.3.7's transitive libro; not referenced by phylax or bote-core (DCE-pruned). ⚠ Pulls sigil as a *git* dep, staging granular `lib/sigil_*.cyr` beside the folded monolith — see "Known dep-shape cost" below. |
+
+### Folded modules: why the declaration shape matters
+
+`sakshi` and `sigil` moved from `[deps.X]` git blocks into `[deps] stdlib` at 1.2.5, because the
+6.5.x toolchain snapshot vendors both. This is not cosmetic:
+
+- `cyrius distlib` classifies a **git dep** out of the *stdlib leaves*, so a folded module declared
+  that way is omitted from `dist/phylax.deps` / `dist/phylax-core.deps` entirely. A consumer
+  provisioning strictly from a sidecar then links with `sha256_*` / `sakshi_*` undefined. Verified:
+  phylax's sidecars carried **one** leaf (`thread_local`) before the move and 32 / 15 after.
+- A git dep **overlays** the snapshot, so a pin that lags the fold silently *downgrades* the module
+  for every build.
+
+⚠ Do not re-add git blocks for these two. The `cyrius` pin is the only knob that moves them.
+
+⚠ Comments inside the `stdlib` array are parsed, not skipped. A `[` inside one **ends the array**
+(entries below it silently vanish — this dropped `sakshi`/`sigil` from the sidecars on the first
+attempt, with no error and a green build), and a `"quoted phrase"` inside one is **collected as a
+module name**. Keep rationale below the closing `]`.
+
+### Known dep-shape cost
+
+libro 2.8.12 declares sigil as a git dep (`src/sha256.cyr`, `src/hex.cyr`, `src/sha_ni.cyr`,
+`dist/sigil-mldsa.cyr`), which stages those leaves as `lib/sigil_*.cyr` **alongside** the folded
+`lib/sigil.cyr`. Both are 3.12.9, so the duplicate `sha256_hex` / `sha512_hex` / `hex_decode_into`
+definitions are behaviourally inert, but they cost ~350 KB of DCE binary (2,207,520 → 2,562,016 B at
+the 1.2.5 sweep). Dropping phylax's own `[deps.majra]` / `[deps.libro]` blocks does **not** avoid it
+— measured, the pull survives transitively via bote 3.3.7, phylax loses version control, and a
+*larger* majra bundle is staged (locked files 65 → 79). The fix belongs upstream in libro.
 
 ## Toolchain
 
-- **Cyrius**: 6.4.66 (pinned in `cyrius.cyml`)
+- **Cyrius**: 6.5.35 (pinned in `cyrius.cyml`)
+- **6.5.28 `cyrius fmt` rewrites files IN PLACE** (breaking). stdout is now a
+  one-line report, not the formatted source, so the old
+  `diff <(cyrius fmt "$f") "$f"` CI idiom is broken two ways: the bare call
+  reformats the checkout it is auditing, and the diff compares a report against
+  every source file. `--dry` reports without writing but does not restore a
+  pipeable stream. **Use `cyrius fmt --check`** — it exits non-zero and names
+  the first differing `file:line`. The same release fixed `--check` itself
+  (it was silent on clean files in 5.10.x) and made the formatter paren-aware,
+  which reformatted 63 lines across 10 files at the 1.2.5 sweep.
+- **6.5.19 rewrote the benchmark harness.** `bench_run` auto-batches and
+  subtracts a *measured* timer floor (~1.34 µs/clock read on the dev box);
+  before, it wrapped a clock pair around every iteration. **Bench rows are not
+  comparable across this boundary** without subtracting one floor from the
+  older side. See the 1.2.5 CHANGELOG for the reconciled table.
+- **6.5.x refuses to emit a binary with reachable undefined functions**, which
+  converts the old `ud2`-then-SIGILL-at-runtime failure into a build error.
 - **6.4.65 thread-local slot allocator** — `lib/thread_local.cyr` gained
   `thread_local_alloc()` (allocator ≥ slot 16; frozen 0-15 for legacy
   hardcoded slots) and grew TLOCAL_MAX_SLOTS 16 → 128. sigil 3.12.1's

@@ -60,21 +60,27 @@ jobs:
           fi
 
       - name: Format check
-        # `cyrius fmt <file>` emits the formatted source to stdout;
-        # diff against the file in-place to catch drift. The `--check`
-        # flag is silent on clean files in cyrius 5.10.x — using it
-        # here produces an empty stream that diffs against every
-        # non-empty source file (false positive on the whole tree).
+        # ⚠ cyrius 6.5.28 changed BOTH halves of what this step used to rely on.
+        # `cyrius fmt <file>` now REWRITES THE FILE IN PLACE, and stdout carries
+        # a one-line report rather than the formatted source. The old pattern
+        # here — `diff <(cyrius fmt "$f") "$f"` — was therefore broken two ways
+        # at once from 6.5.28 on, and neither way is loud: the bare invocation
+        # silently reformats the very checkout it is auditing, and the diff then
+        # compares a one-line report against every non-empty source file, so the
+        # whole tree reports as drifted. Adding `--dry` fixes only the first
+        # half; it reports without writing but does NOT restore the pipeable
+        # stream. `--check` is the supported primitive now: it exits non-zero and
+        # names the first differing file:line itself, so no diff is needed.
         run: |
           fail=0
           for f in src/*.cyr tests/*.tcyr tests/*.bcyr tests/*.fcyr; do
             [ -f "$f" ] || continue
-            if ! diff -q <(cyrius fmt "$f" 2>/dev/null) "$f" > /dev/null; then
-              echo "needs fmt: $f"
-              fail=1
-            fi
+            cyrius fmt --check "$f" || fail=1
           done
-          [ $fail -eq 0 ] || { echo "fmt: drift detected"; exit 1; }
+          [ $fail -eq 0 ] || {
+            echo "fmt: drift detected — run 'cyrius fmt <file>' on the files above"
+            exit 1
+          }
 
       - name: Lint (advisory)
         # Advisory-only; tighten to fail-on-warning once standing
@@ -248,10 +254,26 @@ jobs:
           exit $MISSING
 
       - name: Verify version consistency
-        # cyrius.cyml pulls package.version from VERSION via ${file:VERSION};
-        # just check VERSION appears in CHANGELOG.
+        # cyrius.cyml pulls package.version from VERSION via ${file:VERSION},
+        # so the manifest cannot drift. Two things CAN, and one of them did:
+        #
+        #  * CHANGELOG.md must carry an entry for the version (checked since
+        #    the beginning).
+        #  * src/types.cyr hardcodes the string that `--version` prints and
+        #    that lands in `scanner_version` in every JSON / SARIF / Markdown
+        #    report. It is NOT derived from the VERSION file. It silently
+        #    lagged two releases — VERSION said 1.2.4 while the binary and
+        #    every report it stamped said 1.2.3 — because nothing compared
+        #    them. That is what this second check exists for.
         run: |
           VERSION=$(cat VERSION | tr -d '[:space:]')
           echo "VERSION file: $VERSION"
           grep -q "$VERSION" CHANGELOG.md || { echo "FAIL: version not in CHANGELOG.md"; exit 1; }
+          SRC_VERSION=$(grep -oP '(?<=VERSION = str_from\(")[^"]+' src/types.cyr)
+          echo "src/types.cyr: $SRC_VERSION"
+          [ "$SRC_VERSION" = "$VERSION" ] || {
+            echo "FAIL: src/types.cyr VERSION ($SRC_VERSION) != VERSION file ($VERSION)"
+            echo "      this string is what --version prints and what reports stamp as scanner_version"
+            exit 1
+          }
           echo "Version consistent (cyrius.cyml pulls VERSION via \${file:VERSION})"

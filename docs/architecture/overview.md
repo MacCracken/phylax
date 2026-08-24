@@ -122,13 +122,21 @@ File Path
 
 ## Dependencies
 
-| Dependency | Version | Purpose |
-|-----------|---------|---------|
-| Cyrius stdlib | 5.1.7 | 29 modules (string, vec, hashmap, io, fs, net, json, toml, ...) |
-| sakshi | 1.0.0 | Structured logging |
-| sigil | 2.1.2 | SHA-256 cryptographic hashing |
-| bote | 2.5.1 | MCP tool registry and JSON-RPC dispatch |
-| majra | 2.2.0 | Pub/sub events (bote dependency) |
+Current as of **1.2.5** (cyrius 6.5.35). Canonical detail — including why the
+declaration *shape* of the folded modules matters — lives in
+[`docs/development/dependency-watch.md`](../development/dependency-watch.md).
+
+| Dependency | Version | Kind | Purpose |
+|-----------|---------|------|---------|
+| Cyrius stdlib | 6.5.35 | toolchain | 34 declared modules (string, vec, hashmap, io, fs, net, bayan, ...) |
+| sakshi | 2.4.11 | folded stdlib | Structured logging |
+| sigil | 3.12.9 | folded stdlib | SHA-256 cryptographic hashing (SHA-NI dispatch) |
+| bote | 3.3.7 | git dep | MCP tool registry and JSON-RPC dispatch (`dist/bote-core.cyr`) |
+| majra | 2.7.0 | git dep | Pub/sub events — **vestigial**, staged + DCE-pruned |
+| libro | 2.8.12 | git dep | Audit chain — **vestigial**, staged + DCE-pruned |
+
+`bayan` (cyrius 6.1.25 carve) supplies the former `json` / `toml` / `csv` /
+`base64` / `bigint` stdlib modules.
 
 ## Consumers
 
