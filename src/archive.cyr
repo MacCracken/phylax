@@ -13,6 +13,7 @@ var ARCHIVE_MAX_EXPAND = 104857600;  # 100 MB max total expanded size
 fn zip_scan_entries(data, data_len, rules_path, max_depth) {
     var findings = vec_new();
     if (max_depth <= 0) { return findings; }
+    if (data == 0 || data_len <= 0) { return findings; }
 
     var offset = 0;
     var entry_count = 0;
@@ -74,6 +75,7 @@ fn zip_scan_entries(data, data_len, rules_path, max_depth) {
 fn gzip_scan(data, data_len, rules_path) {
     var findings = vec_new();
     # GZIP magic check
+    if (data == 0 || data_len <= 0) { return findings; }
     if (data_len < 10) { return findings; }
     if (load8(data) != 0x1F || load8(data + 1) != 0x8B) { return findings; }
 
@@ -114,6 +116,7 @@ fn parse_octal(data, len) {
 fn tar_scan_entries(data, data_len, rules_path, max_depth) {
     var findings = vec_new();
     if (max_depth <= 0) { return findings; }
+    if (data == 0 || data_len <= 0) { return findings; }
 
     var offset = 0;
     var entry_count = 0;

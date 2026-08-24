@@ -58,7 +58,6 @@ fn collect_files_recurse(files, path, max_size) {
     return 0;
 }
 
-
 # ================================================================
 # CLI — Full scan pipeline
 # ================================================================
@@ -175,7 +174,6 @@ fn run_scan(path, rules_path) {
 
     return result;
 }
-
 
 # ================================================================
 # CLI — Subcommand: scan
@@ -376,7 +374,6 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
     return scan_finish(nfiles, G_TOTAL_FINDINGS, G_HIGHEST_SEVERITY, G_SEVERITY_THRESHOLD, G_EXIT_CODE);
 }
 
-
 # ================================================================
 # CLI — Subcommand: report
 # ================================================================
@@ -415,7 +412,6 @@ fn cmd_report(path, format, rules_path) {
 
     return 0;
 }
-
 
 # ================================================================
 # CLI — Subcommand: watch (inotify-based directory watcher)
@@ -598,7 +594,6 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
     #endif
 }
 
-
 # ================================================================
 # CLI — Subcommand: rules list
 # ================================================================
@@ -665,7 +660,6 @@ fn cmd_rules_list(file) {
     return 0;
 }
 
-
 # ================================================================
 # CLI — Subcommand: rules validate
 # ================================================================
@@ -706,7 +700,6 @@ fn cmd_rules_validate(files) {
     }
     return 0;
 }
-
 
 # ================================================================
 # CLI — Subcommand: rules fetch
@@ -775,7 +768,6 @@ fn cmd_rules_fetch(url, output_path) {
 
     return 0;
 }
-
 
 # ================================================================
 # CLI — Subcommand: intel import (STIX/TAXII threat intel)
@@ -870,7 +862,6 @@ fn cmd_intel_import(stix_path) {
     return 0;
 }
 
-
 # ================================================================
 # CLI — Subcommand: status
 # ================================================================
@@ -900,7 +891,6 @@ fn cmd_status() {
 
     return 0;
 }
-
 
 # ================================================================
 # CLI — Argument parsing helpers
@@ -969,7 +959,6 @@ fn arg_collect_positional(start_idx) {
 
     return out;
 }
-
 
 # ================================================================
 # CLI — Daemon mode (Unix socket listener)
@@ -1050,7 +1039,6 @@ fn cmd_daemon(socket_path, rules_path) {
     return 0;
 }
 
-
 # ================================================================
 # CLI — Usage / help text
 # ================================================================
@@ -1109,7 +1097,6 @@ fn print_usage() {
     str_println(str_from("  phylax status"));
 }
 
-
 # ================================================================
 # Config file support
 # ================================================================
@@ -1150,7 +1137,7 @@ fn load_config() {
             var rules = toml_get(pairs, str_from("rules_path"));
             if (rules != 0) { CFG_RULES_PATH = str_data(rules); }
             var max_size = toml_get(pairs, str_from("max_file_size"));
-            if (max_size != 0) { CFG_MAX_FILE_SIZE = str_to_int(max_size); }
+            if (max_size != 0) { CFG_MAX_FILE_SIZE = phylax_str_to_int(max_size); }
         }
     }
 
@@ -1246,7 +1233,7 @@ fn main() {
         var exit_code_str = arg_find_option("--exit-code");
         var exit_code = 1;
         if (exit_code_str != 0) {
-            exit_code = str_to_int(str_from(exit_code_str));
+            exit_code = phylax_str_to_int(str_from(exit_code_str));
             if (exit_code == 0) { exit_code = 1; }
         }
 

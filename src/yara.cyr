@@ -770,7 +770,7 @@ fn yara_engine_load_rules_toml(engine, toml_str) {
 
             var cond_count_str = toml_get(pairs, str_from("condition_count"));
             if (cond_count_str != 0) {
-                var cond_count = str_to_int(cond_count_str);
+                var cond_count = phylax_str_to_int(cond_count_str);
                 if (cond_count > 0) {
                     store64(current_rule + 40, YARA_COND_AT_LEAST);
                     store64(current_rule + 56, cond_count);
@@ -780,17 +780,17 @@ fn yara_engine_load_rules_toml(engine, toml_str) {
             # Parse constraints
             var min_size_str = toml_get(pairs, str_from("min_file_size"));
             if (min_size_str != 0) {
-                var min_size = str_to_int(min_size_str);
+                var min_size = phylax_str_to_int(min_size_str);
                 if (min_size > 0) { store64(load64(current_rule + 64), min_size); }
             }
             var max_size_str = toml_get(pairs, str_from("max_file_size"));
             if (max_size_str != 0) {
-                var max_size = str_to_int(max_size_str);
+                var max_size = phylax_str_to_int(max_size_str);
                 if (max_size > 0) { store64(load64(current_rule + 64) + 8, max_size); }
             }
             var at_off_str = toml_get(pairs, str_from("at_offset"));
             if (at_off_str != 0) {
-                var at_off = str_to_int(at_off_str);
+                var at_off = phylax_str_to_int(at_off_str);
                 if (at_off >= 0) { store64(load64(current_rule + 64) + 16, at_off); }
             }
         } else {
@@ -823,7 +823,7 @@ fn yara_engine_load_rules_toml(engine, toml_str) {
                         # Check nocase flag
                         var nocase_str = toml_get(pairs, str_from("nocase"));
                         if (nocase_str != 0) {
-                            var nocase = str_to_int(nocase_str);
+                            var nocase = phylax_str_to_int(nocase_str);
                             if (nocase) { store64(pat + 40, 1); }
                         }
 
@@ -1127,7 +1127,8 @@ fn yar_next_token(lex) {
                     while (load64(lex + 8) < load64(lex + 16)) {
                         var d = hex_digit_value(load8(load64(lex + 24) + load64(lex + 8)));
                         if (d < 0) {
-                            var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+                            var tok = yar_token_new(YAR_TOK_NUMBER,
+                              str_substr(load64(lex), start, load64(lex + 8) - start));
                             store64(tok + 16, val);
                             return tok;
                         }
@@ -1728,7 +1729,8 @@ fn yara_engine_load_builtin_rules(engine) {
     store64(ransom_rule + 8, str_from("Contains ransomware-related strings"));
     store64(ransom_rule + 16, SEVERITY_CRITICAL);
     vec_push(load64(ransom_rule + 24), str_from("ransomware"));
-    vec_push(load64(ransom_rule + 32), yara_pattern_from_string(str_from("$r1"), str_from("Your files have been encrypted")));
+    vec_push(load64(ransom_rule + 32),
+      yara_pattern_from_string(str_from("$r1"), str_from("Your files have been encrypted")));
     vec_push(load64(ransom_rule + 32), yara_pattern_from_string(str_from("$r2"), str_from("bitcoin")));
     vec_push(load64(ransom_rule + 32), yara_pattern_from_string(str_from("$r3"), str_from("decrypt")));
     vec_push(load64(ransom_rule + 32), yara_pattern_from_string(str_from("$r4"), str_from("ransom")));
@@ -1744,7 +1746,9 @@ fn yara_engine_load_builtin_rules(engine) {
     vec_push(load64(embedded_pe + 24), str_from("embedded"));
     vec_push(load64(embedded_pe + 24), str_from("pe"));
     vec_push(load64(embedded_pe + 32), yara_pattern_from_hex(str_from("$mz"), str_from("4D 5A")));
-    vec_push(load64(embedded_pe + 32), yara_pattern_from_string(str_from("$pe"), str_from("This program cannot be run in DOS mode")));
+    vec_push(load64(embedded_pe + 32),
+      yara_pattern_from_string(str_from("$pe"),
+        str_from("This program cannot be run in DOS mode")));
     store64(embedded_pe + 40, YARA_COND_ALL);
     store64(load64(embedded_pe + 64), 512);
     yara_engine_add_rule(engine, embedded_pe);

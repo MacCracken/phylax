@@ -1,7 +1,7 @@
 # tlsh_distance(h, h) segfaults under cyrius 5.10.44 + sigil 3.1.1
 
 **Filed**: 2026-05-11 (phylax 1.1.1 sweep)
-**Status**: Open — `assert_eq(tlsh_distance(h, h), 0)` disabled in `tests/test_tlsh.tcyr` pending fix
+**Status**: **RESOLVED 2026-08-23 (phylax 1.2.6 P(-1) closeout).** Does not reproduce on cyrius 6.5.35 — `tlsh_distance(h, h)` returns 0 as specified. It was a toolchain defect (filed against 5.10.44) that the ordinary pin sweeps closed; no phylax change was needed. The assertion is live again in `tests/test_tlsh.tcyr`, now joined by differing-input and null-handle cases. Kept for the record.
 **Severity**: Functional (TLSH distance computation crashes the process); test-suite only — `tlsh_hash` itself works
 **Affects**: `src/hashing.cyr` (TLSH implementation) under cyrius 5.10.44 toolchain + sigil 3.1.1 transitive
 

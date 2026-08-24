@@ -128,10 +128,16 @@ fn elf_read_u64(data, offset, little_endian) {
 
 # Read a null-terminated string from the string table
 fn read_strtab_entry(data, data_len, strtab_offset, name_index) {
+    # Both inputs are file-derived and may be negative once a hostile u64/u32
+    # lands in an i64 — see in_bounds() in utils.cyr. The old check was
+    # `off >= data_len` alone, which let a negative `off` through and made
+    # `max = data_len - off` LARGER than the buffer, reading below `data`.
+    if (strtab_offset < 0 || name_index < 0) { return str_from(""); }
     var off = strtab_offset + name_index;
-    if (off >= data_len) { return str_from(""); }
+    if (off < 0) { return str_from(""); }          # addition overflowed
+    if (in_bounds(off, 1, data_len) == 0) { return str_from(""); }
     var max = 256;
-    if (off + max > data_len) { max = data_len - off; }
+    if (max > data_len - off) { max = data_len - off; }
     return read_ascii(data, off, max);
 }
 
@@ -266,7 +272,7 @@ fn parse_program_headers(data, data_len, elf, ph_offset, ph_entry_size, ph_num) 
 
     for (var i = 0; i < ph_num; i = i + 1) {
         var off = ph_offset + i * ph_entry_size;
-        if (off + ph_entry_size > data_len) { return 0; }
+        if (in_bounds(off, ph_entry_size, data_len) == 0) { return 0; }
 
         var seg = elf_segment_new();
         store64(seg, elf_read_u32(data, off, le));
@@ -338,7 +344,7 @@ fn parse_elf_sections(data, data_len, elf, sh_offset, sh_entry_size, sh_num, shs
     if (shstrndx > 0) {
         if (shstrndx < sh_num) {
             var strtab_hdr = sh_offset + shstrndx * sh_entry_size;
-            if (strtab_hdr + sh_entry_size <= data_len) {
+            if (in_bounds(strtab_hdr, sh_entry_size, data_len) == 1) {
                 if (is64) {
                     shstrtab_offset = elf_read_u64(data, strtab_hdr + 24, le);
                 } else {
@@ -353,7 +359,7 @@ fn parse_elf_sections(data, data_len, elf, sh_offset, sh_entry_size, sh_num, shs
 
     for (var i = 0; i < limit; i = i + 1) {
         var off = sh_offset + i * sh_entry_size;
-        if (off + sh_entry_size > data_len) { return 0; }
+        if (in_bounds(off, sh_entry_size, data_len) == 0) { return 0; }
 
         var sec = elf_section_new();
         var name_idx = elf_read_u32(data, off, le);
@@ -417,6 +423,11 @@ fn extract_needed_libs(data, data_len, elf) {
     }
 
     if (dyn_offset == 0 || dyn_size == 0) { return 0; }
+    # dyn_offset/dyn_size come from a section header or program header and are
+    # unvalidated file data. Clamping only `end` (below) leaves a negative
+    # `dyn_offset` as the loop's starting read position.
+    if (in_bounds(dyn_offset, 1, data_len) == 0) { return 0; }
+    if (dyn_size < 0) { return 0; }
 
     # Find the dynamic string table (DT_STRTAB)
     var dynstr_offset = 0;
@@ -474,6 +485,9 @@ fn extract_needed_libs(data, data_len, elf) {
     }
 
     if (dynstr_offset == 0) { return 0; }
+    # Computed above as `p_offset + (val - p_vaddr)` from three file-controlled
+    # fields, so it can land anywhere including negative.
+    if (in_bounds(dynstr_offset, 1, data_len) == 0) { return 0; }
 
     # Second pass: collect DT_NEEDED entries
     pos = dyn_offset;
@@ -538,7 +552,7 @@ fn extract_elf_symbols(data, data_len, elf) {
             var sym_off = load64(sec + 32);
             for (var k = 1; k < num_syms; k = k + 1) {  # skip index 0
                 var soff = sym_off + k * entry_size;
-                if (soff + entry_size > data_len) { k = num_syms; }  # break
+                if (in_bounds(soff, entry_size, data_len) == 0) { k = num_syms; }  # break
                 else {
                     var name_idx = elf_read_u32(data, soff, le);
                     if (name_idx > 0) {
@@ -559,7 +573,8 @@ fn extract_elf_symbols(data, data_len, elf) {
 # ================================================================
 
 fn parse_elf(data, data_len) {
-    # Validate minimum size and magic
+    # Validate pointer, minimum size and magic
+    if (data == 0) { return 0; }
     if (data_len < 52) { return 0; }  # Minimum ELF32 header
     if (load8(data) != ELF_MAGIC_0) { return 0; }
     if (load8(data + 1) != ELF_MAGIC_1) { return 0; }

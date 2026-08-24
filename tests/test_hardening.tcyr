@@ -1,0 +1,204 @@
+# Hostile-input hardening — the untrusted-byte surface
+#
+# Phylax parses attacker-supplied PE/ELF/archive/script bytes, so every public
+# entry point has to survive garbage rather than trust its caller. This file is
+# the regression net for the 1.2.6 P(-1) closeout, which found two distinct
+# classes with a guard-page fuzz harness:
+#
+#   1. **Null buffer / handle inputs killed the process.** 17 of 29 probed
+#      entry points segfaulted on a null pointer — including `tlsh_distance`,
+#      which any consumer can reach by comparing against a hash that failed to
+#      compute (`tlsh_hash` returns 0 below TLSH_MIN_DATA_LEN).
+#   2. **A file-derived offset could go NEGATIVE and read below the buffer.**
+#      `read_strtab_entry` checked only `off >= data_len`; a hostile u64 lands
+#      in i64 as a negative, sails past that check, and makes
+#      `max = data_len - off` LARGER than the buffer. Caught as a real SIGSEGV
+#      by placing input against a PROT_NONE page.
+#
+# The rule these encode: a public entry point returns its own "nothing here"
+# sentinel for bad input. It never dereferences and never crashes.
+
+include "src/lib.cyr"
+
+# ================================================================
+# in_bounds — the shared offset validator (utils.cyr)
+# ================================================================
+
+fn test_in_bounds() {
+    test_group("in_bounds");
+
+    # Ordinary in-range cases
+    assert_eq(in_bounds(0, 1, 100), 1, "first byte in bounds");
+    assert_eq(in_bounds(0, 100, 100), 1, "whole buffer in bounds");
+    assert_eq(in_bounds(99, 1, 100), 1, "last byte in bounds");
+    assert_eq(in_bounds(100, 0, 100), 1, "zero-length read at end is in bounds");
+
+    # Off the end
+    assert_eq(in_bounds(99, 2, 100), 0, "read crossing the end rejected");
+    assert_eq(in_bounds(100, 1, 100), 0, "read starting at end rejected");
+    assert_eq(in_bounds(101, 1, 100), 0, "read past the end rejected");
+
+    # The negatives — the whole reason this helper exists. A hostile u32/u64
+    # field arrives in an i64 as a negative number.
+    assert_eq(in_bounds(0 - 1, 1, 100), 0, "negative offset rejected");
+    assert_eq(in_bounds(0 - 4096, 8, 100), 0, "far-negative offset rejected");
+    assert_eq(in_bounds(10, 0 - 1, 100), 0, "negative length rejected");
+    assert_eq(in_bounds(10, 8, 0 - 1), 0, "negative data_len rejected");
+
+    # Would overflow if written as `off + need > data_len`
+    assert_eq(in_bounds(1, 9223372036854775807, 100), 0, "huge need rejected");
+}
+
+# ================================================================
+# Null buffers and handles — every public entry point
+# ================================================================
+
+fn test_null_inputs_analyze() {
+    test_group("null_inputs_analyze");
+
+    assert_eq(detect_file_type(0, 16), FILETYPE_UNKNOWN, "detect_file_type(null) = UNKNOWN");
+    assert_eq(detect_file_type(0, 0), FILETYPE_UNKNOWN, "detect_file_type(null,0) = UNKNOWN");
+
+    # Entropy/chi-squared return F64_ZERO; assert they return without crashing
+    # and produce the same value as the documented empty case.
+    assert_eq(shannon_entropy(0, 256), shannon_entropy(0, 0), "shannon_entropy(null) = empty result");
+    assert_eq(chi_squared(0, 256), chi_squared(0, 0), "chi_squared(null) = empty result");
+}
+
+fn test_null_inputs_strings_utils() {
+    test_group("null_inputs_strings_utils");
+
+    assert_eq(vec_len(extract_ascii(0, 256, 4)), 0, "extract_ascii(null) = empty");
+    assert_eq(vec_len(extract_ascii(0, 0, 4)), 0, "extract_ascii(null,0) = empty");
+
+    var d = alloc(16);
+    for (var i = 0; i < 16; i = i + 1) { store8(d + i, 65); }
+
+    assert_eq(memmem(0, 256, d, 4), 0 - 1, "memmem(null haystack) = -1");
+    assert_eq(memmem(d, 256, 0, 4), 0 - 1, "memmem(null needle) = -1");
+    assert_eq(memmem(0, 0, 0, 0), 0 - 1, "memmem(all null) = -1");
+
+    # hex_encode of a null/zero-length buffer is the empty string, not a crash
+    # (a negative len also used to reach alloc() as a huge size).
+    assert_eq(str_len(phylax_hex_encode(0, 16)), 0, "phylax_hex_encode(null) = empty");
+    assert_eq(str_len(phylax_hex_encode(d, 0)), 0, "phylax_hex_encode(len 0) = empty");
+    assert_eq(str_len(phylax_hex_encode(d, 0 - 8)), 0, "phylax_hex_encode(negative len) = empty");
+    # The success path returns a Str too — same type on both branches.
+    assert_eq(str_len(phylax_hex_encode(d, 4)), 8, "phylax_hex_encode(4 bytes) = 8 hex chars");
+}
+
+fn test_null_inputs_hashing() {
+    test_group("null_inputs_hashing");
+
+    assert_eq(ssdeep_hash(0, 256), 0, "ssdeep_hash(null) = 0");
+    assert_eq(ssdeep_hash(0, 0), 0, "ssdeep_hash(null,0) = 0");
+    assert_eq(tlsh_hash(0, 256), 0, "tlsh_hash(null) = 0");
+
+    # The handle-comparison surface. tlsh_hash returns 0 for short input, so a
+    # caller comparing a good hash against a failed one lands here directly.
+    var data = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) { store8(data + i, i); }
+    var h = tlsh_hash(data, 256);
+    assert(h != 0, "reference tlsh hash computed");
+
+    assert_eq(tlsh_distance(h, 0), 0 - 1, "tlsh_distance(h, null) = -1");
+    assert_eq(tlsh_distance(0, h), 0 - 1, "tlsh_distance(null, h) = -1");
+    assert_eq(tlsh_distance(0, 0), 0 - 1, "tlsh_distance(null, null) = -1");
+
+    var s = ssdeep_hash(data, 256);
+    assert_eq(ssdeep_compare(s, 0), 0 - 1, "ssdeep_compare(s, null) = -1");
+    assert_eq(ssdeep_compare(0, s), 0 - 1, "ssdeep_compare(null, s) = -1");
+    assert_eq(ssdeep_compare(0, 0), 0 - 1, "ssdeep_compare(null, null) = -1");
+}
+
+fn test_null_inputs_parsers() {
+    test_group("null_inputs_parsers");
+
+    assert_eq(parse_pe(0, 256), 0, "parse_pe(null) = 0");
+    assert_eq(parse_pe(0, 0), 0, "parse_pe(null,0) = 0");
+    assert_eq(parse_elf(0, 256), 0, "parse_elf(null) = 0");
+    assert_eq(parse_elf(0, 0), 0, "parse_elf(null,0) = 0");
+}
+
+# ================================================================
+# Negative and oversized lengths on real buffers
+# ================================================================
+
+fn test_negative_lengths() {
+    test_group("negative_lengths");
+
+    var d = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) { store8(d + i, i); }
+
+    assert_eq(detect_file_type(d, 0 - 1), FILETYPE_UNKNOWN, "detect_file_type(negative len)");
+    assert_eq(tlsh_hash(d, 0 - 1), 0, "tlsh_hash(negative len) = 0");
+    assert_eq(ssdeep_hash(d, 0 - 1), 0, "ssdeep_hash(negative len) = 0");
+    assert_eq(vec_len(extract_ascii(d, 0 - 1, 4)), 0, "extract_ascii(negative len) = empty");
+    assert_eq(parse_pe(d, 0 - 1), 0, "parse_pe(negative len) = 0");
+    assert_eq(parse_elf(d, 0 - 1), 0, "parse_elf(negative len) = 0");
+    assert_eq(memmem(d, 0 - 1, d, 4), 0 - 1, "memmem(negative hlen) = -1");
+}
+
+# ================================================================
+# Truncated and malformed structured input
+# ================================================================
+
+fn test_truncated_headers() {
+    test_group("truncated_headers");
+
+    # A buffer that is only the magic bytes: every parser must decline rather
+    # than read the header fields that follow.
+    var mz = alloc(64);
+    store8(mz, 77); store8(mz + 1, 90);            # "MZ"
+    assert_eq(parse_pe(mz, 2), 0, "parse_pe with 2 bytes = 0");
+    assert_eq(parse_pe(mz, 63), 0, "parse_pe below 64-byte DOS header = 0");
+
+    var el = alloc(64);
+    store8(el, 127); store8(el + 1, 69); store8(el + 2, 76); store8(el + 3, 70);  # \x7fELF
+    assert_eq(parse_elf(el, 4), 0, "parse_elf with 4 bytes = 0");
+    assert_eq(parse_elf(el, 51), 0, "parse_elf below 52-byte ELF32 header = 0");
+
+    # Right magic, garbage everywhere after it — must return a value, not crash.
+    var junk = alloc(512);
+    for (var i = 0; i < 512; i = i + 1) { store8(junk + i, 255); }
+    store8(junk, 77); store8(junk + 1, 90);
+    parse_pe(junk, 512);
+    store8(junk, 127); store8(junk + 1, 69); store8(junk + 2, 76); store8(junk + 3, 70);
+    parse_elf(junk, 512);
+    assert(1 == 1, "all-0xFF bodies behind valid magic do not crash");
+}
+
+fn test_archive_hostile() {
+    test_group("archive_hostile");
+
+    # Archive scanners on null and truncated input.
+    assert_eq(vec_len(zip_scan_entries(0, 256, 0, 1)), 0, "zip_scan_entries(null) = empty");
+    assert_eq(vec_len(tar_scan_entries(0, 256, 0, 1)), 0, "tar_scan_entries(null) = empty");
+    assert_eq(vec_len(gzip_scan(0, 256, 0)), 0, "gzip_scan(null) = empty");
+
+    # Depth guard: max_depth <= 0 must terminate immediately, which is what
+    # bounds recursive archive expansion (zip-bomb protection).
+    var d = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) { store8(d + i, 0); }
+    assert_eq(vec_len(zip_scan_entries(d, 256, 0, 0)), 0, "zip depth 0 = empty");
+    assert_eq(vec_len(tar_scan_entries(d, 256, 0, 0)), 0, "tar depth 0 = empty");
+    assert_eq(vec_len(zip_scan_entries(d, 256, 0, 0 - 1)), 0, "zip negative depth = empty");
+}
+
+fn main() {
+    phylax_init();
+
+    test_in_bounds();
+    test_null_inputs_analyze();
+    test_null_inputs_strings_utils();
+    test_null_inputs_hashing();
+    test_null_inputs_parsers();
+    test_negative_lengths();
+    test_truncated_headers();
+    test_archive_hostile();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

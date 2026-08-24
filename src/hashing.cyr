@@ -137,7 +137,8 @@ fn compute_ssdeep_hashes(data, len, block_size, out_h1_ptr, out_h2_ptr) {
 # Compute the ssdeep hash of a byte slice
 # Returns SsdeepHash ptr, or 0 if data is empty
 fn ssdeep_hash(data, len) {
-    if (len == 0) { return 0; }
+    if (data == 0) { return 0; }
+    if (len <= 0) { return 0; }
 
     var block_size = select_block_size(len);
 
@@ -314,6 +315,8 @@ fn score_strings(a, b, block_size) {
 # Compare two ssdeep hashes and return a similarity score (0-100)
 # Returns -1 if block sizes are incompatible
 fn ssdeep_compare(a, b) {
+    # `a` and `b` are ssdeep handles; load64() below would deref a null.
+    if (a == 0 || b == 0) { return -1; }
     var a_bs_ptr = alloc(8);
     var a_h1_ptr = alloc(8);
     var a_h2_ptr = alloc(8);
@@ -476,6 +479,7 @@ fn tlsh_diff_nibble(a, b) {
 # Compute the TLSH hash of a byte slice
 # Returns TlshHash ptr, or 0 if data is too short or insufficient variance
 fn tlsh_hash(data, len) {
+    if (data == 0) { return 0; }
     if (len < TLSH_MIN_DATA_LEN) { return 0; }
 
     # Ensure Pearson table is initialized
@@ -619,6 +623,11 @@ fn tlsh_hash(data, len) {
 # Compute the TLSH distance between two hashes (lower = more similar)
 # Returns -1 if either hash is invalid
 fn tlsh_distance(a, b) {
+    # `a` and `b` are TLSH handles. Both were dereferenced unguarded until the
+    # 1.2.6 closeout, so `tlsh_distance(h, 0)` killed the process — a crash
+    # reachable from any consumer comparing against a hash that failed to
+    # compute (tlsh_hash returns 0 for data under TLSH_MIN_DATA_LEN).
+    if (a == 0 || b == 0) { return -1; }
     var a_dig = load64(a);
     var b_dig = load64(b);
     var a_len = str_len(a_dig);

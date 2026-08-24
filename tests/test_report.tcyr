@@ -187,7 +187,8 @@ fn test_report_sarif_findings() {
     test_group("report_sarif_findings");
 
     var results = vec_new();
-    vec_push(results, mk_result(str_from("/tmp/crit.bin"), str_from("CritRule"), str_from("very bad"), SEVERITY_CRITICAL));
+    vec_push(results, mk_result(str_from("/tmp/crit.bin"), str_from("CritRule"),
+        str_from("very bad"), SEVERITY_CRITICAL));
     vec_push(results, mk_result(str_from("/tmp/med.bin"), str_from("MedRule"), str_from("maybe bad"), SEVERITY_MEDIUM));
     vec_push(results, mk_result(str_from("/tmp/info.bin"), str_from("InfoRule"), str_from("fyi"), SEVERITY_INFO));
     var rep = report_from_results(str_from("phylax-test"), results);
@@ -206,7 +207,8 @@ fn test_report_sarif_findings() {
     assert(str_eq(jstr(json_v_arr_get(sr, 2), "level"), str_from("note")), "INFO maps to level note");
 
     # message.text
-    assert(str_eq(jstr(json_v_obj_get(r0, "message"), "text"), str_from("very bad")), "message.text is the description");
+    assert(str_eq(jstr(json_v_obj_get(r0, "message"), "text"), str_from("very bad")),
+      "message.text is the description");
 
     # locations[0].physicalLocation.artifactLocation.uri
     var locs = json_v_obj_get(r0, "locations");
@@ -253,11 +255,11 @@ fn test_report_markdown() {
     var rep = report_from_results(str_from("phylax-md"), vec_new());
     var md = report_render_markdown(rep);
     assert(str_len(md) > 0, "markdown not empty");
-    assert(str_contains(md, str_from("# Phylax Threat Report")), "markdown has the title");
+    assert(phylax_str_contains(md, str_from("# Phylax Threat Report")), "markdown has the title");
     # session_id is a Str — it must render as text, not as its pointer value.
-    assert(str_contains(md, str_from("- **Session**: phylax-md")), "session id rendered as text");
-    assert(str_contains(md, str_from("## Summary")), "markdown has a summary section");
-    assert(str_contains(md, str_from("| Targets Scanned | 0 |")), "summary row rendered");
+    assert(phylax_str_contains(md, str_from("- **Session**: phylax-md")), "session id rendered as text");
+    assert(phylax_str_contains(md, str_from("## Summary")), "markdown has a summary section");
+    assert(phylax_str_contains(md, str_from("| Targets Scanned | 0 |")), "summary row rendered");
 }
 
 fn test_report_markdown_findings() {
@@ -266,9 +268,9 @@ fn test_report_markdown_findings() {
     var rep = mk_report(mk_result(str_from("/tmp/evil.bin"), str_from("EvilRule"),
         str_from("looks bad"), SEVERITY_HIGH));
     var md = report_render_markdown(rep);
-    assert(str_contains(md, str_from("- **Total Findings**: 1")), "total findings rendered");
-    assert(str_contains(md, str_from("| High | 1 |")), "high count rendered");
-    assert(str_contains(md,
+    assert(phylax_str_contains(md, str_from("- **Total Findings**: 1")), "total findings rendered");
+    assert(phylax_str_contains(md, str_from("| High | 1 |")), "high count rendered");
+    assert(phylax_str_contains(md,
         str_from("| /tmp/evil.bin | HIGH | Malware | EvilRule | looks bad |")),
       "finding row rendered with all five cells");
 }
@@ -288,7 +290,7 @@ fn test_report_markdown_escaping() {
     var rep = mk_report(mk_result(str_from("/tmp/x.bin"), str_from("Pipe|Rule"),
         str_from("has | pipe"), SEVERITY_LOW));
     var md = report_render_markdown(rep);
-    assert(str_contains(md, str_from("| Pipe\\|Rule | has \\| pipe |")), "table cells escaped in the row");
+    assert(phylax_str_contains(md, str_from("| Pipe\\|Rule | has \\| pipe |")), "table cells escaped in the row");
 }
 
 fn test_report_markdown_null_target() {
@@ -299,7 +301,7 @@ fn test_report_markdown_null_target() {
     vec_push(load64(result + 8), finding_new(target, CATEGORY_SUSPICIOUS, SEVERITY_LOW,
         str_from("MemRule"), str_from("in-memory hit")));
     var md = report_render_markdown(mk_report(result));
-    assert(str_contains(md, str_from("|  | LOW | Suspicious | MemRule | in-memory hit |")),
+    assert(phylax_str_contains(md, str_from("|  | LOW | Suspicious | MemRule | in-memory hit |")),
       "null target renders as an empty cell");
 }
 

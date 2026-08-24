@@ -31,6 +31,21 @@
 - Rules fetch from URL
 - Progress indicator for multi-file scans
 
+### v1.2.6 — P(-1) Closeout (2026-08-23)
+- Hostile-input sweep of every public entry point: 17 of 29 probed calls
+  segfaulted on a null buffer/handle; all now return their empty-case sentinel
+- **OOB read in the ELF parser** (`read_strtab_entry`) — upper-bound-only check
+  let a negative, file-derived offset read below the buffer. Found as a real
+  SIGSEGV with a `PROT_NONE` guard page, not inferred
+- Shared `in_bounds(off, need, data_len)` now backs ~20 offset tests in
+  `pe.cyr`/`elf.cyr`; rejects negatives and cannot overflow
+- `hex_encode`/`str_to_int`/`str_contains` → `phylax_`-prefixed; closes a
+  return-type mismatch with sigil's `hex_encode` (Str vs cstr) reachable inside
+  sigil's own `sha256_hex`. Phylax-side duplicate-fn warnings 6 → 0
+- tlsh_distance segfault issue closed — does not reproduce on cyrius 6.5.35
+- Suite 188 → **404 assertions across 18 files**; 0 over-reads across 6,306
+  guard-page combinations; ADR 0002 records the contract
+
 ## Backlog
 
 ### v0.9.1 — TAR Support

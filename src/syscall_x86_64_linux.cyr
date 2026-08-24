@@ -1,36 +1,24 @@
-# syscall_x86_64_linux.cyr — x86 wrapper backfill for stdlib gaps
+# syscall_x86_64_linux.cyr — x86_64 wrapper backfill for stdlib gaps
 #
-# Self-gated with `#ifdef CYRIUS_ARCH_X86` so this file ships in
-# the bundled `dist/phylax.cyr` alongside the aarch64 peer; only
-# the matching arch's block compiles in any given consumer build.
+# Self-gated with `#ifdef CYRIUS_ARCH_X86_64` so this file ships in the
+# bundled `dist/phylax.cyr` alongside the aarch64 peer; only the matching
+# arch's block compiles in any given consumer build.
 #
-# As of cyrius 5.7.48, `lib/syscalls_aarch64_linux.cyr` exposes
-# `sys_stat(path, buf)` / `sys_fstat(fd, buf)` wrappers but the
-# x86_64 peer does not (asymmetry; tracked as a cyrius hygiene
-# item). Phylax's `phylax_read_file` path needs both, so the x86
-# wrappers are provided here. On aarch64, the stdlib wrappers
-# are used directly (this peer's #ifdef block is skipped).
+# ⚠ CURRENTLY EMPTY BY DESIGN — do not delete the file.
+#
+# It used to define `sys_stat`, `sys_fstat` and `sys_rename`. As of the
+# cyrius 6.5.x stdlib all three exist upstream and are BYTE-IDENTICAL to the
+# copies here (`lib/syscalls_x86_64_linux.cyr:341` / `:414` and
+# `lib/syscalls_linux_common.cyr:146`), so the local copies bought nothing
+# and cost three `duplicate fn ... last definition wins` warnings per build.
+# Removed at the 1.2.6 P(-1) closeout.
+#
+# The file itself stays because the aarch64 peer is NOT empty: aarch64 Linux
+# deprecated the bare `rename(2)`, so `src/syscall_aarch64_linux.cyr` still
+# has to compose one through `renameat`. Keeping both peers in `[lib]` keeps
+# the two arches symmetrical in the manifest and leaves an obvious home for
+# the next x86_64-only gap.
 
-#ifdef CYRIUS_ARCH_X86
-
-# stat(2) — direct syscall on x86_64. SYS_STAT (= 4) and the
-# st_mode-at-offset-24 layout come from
-# `lib/syscalls_x86_64_linux.cyr` (already in scope).
-fn sys_stat(path, buf) {
-    return syscall(SYS_STAT, path, buf);
-}
-
-# fstat(2) — direct syscall on x86_64. SYS_FSTAT (= 5) ditto.
-fn sys_fstat(fd, buf) {
-    return syscall(SYS_FSTAT, fd, buf);
-}
-
-# rename(2) — direct syscall on x86_64. SYS_RENAME (= 82) is
-# already defined in `lib/syscalls_x86_64_linux.cyr`. Mirrors the
-# aarch64 peer's `sys_rename` (which composes through SYS_RENAMEAT)
-# so phylax-internal callers can rely on a single portable name.
-fn sys_rename(old_path, new_path) {
-    return syscall(SYS_RENAME, old_path, new_path);
-}
+#ifdef CYRIUS_ARCH_X86_64
 
 #endif

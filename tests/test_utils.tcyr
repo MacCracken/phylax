@@ -42,12 +42,16 @@ fn test_memmem_variants() {
     # Needle longer than haystack
     var short_hay = str_from("ab");
     var long_needle = str_from("abcde");
-    assert_eq(memmem(str_data(short_hay), str_len(short_hay), str_data(long_needle), str_len(long_needle)), 0 - 1, "needle longer than haystack");
+    assert_eq(memmem(str_data(short_hay), str_len(short_hay),
+        str_data(long_needle), str_len(long_needle)),
+      0 - 1, "needle longer than haystack");
 
     # Overlapping pattern: needle "aa" in "aaaa"
     var overlap_hay = str_from("aaaa");
     var overlap_needle = str_from("aa");
-    assert_eq(memmem(str_data(overlap_hay), str_len(overlap_hay), str_data(overlap_needle), str_len(overlap_needle)), 0, "overlapping at start");
+    assert_eq(memmem(str_data(overlap_hay), str_len(overlap_hay),
+        str_data(overlap_needle), str_len(overlap_needle)),
+      0, "overlapping at start");
 }
 
 fn test_hex() {
@@ -55,11 +59,11 @@ fn test_hex() {
 
     var data = alloc(3);
     store8(data, 0x4d); store8(data + 1, 0x5a); store8(data + 2, 0xff);
-    var hex = hex_encode(data, 3);
+    var hex = phylax_hex_encode(data, 3);
     assert(str_eq(hex, str_from("4d5aff")), "hex_encode basic");
 
     # Empty
-    var hex_empty = hex_encode(data, 0);
+    var hex_empty = phylax_hex_encode(data, 0);
     assert_eq(str_len(hex_empty), 0, "hex_encode empty");
 }
 
@@ -70,7 +74,7 @@ fn test_hex_decode() {
     var orig = alloc(4);
     store8(orig, 0xDE); store8(orig + 1, 0xAD);
     store8(orig + 2, 0xBE); store8(orig + 3, 0xEF);
-    var hex = hex_encode(orig, 4);
+    var hex = phylax_hex_encode(orig, 4);
     assert(str_eq(hex, str_from("deadbeef")), "hex_encode deadbeef");
 
     var out_len = alloc(8);

@@ -113,14 +113,14 @@ fn test_run_scan_target_is_str() {
 
     var js = report_render_json(report);
     assert(json_v_is_obj(json_v_parse(js)) == 1, "json renders and reparses from run_scan results");
-    assert(str_contains(js, str_from(TMP_EXE)), "json names the scanned path");
+    assert(phylax_str_contains(js, str_from(TMP_EXE)), "json names the scanned path");
 
     var sf = report_render_sarif(report);
     assert(json_v_is_obj(json_v_parse(sf)) == 1, "sarif renders and reparses from run_scan results");
-    assert(str_contains(sf, str_from(TMP_EXE)), "sarif names the scanned path");
+    assert(phylax_str_contains(sf, str_from(TMP_EXE)), "sarif names the scanned path");
 
     var md = report_render_markdown(report);
-    assert(str_contains(md, str_from(TMP_EXE)), "markdown names the scanned path");
+    assert(phylax_str_contains(md, str_from(TMP_EXE)), "markdown names the scanned path");
 }
 
 fn test_run_scan_rules_path() {

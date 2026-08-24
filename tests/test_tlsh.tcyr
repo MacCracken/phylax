@@ -1,10 +1,10 @@
 # TLSH — hashing.cyr surface
 #
-# KNOWN: `tlsh_distance(h, h)` segfaults under cyrius 5.10.44 + sigil 3.1.1
-# (last marker prints before the call, then exit 139). Tracked at
-# docs/development/issues/2026-05-11-tlsh-distance-segfault.md.
-# When the upstream fix lands, re-enable the "identical tlsh distance = 0"
-# assertion at the bottom of test_tlsh().
+# RESOLVED at the 1.2.6 P(-1) closeout: `tlsh_distance(h, h)` segfaulted under
+# cyrius 5.10.44 + sigil 3.1.1 and the assertion was disabled for it. It does
+# not reproduce on cyrius 6.5.35 — the call returns 0 as specified — so the
+# assertion is live again, with differing-input and malformed-input cases
+# added alongside it. See docs/development/issues/2026-05-11-tlsh-distance-segfault.md.
 
 include "src/lib.cyr"
 
@@ -29,11 +29,21 @@ fn test_tlsh() {
     assert(h != 0, "tlsh deterministic 1");
     assert(h2 != 0, "tlsh deterministic 2");
 
-    # Identical distance = 0 — DISABLED, see file header.
-    # if (h != 0) {
-    #     var dist = tlsh_distance(h, h);
-    #     assert_eq(dist, 0, "identical tlsh distance = 0");
-    # }
+    # Identical distance = 0. Re-enabled at the 1.2.6 P(-1) closeout: the
+    # segfault this guarded against was a toolchain defect (filed against
+    # cyrius 5.10.44) and does not reproduce on 6.5.35.
+    assert(h != 0, "tlsh hash non-zero before distance");
+    assert_eq(tlsh_distance(h, h), 0, "identical tlsh distance = 0");
+
+    # A different input must not collide to distance 0.
+    var data2 = alloc(256);
+    for (var i = 0; i < 256; i = i + 1) { store8(data2 + i, (i * 7 + 13) & 0xff); }
+    var h3 = tlsh_hash(data2, 256);
+    assert(h3 != 0, "second tlsh hash produced");
+    assert(tlsh_distance(h, h3) > 0, "differing tlsh inputs have non-zero distance");
+
+    # Mismatched-length / malformed inputs return -1 rather than crashing.
+    assert_eq(tlsh_distance(h, 0), -1, "tlsh distance vs null = -1");
 }
 
 fn main() {

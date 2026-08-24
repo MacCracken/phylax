@@ -165,7 +165,6 @@ fn hoosh_triage_finding(base_url, model, finding) {
     return parse_triage_response(content, finding_id, model);
 }
 
-
 # ================================================================
 # Daimon Client — Agent registration (synchronous)
 # ================================================================
@@ -298,7 +297,6 @@ fn daimon_deregister(base_url, agent_id) {
     return 1;
 }
 
-
 # ================================================================
 # AI Registration — Constants
 # ================================================================
@@ -322,7 +320,6 @@ fn phylax_ai_capabilities() {
     vec_push(caps, str_from("threat_reporting"));
     return caps;
 }
-
 
 # ================================================================
 # Bote MCP Tool Registration

@@ -7,7 +7,7 @@ fn count_indicators(text, indicators, num_indicators) {
     var count = 0;
     for (var i = 0; i < num_indicators; i = i + 1) {
         var ind = vec_get(indicators, i);
-        if (str_contains(text, ind)) {
+        if (phylax_str_contains(text, ind)) {
             count = count + 1;
         }
     }
@@ -28,13 +28,13 @@ fn classify_script(data, len) {
                     }
                 }
                 var shebang = str_from_raw(data, line_end);
-                if (str_contains(shebang, str_from("python")))     { return SCRIPT_PYTHON; }
-                if (str_contains(shebang, str_from("bash")))       { return SCRIPT_SHELL; }
-                if (str_contains(shebang, str_from("/sh")))        { return SCRIPT_SHELL; }
-                if (str_contains(shebang, str_from("zsh")))        { return SCRIPT_SHELL; }
-                if (str_contains(shebang, str_from("node")))       { return SCRIPT_JAVASCRIPT; }
-                if (str_contains(shebang, str_from("pwsh")))       { return SCRIPT_POWERSHELL; }
-                if (str_contains(shebang, str_from("powershell"))) { return SCRIPT_POWERSHELL; }
+                if (phylax_str_contains(shebang, str_from("python")))     { return SCRIPT_PYTHON; }
+                if (phylax_str_contains(shebang, str_from("bash")))       { return SCRIPT_SHELL; }
+                if (phylax_str_contains(shebang, str_from("/sh")))        { return SCRIPT_SHELL; }
+                if (phylax_str_contains(shebang, str_from("zsh")))        { return SCRIPT_SHELL; }
+                if (phylax_str_contains(shebang, str_from("node")))       { return SCRIPT_JAVASCRIPT; }
+                if (phylax_str_contains(shebang, str_from("pwsh")))       { return SCRIPT_POWERSHELL; }
+                if (phylax_str_contains(shebang, str_from("powershell"))) { return SCRIPT_POWERSHELL; }
             }
         }
     }
@@ -228,13 +228,13 @@ fn detect_obfuscation(data, len, language) {
     }
 
     # Base64 decode function references
-    if (str_contains(lower, str_from("base64"))) {
+    if (phylax_str_contains(lower, str_from("base64"))) {
         vec_push(load64(signals + 16), str_from("base64 decode function"));
         store64(signals + 24, load64(signals + 24) + 1);
-    } elif (str_contains(lower, str_from("frombase64"))) {
+    } elif (phylax_str_contains(lower, str_from("frombase64"))) {
         vec_push(load64(signals + 16), str_from("base64 decode function"));
         store64(signals + 24, load64(signals + 24) + 1);
-    } elif (str_contains(lower, str_from("atob("))) {
+    } elif (phylax_str_contains(lower, str_from("atob("))) {
         vec_push(load64(signals + 16), str_from("base64 decode function"));
         store64(signals + 24, load64(signals + 24) + 1);
     }
@@ -287,15 +287,15 @@ fn detect_powershell_obfuscation(lower, signals) {
         store64(signals + 24, load64(signals + 24) + 2);
     }
     # Invoke-Expression / IEX
-    if (str_contains(lower, str_from("invoke-expression"))) {
+    if (phylax_str_contains(lower, str_from("invoke-expression"))) {
         vec_push(load64(signals + 16), str_from("PowerShell Invoke-Expression/IEX"));
         store64(signals + 24, load64(signals + 24) + 1);
-    } elif (str_contains(lower, str_from("iex ")) | str_contains(lower, str_from("iex("))) {
+    } elif (phylax_str_contains(lower, str_from("iex ")) | phylax_str_contains(lower, str_from("iex("))) {
         vec_push(load64(signals + 16), str_from("PowerShell Invoke-Expression/IEX"));
         store64(signals + 24, load64(signals + 24) + 1);
     }
     # -EncodedCommand
-    if (str_contains(lower, str_from("-encodedcommand")) | str_contains(lower, str_from("-enc "))) {
+    if (phylax_str_contains(lower, str_from("-encodedcommand")) | phylax_str_contains(lower, str_from("-enc "))) {
         vec_push(load64(signals + 16), str_from("PowerShell -EncodedCommand"));
         store64(signals + 24, load64(signals + 24) + 2);
     }
@@ -305,7 +305,7 @@ fn detect_powershell_obfuscation(lower, signals) {
         store64(signals + 24, load64(signals + 24) + 1);
     }
     # Hidden window
-    if (str_contains(lower, str_from("-windowstyle hidden"))) {
+    if (phylax_str_contains(lower, str_from("-windowstyle hidden"))) {
         vec_push(load64(signals + 16), str_from("PowerShell hidden window"));
         store64(signals + 24, load64(signals + 24) + 1);
     }
@@ -318,12 +318,12 @@ fn detect_vbscript_obfuscation(lower, signals) {
         store64(signals + 24, load64(signals + 24) + 2);
     }
     # Execute/ExecuteGlobal
-    if (str_contains(lower, str_from("execute(")) | str_contains(lower, str_from("executeglobal"))) {
+    if (phylax_str_contains(lower, str_from("execute(")) | phylax_str_contains(lower, str_from("executeglobal"))) {
         vec_push(load64(signals + 16), str_from("VBScript Execute/ExecuteGlobal"));
         store64(signals + 24, load64(signals + 24) + 1);
     }
     # WScript.Shell
-    if (str_contains(lower, str_from("wscript.shell"))) {
+    if (phylax_str_contains(lower, str_from("wscript.shell"))) {
         vec_push(load64(signals + 16), str_from("VBScript WScript.Shell"));
         store64(signals + 24, load64(signals + 24) + 1);
     }
@@ -331,7 +331,7 @@ fn detect_vbscript_obfuscation(lower, signals) {
 
 fn detect_javascript_obfuscation(lower, signals) {
     # eval() usage
-    if (str_contains(lower, str_from("eval("))) {
+    if (phylax_str_contains(lower, str_from("eval("))) {
         vec_push(load64(signals + 16), str_from("JavaScript eval()"));
         store64(signals + 24, load64(signals + 24) + 1);
     }
@@ -341,7 +341,7 @@ fn detect_javascript_obfuscation(lower, signals) {
         store64(signals + 24, load64(signals + 24) + 2);
     }
     # document.write + unescape
-    if (str_contains(lower, str_from("document.write")) & str_contains(lower, str_from("unescape"))) {
+    if (phylax_str_contains(lower, str_from("document.write")) & phylax_str_contains(lower, str_from("unescape"))) {
         vec_push(load64(signals + 16), str_from("JavaScript document.write+unescape"));
         store64(signals + 24, load64(signals + 24) + 2);
     }

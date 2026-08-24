@@ -2,7 +2,145 @@
 
 All notable changes to Phylax will be documented in this file.
 
-## [Unreleased]
+## [1.2.6] - 2026-08-23
+
+**P(-1) closeout release.** Folds the crash-fix pass that followed 1.2.5 into a
+cut release, and adds a full hardening sweep of the untrusted-input surface on
+top of it. The sweep probed the public entry points directly instead of reading
+them, and found two classes the crash-fix pass had not reached: **17 of 29
+hostile calls killed the process on a null input**, and a **file-derived offset
+could go negative and read below the buffer** in the ELF parser. Both are fixed,
+both are regression-tested, and the offset one was caught as a real SIGSEGV
+rather than inferred — by abutting the input against a `PROT_NONE` page so any
+over-read faults instead of silently reading neighbouring heap.
+
+The test suite grows **188 → 404 assertions across 15 → 18 files**. Phylax-side
+`duplicate fn` build warnings go **6 → 0**, which closes a live cross-library
+type-confusion hazard: phylax's `hex_encode` returned a `Str` while sigil's
+returns a cstr, and phylax's won under last-definition-wins — inside sigil's own
+`sha256_hex`.
+
+### Breaking
+
+- **Three phylax-local helpers are now `phylax_`-prefixed** (`src/utils.cyr`),
+  because each shadowed a dependency symbol under last-definition-wins:
+
+  | Was | Now | Why it mattered |
+  |---|---|---|
+  | `hex_encode` | `phylax_hex_encode` | phylax returned a **`Str`**, sigil returns a **cstr** — and sigil's `sha256_hex`/`sha512_hex` call it. A consumer linking `dist/phylax.cyr` alongside sigil got ADR 0001's representation bug injected into sigil's internals. |
+  | `str_to_int` | `phylax_str_to_int` | phylax **stops** at the first non-digit; the stdlib's **skips** non-digits and keeps going. `"12a3"` → `12` vs `123`. |
+  | `str_contains` | `phylax_str_contains` | phylax reports an empty needle as **absent**; the stdlib reports it as **present**. |
+
+  Consumers of `dist/phylax.cyr` that called the bare names must take the new
+  ones. Note the last two differed *semantically* from the stdlib functions they
+  shadowed, so a caller who was silently getting phylax's behaviour keeps it
+  only by renaming. This follows the `PHYLAX_ERR_*` precedent from 1.2.4 and the
+  `phylax_hex_decode` that already existed — `hex_encode` was simply never
+  renamed with its sibling. Full rationale in
+  `docs/adr/0002-untrusted-input-contract.md`.
+
+### Security
+
+- **Out-of-bounds read in the ELF parser, reachable from `parse_elf` on any
+  untrusted file** (`src/elf.cyr`). `read_strtab_entry` validated only the upper
+  bound (`off >= data_len`). Its two inputs are ELF header fields read as u32/u64
+  into a **signed** i64, so a field larger than `i64::MAX` arrives negative,
+  sails past that test, and makes `max = data_len - off` *larger than the whole
+  buffer* — the parser then reads below `data` and keeps going. Caught as a
+  genuine SIGSEGV by the guard-page harness on mutated ELFs whose `e_shoff`
+  pointed past end-of-file (2 of 5,600 combinations).
+- **~20 further upper-bound-only offset tests** across `src/pe.cyr` and
+  `src/elf.cyr` now route through a shared `in_bounds(off, need, data_len)`
+  (`src/utils.cyr`), which rejects negative offsets, negative lengths and
+  negative buffer sizes, and uses `need > data_len - off` so the comparison
+  itself cannot overflow.
+- **17 null-input crashes across the public entry surface.** Every detection
+  primitive, parser and archive scanner now returns its existing empty-case
+  sentinel for a null buffer or handle instead of dereferencing. The most
+  reachable was `tlsh_distance`, which dereferenced both arguments unguarded —
+  and `tlsh_hash` returns 0 for short input, so **any consumer that hashes a
+  small file and compares the result killed its own process**, no malice needed.
+
+### Fixed
+
+- **`tlsh_distance(h, h)` no longer segfaults, and its assertion is live again**
+  (`tests/test_tlsh.tcyr`). This was filed against cyrius 5.10.44 in
+  `docs/development/issues/2026-05-11-tlsh-distance-segfault.md` and the test had
+  been commented out ever since. It does not reproduce on 6.5.35 — the call
+  returns 0 as specified — so it was a toolchain defect that the ordinary pin
+  sweeps closed. Re-enabled with differing-input and null-handle cases beside it.
+- **Three redundant syscall wrappers removed** (`src/syscall_x86_64_linux.cyr`).
+  `sys_stat`, `sys_fstat` and `sys_rename` are now byte-identical to the cyrius
+  6.5.x stdlib's, so the local copies bought nothing and cost three duplicate-fn
+  warnings per build. The file itself stays — the aarch64 peer is *not* empty
+  (aarch64 Linux deprecated bare `rename(2)`, so it composes one through
+  `renameat`), and keeping both peers keeps the two arches symmetrical.
+- **33 lint warnings → 8.** All 18 "multiple consecutive blank lines" cleared and
+  7 over-long lines wrapped. The remaining 8 are single indivisible string
+  literals (bote tool JSON schemas, the SARIF schema URI, a SHA-256 test vector).
+
+### Added
+
+- **`tests/test_hardening.tcyr`** — 57 assertions covering `in_bounds`, every
+  null entry point, negative lengths, truncated PE/ELF headers, and archive
+  depth limits. This is the permanent form of what the throwaway fuzz harness
+  found.
+- **`docs/adr/0002-untrusted-input-contract.md`** — the contract the above
+  encodes: a public entry point returns its own "nothing here" sentinel for bad
+  input, never dereferences, never crashes; every file-derived offset test goes
+  through `in_bounds`; phylax defines no bare name a dependency also defines.
+
+### Performance
+
+Neutral except one line item, which is recorded because it is real and
+counter-intuitive rather than because it is large.
+
+**`shannon_entropy` pays ~1.95 us per call for its null test** — 12.95 us →
+14.9 us on the 1 KiB benchmark, A/B'd over three runs each against that single
+line. That is not work; it is code layout. The function allocates a 2 KiB
+frequency table that already sits at the per-function stack budget (the
+compiler's "oversized array local kept in shared global" note), so one more test
+in that frame changes how the frame is placed. Hoisting the guard into a thin
+wrapper was tried and did **not** recover it, nor did reordering the tests or
+merging them into a single `||`.
+
+Kept regardless: the cost is fixed per call, so it vanishes on real workloads —
+`entropy_1m` (1 MiB) moves +0.7%, inside noise — and a scanner that dies on a
+null buffer is worse than one 15% slower on a microbenchmark.
+
+| bench | 1.2.5 | 1.2.6 | delta |
+|---|---|---|---|
+| entropy_1k | 12.95 us | 15.12 us | **+16.8%** (the guard, above) |
+| entropy_1m | 3.844 ms | 3.859 ms | +0.4% |
+| chi_squared | 16.963 us | 17.134 us | +1.0% |
+| file_detection | 25 ns | 27 ns | +2 ns |
+| sha256_4k | 18.947 us | 18.882 us | −0.3% |
+| memmem_4k | 7.112 us | 7.113 us | +0.0% |
+| hex_encode_256 | 3.483 us | 3.549 us | +1.9% |
+| extract_ascii | 34.314 us | 34.2 us | −0.3% |
+| ssdeep_4k | 96.702 us | 97.392 us | +0.7% |
+| tlsh_1k | 369.129 us | 371.106 us | +0.5% |
+| queue_enqueue | 63.338 us | 63.705 us | +0.6% |
+| queue_dequeue | 9.429 ms | 9.387 ms | −0.4% |
+| report_json_100 | 704.398 us | 701.139 us | −0.5% |
+| report_sarif_100 | 906.905 us | 902.870 us | −0.4% |
+| report_markdown_100 | 118.882 us | 118.564 us | −0.3% |
+
+### Verification
+
+- 29/29 hostile-input entry-point cases return their sentinel (was 17 crashing)
+- **0 over-reads across 6,306 guard-page (input × parser) combinations**, over
+  1,196 mutated PE/ELF/ZIP/TAR/gzip inputs — including 466 structurally-valid
+  PEs built to reach the import/export/TLS/debug/cert paths
+- 0 abnormal exits scanning all 1,196 inputs end-to-end through the CLI
+- 404 assertions across 18 files; fmt/vet/deny clean; `deps --verify` 65/65;
+  `distlib` idempotent
+
+---
+
+**The crash-fix pass folded in from `[Unreleased]`** follows. It landed on main
+directly after the 1.2.5 sweep and is released here for the first time.
+
 
 Crash-fix pass over the report renderers and the CLI argument paths. Four
 `phylax` invocations exited 139 (SIGSEGV); all four trace to two
@@ -10,8 +148,9 @@ representation mistakes — a HashMap handed to a builder that wants a flat
 `Vec` of `Str` pairs, and raw argv C strings handed to functions that want
 `Str` fat pointers. Both classes were also live in `quarantine.cyr` and
 `integration.cyr`. The test suite grows from 188 assertions across 15 files
-to **342 across 17**; every renderer now has its own assertions and the
-JSON/SARIF output is parsed back rather than length-checked.
+to **342 across 17** in this pass alone (the hardening sweep above then took it
+to 404 across 18); every renderer now has its own assertions and the JSON/SARIF
+output is parsed back rather than length-checked.
 
 ### Fixed
 
@@ -175,6 +314,7 @@ JSON/SARIF output is parsed back rather than length-checked.
   and the missing-source path.
 - `tests/test_integration.tcyr` updated for the `ScanTarget.data` contract
   and pins it with an assertion.
+
 ## [1.2.5] - 2026-08-23
 
 Toolchain + dependency sweep onto cyrius **6.5.35** (a minor-line move, 6.4.66
@@ -308,7 +448,7 @@ side.**
 ### Known, not fixed
 
 - ~~**`report --format json` and `report --format sarif` segfault (exit 139), as
-  does `rules validate <file>`.**~~ **FIXED — see the `[Unreleased]` section
+  does `rules validate <file>`.**~~ **FIXED — see the `[1.2.6]` section
   above**, which landed on main directly after this sweep. Recorded here as
   found because the diagnosis belongs with the release that surfaced it: it was
   **pre-existing and unrelated to this sweep** (reproduced identically on the

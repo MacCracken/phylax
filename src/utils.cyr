@@ -212,7 +212,7 @@ fn http_post(url, body, content_type) {
 
 # str_to_int — parse a decimal integer string to i64
 # Returns 0 if the string is empty or non-numeric.
-fn str_to_int(s) {
+fn phylax_str_to_int(s) {
     if (s == 0) { return 0; }
     var slen = str_len(s);
     if (slen == 0) { return 0; }
@@ -306,7 +306,13 @@ fn hex_nibble(n) {
 }
 
 # Encode a buffer of bytes at addr, len bytes, into a hex Str
-fn hex_encode(addr, len) {
+fn phylax_hex_encode(addr, len) {
+    # A negative len would reach alloc() as a huge unsigned size; a null addr
+    # would be dereferenced in the loop. Both return the empty string.
+    # Return a Str, matching the success path below — returning the raw
+    # buffer here would hand back a cstr where every caller expects a Str,
+    # which is the representation mix-up this release exists to remove.
+    if (addr == 0 || len <= 0) { return str_from(""); }
     var out = alloc(len * 2 + 1);
     for (var i = 0; i < len; i = i + 1) {
         var b = load8(addr + i);
@@ -357,9 +363,38 @@ fn phylax_hex_decode(s, out_len_ptr) {
 # Utility — memmem (substring search in raw bytes)
 # ================================================================
 
+# ================================================================
+# Bounds validation for file-derived offsets
+# ================================================================
+
+# Returns 1 when the byte range [off, off + need) lies entirely inside a
+# buffer of `data_len` bytes, and 0 otherwise.
+#
+# ⚠ The negative cases are the point of this helper, not an afterthought.
+# PE and ELF offsets are read out of the file as u32/u64 and land in a signed
+# i64, so a hostile field larger than i64::MAX arrives NEGATIVE. The idiom this
+# replaces — `if (off + need > data_len) { bail; }` or `if (off >= data_len)` —
+# passes such a value straight through, and the read then happens BELOW the
+# buffer. That is a real out-of-bounds read, not a theoretical one: it was
+# reachable through `read_strtab_entry` from `parse_elf` on a mutated ELF, and
+# is what the 1.2.6 closeout fuzz caught with a guard page.
+#
+# `need > data_len - off` is deliberate in place of `off + need > data_len`:
+# the subtraction cannot overflow once `off` is known to be in [0, data_len],
+# whereas the addition can wrap for large `need`.
+fn in_bounds(off, need, data_len) {
+    if (off < 0) { return 0; }
+    if (need < 0) { return 0; }
+    if (data_len < 0) { return 0; }
+    if (off > data_len) { return 0; }
+    if (need > data_len - off) { return 0; }
+    return 1;
+}
+
 # Search for needle in haystack. Returns offset or -1.
 fn memmem(haystack, hlen, needle, nlen) {
-    if (nlen == 0) { return -1; }
+    if (haystack == 0 || needle == 0) { return -1; }
+    if (hlen <= 0 || nlen <= 0) { return -1; }
     if (nlen > hlen) { return -1; }
     var limit = hlen - nlen;
     for (var i = 0; i <= limit; i = i + 1) {
@@ -376,7 +411,7 @@ fn memmem(haystack, hlen, needle, nlen) {
 }
 
 # Search for a Str needle inside a Str haystack
-fn str_contains(haystack, needle) {
+fn phylax_str_contains(haystack, needle) {
     var hdata = str_data(haystack);
     var hlen  = str_len(haystack);
     var ndata = str_data(needle);

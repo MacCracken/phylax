@@ -6,7 +6,6 @@
 # ================================================================
 # ================================================================
 
-
 # ================================================================
 # PE Parser — Constants
 # ================================================================
@@ -304,7 +303,7 @@ fn rva_to_offset(pe, rva) {
 fn rva_to_offset_raw(data, data_len, pe_offset, num_sections, sec_table_offset, rva) {
     for (var i = 0; i < num_sections; i = i + 1) {
         var soff = sec_table_offset + i * 40;
-        if (soff + 40 > data_len) { return -1; }
+        if (in_bounds(soff, 40, data_len) == 0) { return -1; }
         var va = read_u32_le(data, soff + 12);
         var vs = read_u32_le(data, soff + 8);
         var raw_off = read_u32_le(data, soff + 20);
@@ -411,7 +410,7 @@ fn parse_pe_imports(data, data_len, pe) {
 
     # Import directory is entry 1 (index 1)
     var import_dir_off = dd_offset + PE_DIR_IMPORT * 8;
-    if (import_dir_off + 8 > data_len) { return imports; }
+    if (in_bounds(import_dir_off, 8, data_len) == 0) { return imports; }
     var import_rva = read_u32_le(data, import_dir_off);
     var import_size = read_u32_le(data, import_dir_off + 4);
     if (import_rva == 0 || import_size == 0) { return imports; }
@@ -423,7 +422,7 @@ fn parse_pe_imports(data, data_len, pe) {
     var count = 0;
     var pos = import_file_off;
     while (count < PE_MAX_IMPORTS) {
-        if (pos + 20 > data_len) { count = PE_MAX_IMPORTS; }
+        if (in_bounds(pos, 20, data_len) == 0) { count = PE_MAX_IMPORTS; }
         else {
             var ilt_rva  = read_u32_le(data, pos);       # Import Lookup Table RVA
             var name_rva = read_u32_le(data, pos + 12);   # DLL name RVA
@@ -449,7 +448,7 @@ fn parse_pe_imports(data, data_len, pe) {
                             var entry_size = 4;
                             if (is_64) { entry_size = 8; }
                             while (fcount < 512) {
-                                if (fpos + entry_size > data_len) { fcount = 512; }
+                                if (in_bounds(fpos, entry_size, data_len) == 0) { fcount = 512; }
                                 else {
                                     var entry = 0;
                                     if (is_64) { entry = read_u64_le(data, fpos); }
@@ -513,14 +512,14 @@ fn parse_pe_exports(data, data_len, pe) {
     else { dd_offset = opt_off + 96; }
 
     var export_dir_off = dd_offset + PE_DIR_EXPORT * 8;
-    if (export_dir_off + 8 > data_len) { return exports; }
+    if (in_bounds(export_dir_off, 8, data_len) == 0) { return exports; }
     var export_rva = read_u32_le(data, export_dir_off);
     var export_size = read_u32_le(data, export_dir_off + 4);
     if (export_rva == 0 || export_size == 0) { return exports; }
 
     var export_file_off = rva_to_offset(pe, export_rva);
     if (export_file_off < 0) { return exports; }
-    if (export_file_off + 40 > data_len) { return exports; }
+    if (in_bounds(export_file_off, 40, data_len) == 0) { return exports; }
 
     # Export directory table
     var num_names = read_u32_le(data, export_file_off + 24);
@@ -562,7 +561,7 @@ fn detect_tls_callbacks(data, data_len, pe) {
     else { dd_offset = opt_off + 96; }
 
     var tls_dir_off = dd_offset + PE_DIR_TLS * 8;
-    if (tls_dir_off + 8 > data_len) { return 0; }
+    if (in_bounds(tls_dir_off, 8, data_len) == 0) { return 0; }
     var tls_rva = read_u32_le(data, tls_dir_off);
     if (tls_rva == 0) { return 0; }
 
@@ -572,10 +571,10 @@ fn detect_tls_callbacks(data, data_len, pe) {
     # TLS directory: callbacks pointer is at offset 12 (PE32) or 24 (PE32+)
     var cb_va = 0;
     if (is_64) {
-        if (tls_off + 32 > data_len) { return 0; }
+        if (in_bounds(tls_off, 32, data_len) == 0) { return 0; }
         cb_va = read_u64_le(data, tls_off + 24);
     } else {
-        if (tls_off + 16 > data_len) { return 0; }
+        if (in_bounds(tls_off, 16, data_len) == 0) { return 0; }
         cb_va = read_u32_le(data, tls_off + 12);
     }
 
@@ -612,7 +611,7 @@ fn parse_debug_directory(data, data_len, pe) {
     else { dd_offset = opt_off + 96; }
 
     var debug_dir_off = dd_offset + PE_DIR_DEBUG * 8;
-    if (debug_dir_off + 8 > data_len) { return 0; }
+    if (in_bounds(debug_dir_off, 8, data_len) == 0) { return 0; }
     var debug_rva = read_u32_le(data, debug_dir_off);
     var debug_size = read_u32_le(data, debug_dir_off + 4);
     if (debug_rva == 0 || debug_size == 0) { return 0; }
@@ -624,7 +623,7 @@ fn parse_debug_directory(data, data_len, pe) {
     var num_entries = debug_size / 28;
     for (var i = 0; i < num_entries; i = i + 1) {
         var eoff = debug_off + i * 28;
-        if (eoff + 28 > data_len) { return 0; }
+        if (in_bounds(eoff, 28, data_len) == 0) { return 0; }
         var dtype = read_u32_le(data, eoff + 12);
         if (dtype == PE_DEBUG_TYPE_CODEVIEW) {
             var dsize = read_u32_le(data, eoff + 16);
@@ -661,7 +660,7 @@ fn parse_pe_certificate(data, data_len, pe) {
     else { dd_offset = opt_off + 96; }
 
     var cert_dir_off = dd_offset + PE_DIR_SECURITY * 8;
-    if (cert_dir_off + 8 > data_len) { return 0; }
+    if (in_bounds(cert_dir_off, 8, data_len) == 0) { return 0; }
     var cert_offset = read_u32_le(data, cert_dir_off);
     var cert_size = read_u32_le(data, cert_dir_off + 4);
     if (cert_offset > 0) {
@@ -684,7 +683,7 @@ fn parse_pe_sections(data, data_len, sec_table_offset, num_sections) {
 
     for (var i = 0; i < limit; i = i + 1) {
         var soff = sec_table_offset + i * 40;
-        if (soff + 40 > data_len) { return sections; }
+        if (in_bounds(soff, 40, data_len) == 0) { return sections; }
 
         var sec = pe_section_new();
         store64(sec, read_fixed_ascii(data, soff, 8));
@@ -751,7 +750,7 @@ fn compute_imphash(import_funcs) {
         }
         store8(hash_buf + h, hval & 0xFF);
     }
-    return hex_encode(hash_buf, 16);
+    return phylax_hex_encode(hash_buf, 16);
 }
 
 # ================================================================
@@ -759,14 +758,15 @@ fn compute_imphash(import_funcs) {
 # ================================================================
 
 fn parse_pe(data, data_len) {
-    # Validate minimum size and MZ signature
+    # Validate pointer, minimum size and MZ signature
+    if (data == 0) { return 0; }
     if (data_len < 64) { return 0; }
     var mz = read_u16_le(data, 0);
     if (mz != PE_MAGIC_MZ) { return 0; }
 
     # e_lfanew: offset to PE signature at offset 0x3C
     var pe_offset = read_u32_le(data, 0x3C);
-    if (pe_offset + 4 > data_len) { return 0; }
+    if (in_bounds(pe_offset, 4, data_len) == 0) { return 0; }
 
     # Verify PE\0\0 signature
     if (load8(data + pe_offset) != 80) { return 0; }      # 'P'
@@ -775,7 +775,7 @@ fn parse_pe(data, data_len) {
     if (load8(data + pe_offset + 3) != 0) { return 0; }
 
     var coff_offset = pe_offset + 4;
-    if (coff_offset + 20 > data_len) { return 0; }
+    if (in_bounds(coff_offset, 20, data_len) == 0) { return 0; }
 
     var pe = pe_info_new();
 
@@ -793,18 +793,18 @@ fn parse_pe(data, data_len) {
     var opt_offset = coff_offset + 20;
     store64(pe + 128, opt_offset);
     store64(pe + 136, size_of_opt_hdr);
-    if (opt_offset + 2 > data_len) { return 0; }
+    if (in_bounds(opt_offset, 2, data_len) == 0) { return 0; }
     var opt_magic = read_u16_le(data, opt_offset);
 
     if (opt_magic == PE_OPT_MAGIC_64) {
         store64(pe + 32, 1);
-        if (opt_offset + 24 > data_len) { return 0; }
+        if (in_bounds(opt_offset, 24, data_len) == 0) { return 0; }
         store64(pe + 40, read_u32_le(data, opt_offset + 16));
         store64(pe + 48, read_u64_le(data, opt_offset + 24));
     } else {
         if (opt_magic == PE_OPT_MAGIC_32) {
             store64(pe + 32, 0);
-            if (opt_offset + 28 > data_len) { return 0; }
+            if (in_bounds(opt_offset, 28, data_len) == 0) { return 0; }
             store64(pe + 40, read_u32_le(data, opt_offset + 16));
             store64(pe + 48, read_u32_le(data, opt_offset + 28));
         } else {

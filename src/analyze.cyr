@@ -5,8 +5,22 @@
 # Shannon entropy of a byte buffer (bits per byte, 0.0 .. 8.0)
 # data = address of bytes, len = byte count
 # Returns f64 as i64 bit pattern
+# ⚠ The `data == 0` test below is MEASURED at ~1.95 us per call — 12.95 us ->
+# 14.9 us on the 1 KiB benchmark (three runs each, A/B against this exact
+# line). That is absurd for one integer compare and is a code-layout artifact,
+# not real work: this function allocates a 2 KiB frequency table that already
+# sits at the per-function stack budget, and one more test in the frame changes
+# how it is placed. Hoisting the test into a thin wrapper was tried and did NOT
+# recover it, nor did reordering or merging the two tests into one `||`.
+#
+# Kept anyway, deliberately. Without it a null buffer is dereferenced and the
+# process dies; phylax is a scanner whose whole job is surviving hostile input,
+# and the cost is a fixed per-call one that vanishes on real workloads
+# (entropy_1m, a 1 MiB buffer, moves +0.7% — inside noise). Revisit if the
+# toolchain's frame placement improves; do not drop the guard to win the
+# microbenchmark back.
 fn shannon_entropy(data, len) {
-    if (len == 0) { return F64_ZERO; }
+    if (data == 0 || len <= 0) { return F64_ZERO; }
 
     # Build frequency table: 256 entries
     var freq = alloc(256 * 8);
@@ -63,7 +77,7 @@ fn is_suspicious_entropy(entropy_f64) {
 
 # Chi-squared statistic for byte distribution
 fn chi_squared(data, len) {
-    if (len == 0) { return F64_ZERO; }
+    if (data == 0 || len <= 0) { return F64_ZERO; }
 
     var freq = alloc(256 * 8);
     for (var i = 0; i < 256; i = i + 1) {
@@ -103,6 +117,7 @@ fn classify_randomness(chi2) {
 # ================================================================
 
 fn detect_file_type(data, len) {
+    if (data == 0) { return FILETYPE_UNKNOWN; }
     if (len < 2) { return FILETYPE_UNKNOWN; }
 
     # Optimized 4-byte magic check using single u32 comparison
@@ -251,13 +266,18 @@ fn detect_polyglot(data, len) {
 # time, so callers downstream of `sha256_hex` would receive a raw
 # c-string where the rest of phylax expects a Str (the `str_eq` in
 # the test suite is the canary). Composing `sha256()` (digest only)
-# + phylax's `hex_encode` (Str output) keeps the surface uniform.
-# Retire this workaround when the duplicate-fn cleanup lands in the
-# 5.11.x / 5.12.x sweep.
+# + `phylax_hex_encode` (Str output) keeps the surface uniform.
+#
+# ⚠ The `phylax_` prefix is load-bearing, not cosmetic. sigil also defines a
+# bare `hex_encode`, and it returns a **cstr** where phylax's returns a **Str**.
+# Calling the bare name here hands `str_eq` a cstr and the empty-input SHA-256
+# assertion fails — which is exactly what happened, and how this line was caught,
+# when a mid-audit file restore silently reverted the rename at the 1.2.6
+# closeout. See docs/adr/0002-untrusted-input-contract.md.
 fn file_sha256(data, len) {
     var digest[32];
     sha256(data, len, &digest);
-    return hex_encode(&digest, 32);
+    return phylax_hex_encode(&digest, 32);
 }
 
 # ================================================================
