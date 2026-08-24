@@ -196,8 +196,8 @@ var STRING_ENCODING_UTF16LE = 1;
 
 # ScanTarget: kind (i64), data (Str — path or name, 0 for Memory)
 struct ScanTarget {
-    kind;
-    data;
+    kind;   # SCAN_TARGET_* enum
+    data;   # Str — path / agent name / package name; 0 for SCAN_TARGET_MEMORY
 }
 
 fn scan_target_new(kind, data) {
@@ -258,11 +258,11 @@ fn finding_fingerprint(f) {
     var target = load64(f);
     var tkind = load64(target);
     if (tkind == SCAN_TARGET_FILE) {
-        s = str_cat(s, str_cat(str_from("file:"), str_from(load64(target + 8))));
+        s = str_cat(s, str_cat(str_from("file:"), report_str_or_empty(load64(target + 8))));
     } elif (tkind == SCAN_TARGET_MEMORY) {
         s = str_cat(s, str_from("memory"));
     } else {
-        s = str_cat(s, str_from(load64(target + 8)));
+        s = str_cat(s, report_str_or_empty(load64(target + 8)));
     }
     s = str_cat(s, str_from("|"));
     s = str_cat(s, severity_name(load64(f + 16)));

@@ -69,10 +69,13 @@ fn collect_files_recurse(files, path, max_size) {
 # 3. YARA rule matching
 # 4. Severity escalation
 # Returns a ScanResult.
+# `path` is a Str; `rules_path` is a raw argv cstr (see arg_find_option).
+# The two representations are NOT interchangeable — a cstr read as a Str
+# takes the 8 bytes past its NUL as a length. Keep the conversions explicit.
 fn run_scan(path, rules_path) {
-    # Convert Str path to cstr for syscalls (phylax_read_file, scan_target_file)
+    # Convert Str path to cstr for syscalls (phylax_read_file)
     var cpath = str_to_cstr(path);
-    var target = scan_target_file(cpath);
+    var target = scan_target_file(path);
     var result = scan_result_new(target);
     var start_time = clock_epoch_secs();
 
@@ -113,9 +116,11 @@ fn run_scan(path, rules_path) {
 
     # Load custom rules file if specified
     if (rules_path != 0) {
-        if (str_len(rules_path) > 0) {
+        if (strlen(rules_path) > 0) {
+            # phylax_read_file returns 0 (not an empty Str) when the file is
+            # missing, oversized, or over the per-scan alloc budget.
             var rules_data = phylax_read_file(rules_path);
-            if (str_len(rules_data) > 0) {
+            if (rules_data != 0 && str_len(rules_data) > 0) {
                 var custom_rules = yara_parse_rules(rules_data);
                 var ncr = vec_len(custom_rules);
                 for (var i = 0; i < ncr; i = i + 1) {
@@ -131,7 +136,7 @@ fn run_scan(path, rules_path) {
         var yf = vec_get(yara_findings, i);
         # Convert YaraFinding to ThreatFinding
         var tf = finding_new(target, CATEGORY_CUSTOM_RULE, load64(yf + 16),
-        load64(yf), load64(yf + 8));
+          load64(yf), load64(yf + 8));
         store64(tf + 48, clock_epoch_secs());
         vec_push(load64(result + 8), tf);
     }
@@ -321,7 +326,7 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
     var nresults = vec_len(results);
     for (var i = 0; i < nresults; i = i + 1) {
         var result = vec_get(results, i);
-        var rpath = load64(load64(result) + 8);  # target.data (file path cstr)
+        var rpath = load64(load64(result) + 8);  # target.data (file path Str)
 
         var nf = vec_len(load64(result + 8));
         total_findings = total_findings + nf;
@@ -329,7 +334,7 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
 
         # Print per-file findings
         if (nf > 0) {
-            str_println(str_cat(str_from("[!] "), str_from(rpath)));
+            str_println(str_cat(str_from("[!] "), rpath));
             for (var j = 0; j < nf; j = j + 1) {
                 var f = vec_get(load64(result + 8), j);
                 var sev = load64(f + 16);
@@ -346,7 +351,7 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
 
                 # Triage via Hoosh if requested
                 if (do_triage == 1) {
-                    if (str_len(hoosh_url) > 0) {
+                    if (hoosh_url != 0 && str_len(hoosh_url) > 0) {
                         var triage = hoosh_triage_finding(hoosh_url, str_from("gpt-4"), f);
                         if (triage != 0) {
                             var tl = str_cat(str_from("    -> triage: "), load64(triage + 8));
@@ -359,7 +364,7 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
                 }
             }
         } else {
-            str_println(str_cat(str_from("[ok] "), str_from(rpath)));
+            str_println(str_cat(str_from("[ok] "), rpath));
         }
     }
 
@@ -423,6 +428,18 @@ var IN_CREATE      = 0x00000100;
 var IN_MOVED_TO    = 0x00000080;
 var WATCH_MASK     = 0x0000018A;  # IN_MODIFY | IN_CLOSE_WRITE | IN_CREATE | IN_MOVED_TO
 
+# Suffix-match a filename Str against one --extensions entry. The entry may
+# be written with or without a leading dot ("txt" and ".txt" both match
+# "notes.txt"); an empty entry never matches.
+fn path_has_extension(name, ext) {
+    if (ext == 0) { return 0; }
+    if (str_len(ext) == 0) { return 0; }
+    if (load8(str_data(ext)) == 0x2E) {
+        return str_ends_with(name, ext);
+    }
+    return str_ends_with(name, str_cat(str_from("."), ext));
+}
+
 fn cmd_watch(paths, recursive, extensions, rules_path) {
     #ifdef CYRIUS_TARGET_AGNOS
     # agnos has no inotify (no sys_inotify_init / sys_inotify_add_watch in the
@@ -448,13 +465,19 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
         return 1;
     }
 
-    # Add watches for each path
+    # Add watches for each path.
+    # `paths` holds raw argv cstrs; dir_list / path_join / str_cat all take a
+    # Str, so normalize once here and convert back with str_to_cstr for the
+    # inotify syscall. watch_map is keyed by str_from_int(wd) — a Str — so it
+    # must be map_new_str(); the cstr-keyed map_new() hashes the 16-byte Str
+    # header as a C string and silently drops entries.
     var npaths = vec_len(paths);
-    var watch_map = map_new();  # wd -> path mapping
+    var watch_map = map_new_str();  # wd (Str) -> watched dir (Str)
 
     for (var i = 0; i < npaths; i = i + 1) {
-        var p = vec_get(paths, i);
-        var wd = sys_inotify_add_watch(inotify_fd, p, WATCH_MASK);
+        var cp = vec_get(paths, i);
+        var p = str_from(cp);
+        var wd = sys_inotify_add_watch(inotify_fd, cp, WATCH_MASK);
         if (wd >= 0) {
             map_set(watch_map, str_from_int(wd), p);
             var wmsg = str_cat(str_from("watching: "), p);
@@ -473,9 +496,9 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
                     var name = vec_get(entries, j);
                     var child = path_join(p, name);
                     var child_entries = dir_list(child);
-                    if (child_entries != 0) {
+                    if (vec_len(child_entries) > 0) {
                         # It's a directory — watch it
-                        var cwd = sys_inotify_add_watch(inotify_fd, child, WATCH_MASK);
+                        var cwd = sys_inotify_add_watch(inotify_fd, str_to_cstr(child), WATCH_MASK);
                         if (cwd >= 0) {
                             map_set(watch_map, str_from_int(cwd), child);
                         }
@@ -524,36 +547,27 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
                         }
 
                         if (actual_len > 0) {
-                            # Build the full path
-                            # Copy name bytes into a fresh Str
-                            var name_buf = alloc(actual_len);
-                            for (var k = 0; k < actual_len; k = k + 1) {
-                                store8(name_buf + k, load8(name_ptr + k));
-                            }
+                            # inotify hands us the bare filename; join it onto
+                            # the directory the watch descriptor belongs to.
+                            var name = str_from_buf(name_ptr, actual_len);
+                            var full_path = path_join(watch_dir, name);
 
-                            # Create str from the raw buffer
-                            # (Cyrius str_from takes a literal; use manual approach)
-                            # For now, build from path_join which handles raw paths
-                            var file_path = path_join(watch_dir, str_from(""));
-                            # Simplified: just scan the directory target
-                            var scan_result = run_scan(path_join(watch_dir, str_from("")), rules_path);
-
-                            # Check for extension filtering
+                            # Extension filter — a file passes when it ends
+                            # with any of the --extensions suffixes.
                             var should_scan = 1;
                             if (extensions != 0) {
                                 if (vec_len(extensions) > 0) {
                                     should_scan = 0;
                                     var next = vec_len(extensions);
                                     for (var e = 0; e < next; e = e + 1) {
-                                        var ext = vec_get(extensions, e);
-                                        # Simple suffix check on the name
-                                        should_scan = 1;  # simplified
+                                        if (path_has_extension(name, vec_get(extensions, e)) == 1) {
+                                            should_scan = 1;
+                                        }
                                     }
                                 }
                             }
 
                             if (should_scan == 1) {
-                                var full_path = path_join(watch_dir, str_from(""));
                                 var sr = run_scan(full_path, rules_path);
                                 var nf = vec_len(load64(sr + 8));
                                 if (nf > 0) {
@@ -589,14 +603,15 @@ fn cmd_watch(paths, recursive, extensions, rules_path) {
 # CLI — Subcommand: rules list
 # ================================================================
 
+# `file` is a raw argv cstr (or 0 when no file was given).
 fn cmd_rules_list(file) {
     var engine = get_yara_engine();
 
     # Load from file if specified
     if (file != 0) {
-        if (str_len(file) > 0) {
+        if (strlen(file) > 0) {
             var data = phylax_read_file(file);
-            if (str_len(data) > 0) {
+            if (data != 0 && str_len(data) > 0) {
                 var rules = yara_parse_rules(data);
                 var nr = vec_len(rules);
                 for (var i = 0; i < nr; i = i + 1) {
@@ -655,6 +670,9 @@ fn cmd_rules_list(file) {
 # CLI — Subcommand: rules validate
 # ================================================================
 
+# `files` is a Vec of raw argv cstrs (arg_collect_positional). They go to
+# phylax_read_file as-is, but every message path needs str_from() first —
+# str_cat on a cstr reads the 8 bytes past its NUL as a length.
 fn cmd_rules_validate(files) {
     var nfiles = vec_len(files);
     var errors = 0;
@@ -663,17 +681,18 @@ fn cmd_rules_validate(files) {
         var file = vec_get(files, i);
         var data = phylax_read_file(file);
 
-        if (str_len(data) == 0) {
-            str_println(str_cat(str_from("[FAIL] Cannot read: "), file));
+        # phylax_read_file returns 0, not an empty Str, when the read fails.
+        if (data == 0 || str_len(data) == 0) {
+            str_println(str_cat(str_from("[FAIL] Cannot read: "), str_from(file)));
             errors = errors + 1;
         } else {
             var rules = yara_parse_rules(data);
             var nr = vec_len(rules);
 
             if (nr == 0) {
-                str_println(str_cat(str_from("[WARN] No rules parsed from: "), file));
+                str_println(str_cat(str_from("[WARN] No rules parsed from: "), str_from(file)));
             } else {
-                var msg = str_cat(str_from("[OK] "), file);
+                var msg = str_cat(str_from("[OK] "), str_from(file));
                 msg = str_cat(msg, str_from(": "));
                 msg = str_cat(msg, str_from_int(nr));
                 msg = str_cat(msg, str_from(" rule(s) valid"));
@@ -845,8 +864,8 @@ fn cmd_intel_import(stix_path) {
     sys_close(fd);
 
     str_println(str_cat(str_from("Extracted "), str_cat(str_from_int(vec_len(hashes)),
-    str_cat(str_from(" SHA-256 indicators -> phylax-intel.yar ("),
-    str_cat(str_from_int(str_len(output)), str_from(" bytes)"))))));
+          str_cat(str_from(" SHA-256 indicators -> phylax-intel.yar ("),
+            str_cat(str_from_int(str_len(output)), str_from(" bytes)"))))));
 
     return 0;
 }
@@ -1216,9 +1235,11 @@ fn main() {
 
         var rules_path = arg_find_option("--rules");
         var do_triage = arg_has_flag("--triage");
-        var hoosh_url = arg_find_option("--hoosh-url");
-        if (hoosh_url == 0) {
-            hoosh_url = str_from("http://localhost:8080");
+        # Normalize to Str — cmd_scan/hoosh_triage_finding str_cat it.
+        var hoosh_opt = arg_find_option("--hoosh-url");
+        var hoosh_url = str_from("http://localhost:8080");
+        if (hoosh_opt != 0) {
+            hoosh_url = str_from(hoosh_opt);
         }
         var block_size = arg_find_option("--block-size");
 
@@ -1273,7 +1294,7 @@ fn main() {
         var extensions = 0;
         var ext_str = arg_find_option("--extensions");
         if (ext_str != 0) {
-            extensions = str_split(ext_str, str_from(","));
+            extensions = str_split(str_from(ext_str), str_from(","));
         }
 
         return cmd_watch(paths, recursive, extensions, rules_path);
@@ -1349,7 +1370,7 @@ fn main() {
     }
 
     # ---- unknown command ----
-    str_println(str_cat(str_from("Unknown command: "), cmd));
+    str_println(str_cat(str_from("Unknown command: "), str_from(cmd)));
     str_println(str_from("Run 'phylax help' for usage information."));
     return 1;
 }

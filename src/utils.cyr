@@ -110,6 +110,22 @@ fn phylax_read_file(path) {
     return str_new(buf, n);
 }
 
+# Request-header scratch buffer for http_post. Sized to hold a request line,
+# Host / Content-Type / Content-Length / Connection headers and the URL path.
+var HTTP_REQ_BUFSZ = 4096;
+
+# A zeroed http_post response: status 0, no body. Every field matters —
+# `alloc` is a bump allocator and does not zero, and callers read the body
+# pointer and length off this struct, so leaving +8/+16 uninitialized hands
+# them a wild pointer and a garbage length.
+fn http_post_err() {
+    var e = alloc(24);
+    store64(e, 0);
+    store64(e + 8, 0);
+    store64(e + 16, 0);
+    return e;
+}
+
 # http_post — POST request using raw TCP sockets
 # url: C string "http://host:port/path"
 # body: Str with the request body
@@ -118,16 +134,24 @@ fn phylax_read_file(path) {
 fn http_post(url, body, content_type) {
     var parsed = _http_parse_url(url);
     if (parsed == 0) {
-        var bad = alloc(24);
-        store64(bad, 0);
-        return bad;
+        return http_post_err();
     }
     var host = load64(parsed);
     var port = load64(parsed + 8);
     var path = load64(parsed + 16);
 
-    # Build POST request headers
-    var req = alloc(4096);
+    # Build POST request headers into a fixed 4 KiB buffer. The host and
+    # path come from a caller-supplied URL (`--hoosh-url`, config file), so
+    # bound them before any memcpy: 96 bytes covers the fixed request-line
+    # and header text plus the Content-Length digits and the NUL.
+    var req = alloc(HTTP_REQ_BUFSZ);
+    var ctlen = strlen(content_type);
+    var hdr_budget = strlen(path) + strlen(host) + ctlen + 96;
+    if (hdr_budget > HTTP_REQ_BUFSZ) {
+        var oversize = str_from("http_post: request headers exceed buffer");
+        sakshi_error(str_data(oversize), str_len(oversize));
+        return http_post_err();
+    }
     var pos = 0;
 
     # "POST /path HTTP/1.0\r\n"
@@ -144,7 +168,6 @@ fn http_post(url, body, content_type) {
 
     # "Content-Type: ...\r\n"
     memcpy(req + pos, "Content-Type: ", 14); pos = pos + 14;
-    var ctlen = strlen(content_type);
     memcpy(req + pos, content_type, ctlen); pos = pos + ctlen;
     memcpy(req + pos, "\r\n", 2); pos = pos + 2;
 
@@ -162,9 +185,9 @@ fn http_post(url, body, content_type) {
 
     # Connect
     var fd = tcp_socket();
-    if (fd < 0) { var err = alloc(24); store64(err, 0); return err; }
+    if (fd < 0) { return http_post_err(); }
     var r = sock_connect(fd, host, port);
-    if (r < 0) { sys_close(fd); var err = alloc(24); store64(err, 0); return err; }
+    if (r < 0) { sys_close(fd); return http_post_err(); }
 
     # Send headers
     sock_send(fd, req, pos);

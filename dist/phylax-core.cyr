@@ -277,8 +277,8 @@ var STRING_ENCODING_UTF16LE = 1;
 
 # ScanTarget: kind (i64), data (Str — path or name, 0 for Memory)
 struct ScanTarget {
-    kind;
-    data;
+    kind;   # SCAN_TARGET_* enum
+    data;   # Str — path / agent name / package name; 0 for SCAN_TARGET_MEMORY
 }
 
 fn scan_target_new(kind, data) {
@@ -339,11 +339,11 @@ fn finding_fingerprint(f) {
     var target = load64(f);
     var tkind = load64(target);
     if (tkind == SCAN_TARGET_FILE) {
-        s = str_cat(s, str_cat(str_from("file:"), str_from(load64(target + 8))));
+        s = str_cat(s, str_cat(str_from("file:"), report_str_or_empty(load64(target + 8))));
     } elif (tkind == SCAN_TARGET_MEMORY) {
         s = str_cat(s, str_from("memory"));
     } else {
-        s = str_cat(s, str_from(load64(target + 8)));
+        s = str_cat(s, report_str_or_empty(load64(target + 8)));
     }
     s = str_cat(s, str_from("|"));
     s = str_cat(s, severity_name(load64(f + 16)));
@@ -773,6 +773,22 @@ fn phylax_read_file(path) {
     return str_new(buf, n);
 }
 
+# Request-header scratch buffer for http_post. Sized to hold a request line,
+# Host / Content-Type / Content-Length / Connection headers and the URL path.
+var HTTP_REQ_BUFSZ = 4096;
+
+# A zeroed http_post response: status 0, no body. Every field matters —
+# `alloc` is a bump allocator and does not zero, and callers read the body
+# pointer and length off this struct, so leaving +8/+16 uninitialized hands
+# them a wild pointer and a garbage length.
+fn http_post_err() {
+    var e = alloc(24);
+    store64(e, 0);
+    store64(e + 8, 0);
+    store64(e + 16, 0);
+    return e;
+}
+
 # http_post — POST request using raw TCP sockets
 # url: C string "http://host:port/path"
 # body: Str with the request body
@@ -781,16 +797,24 @@ fn phylax_read_file(path) {
 fn http_post(url, body, content_type) {
     var parsed = _http_parse_url(url);
     if (parsed == 0) {
-        var bad = alloc(24);
-        store64(bad, 0);
-        return bad;
+        return http_post_err();
     }
     var host = load64(parsed);
     var port = load64(parsed + 8);
     var path = load64(parsed + 16);
 
-    # Build POST request headers
-    var req = alloc(4096);
+    # Build POST request headers into a fixed 4 KiB buffer. The host and
+    # path come from a caller-supplied URL (`--hoosh-url`, config file), so
+    # bound them before any memcpy: 96 bytes covers the fixed request-line
+    # and header text plus the Content-Length digits and the NUL.
+    var req = alloc(HTTP_REQ_BUFSZ);
+    var ctlen = strlen(content_type);
+    var hdr_budget = strlen(path) + strlen(host) + ctlen + 96;
+    if (hdr_budget > HTTP_REQ_BUFSZ) {
+        var oversize = str_from("http_post: request headers exceed buffer");
+        sakshi_error(str_data(oversize), str_len(oversize));
+        return http_post_err();
+    }
     var pos = 0;
 
     # "POST /path HTTP/1.0\r\n"
@@ -807,7 +831,6 @@ fn http_post(url, body, content_type) {
 
     # "Content-Type: ...\r\n"
     memcpy(req + pos, "Content-Type: ", 14); pos = pos + 14;
-    var ctlen = strlen(content_type);
     memcpy(req + pos, content_type, ctlen); pos = pos + ctlen;
     memcpy(req + pos, "\r\n", 2); pos = pos + 2;
 
@@ -825,9 +848,9 @@ fn http_post(url, body, content_type) {
 
     # Connect
     var fd = tcp_socket();
-    if (fd < 0) { var err = alloc(24); store64(err, 0); return err; }
+    if (fd < 0) { return http_post_err(); }
     var r = sock_connect(fd, host, port);
-    if (r < 0) { sys_close(fd); var err = alloc(24); store64(err, 0); return err; }
+    if (r < 0) { sys_close(fd); return http_post_err(); }
 
     # Send headers
     sock_send(fd, req, pos);
@@ -1230,8 +1253,8 @@ fn detect_file_type(data, len) {
     # TAR: check for "ustar" magic at offset 257
     if (len >= 263) {
         if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
-        load8(data + 259) == 116 && load8(data + 260) == 97 &&
-        load8(data + 261) == 114) {
+          load8(data + 259) == 116 && load8(data + 260) == 97 &&
+          load8(data + 261) == 114) {
             return FILETYPE_TAR;
         }
     }
@@ -1246,8 +1269,8 @@ fn detect_tar(data, data_len) {
     # Method 1: check for "ustar" magic at offset 257
     if (data_len >= 263) {
         if (load8(data + 257) == 117 && load8(data + 258) == 115 &&
-        load8(data + 259) == 116 && load8(data + 260) == 97 &&
-        load8(data + 261) == 114) {
+          load8(data + 259) == 116 && load8(data + 260) == 97 &&
+          load8(data + 261) == 114) {
             return 1;
         }
     }
@@ -1273,7 +1296,7 @@ fn detect_tar(data, data_len) {
             # Check typeflag at offset 156 — should be 0, '0', '5', or other valid flags
             var tf = load8(data + 156);
             if (tf == 0 || tf == 48 || tf == 53 || tf == 49 || tf == 50 ||
-            tf == 54 || tf == 55 || tf == 103 || tf == 120) {
+              tf == 54 || tf == 55 || tf == 103 || tf == 120) {
                 return 1;
             }
         }
@@ -1387,7 +1410,7 @@ fn findings_from_analysis(data, len, analysis, target) {
     if (vec_len(poly) > 1) {
         var poly_desc = str_from("Polyglot file detected");
         var f = finding_new(target, CATEGORY_EMBEDDED_PAYLOAD, SEVERITY_HIGH,
-        str_from("polyglot_file"), poly_desc);
+          str_from("polyglot_file"), poly_desc);
         vec_push(findings, f);
     }
 
@@ -1425,7 +1448,7 @@ fn escalate_severity(findings, analysis) {
             if (str_eq(load64(f + 24), str_from("polyglot_file"))) {
                 store64(f + 16, SEVERITY_CRITICAL);
                 map_set(load64(f + 40), str_from("escalated_polyglot"),
-                str_from("high_entropy+polyglot"));
+                  str_from("high_entropy+polyglot"));
             }
         }
     }
@@ -1437,7 +1460,7 @@ fn escalate_severity(findings, analysis) {
             if (load64(f + 16) == SEVERITY_MEDIUM) {
                 store64(f + 16, SEVERITY_HIGH);
                 map_set(load64(f + 40), str_from("escalated_executable"),
-                str_from("executable_file_type"));
+                  str_from("executable_file_type"));
             }
         }
     }
@@ -1464,7 +1487,7 @@ fn escalate_severity(findings, analysis) {
         if (load64(highest + 16) == SEVERITY_HIGH) {
             store64(highest + 16, SEVERITY_CRITICAL);
             map_set(load64(highest + 40), str_from("escalated_signals"),
-            str_from("multiple_signals"));
+              str_from("multiple_signals"));
         }
     }
 }
@@ -1490,7 +1513,7 @@ fn section_entropy_findings(sections, target) {
             if (load64(sec + 24)) { sev = SEVERITY_HIGH; }
             var desc = str_cat(str_from("Section has high entropy: "), load64(sec));
             var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-            str_from("high_section_entropy"), desc);
+              str_from("high_section_entropy"), desc);
             map_set(load64(f + 40), str_from("section"), load64(sec));
             var exec_str = str_from("false");
             if (load64(sec + 24)) { exec_str = str_from("true"); }
@@ -1514,9 +1537,9 @@ fn overlay_findings(overlay, target) {
     }
     var desc = str_from("PE overlay detected");
     var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-    str_from("pe_overlay"), desc);
+      str_from("pe_overlay"), desc);
     map_set(load64(f + 40), str_from("overlay_size"),
-    str_from_int(load64(overlay + 8)));
+      str_from_int(load64(overlay + 8)));
     vec_push(findings, f);
     return findings;
 }
@@ -1558,7 +1581,7 @@ fn packing_findings(signals, target) {
 
     var desc = str_from("Packed/encrypted binary detected");
     var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-    str_from("packed_binary"), desc);
+      str_from("packed_binary"), desc);
     map_set(load64(f + 40), str_from("signal_count"), str_from_int(count));
     var findings = vec_new();
     vec_push(findings, f);
@@ -2089,9 +2112,9 @@ fn script_findings(language, obfuscation, target) {
     if (load64(obfuscation + 24) >= 2 && load64(obfuscation + 24) <= 3) { sev = SEVERITY_MEDIUM; }
 
     var desc = str_cat(str_from("Obfuscated "),
-    str_cat(script_language_name(language), str_from(" script detected")));
+      str_cat(script_language_name(language), str_from(" script detected")));
     var f = finding_new(target, CATEGORY_SUSPICIOUS, sev,
-    str_from("script_obfuscation"), desc);
+      str_from("script_obfuscation"), desc);
     map_set(load64(f + 40), str_from("script_language"), script_language_name(language));
     map_set(load64(f + 40), str_from("obfuscation_score"), str_from_int(load64(obfuscation + 24)));
     map_set(load64(f + 40), str_from("high_entropy_lines"), str_from_int(load64(obfuscation)));
@@ -2273,9 +2296,9 @@ fn ssdeep_hash(data, len) {
 
             # Build digest: "block_size:hash1:hash2"
             var digest = str_cat(str_from_int(block_size),
-            str_cat(str_from(":"),
-            str_cat(h1_trunc,
-            str_cat(str_from(":"), h2_trunc))));
+              str_cat(str_from(":"),
+                str_cat(h1_trunc,
+                  str_cat(str_from(":"), h2_trunc))));
 
             var result = alloc(16);
             store64(result, digest);
@@ -3244,16 +3267,16 @@ fn parse_pe_imports(data, data_len, pe) {
                                                 if (hint_off + 2 < data_len) {
                                                     var func_name = read_ascii(data, hint_off + 2, 256);
                                                     vec_push(import_funcs,
-                                                    pe_import_new(dll_name, func_name));
+                                                      pe_import_new(dll_name, func_name));
                                                 }
                                             }
                                         } else {
                                             # Ordinal import
                                             var ord = entry & 0xFFFF;
                                             var ord_name = str_cat(str_from("ord:"),
-                                            str_from_int(ord));
+                                              str_from_int(ord));
                                             vec_push(import_funcs,
-                                            pe_import_new(dll_name, ord_name));
+                                              pe_import_new(dll_name, ord_name));
                                         }
                                         fcount = fcount + 1;
                                         fpos = fpos + entry_size;
@@ -4284,7 +4307,7 @@ fn zip_scan_entries(data, data_len, rules_path, max_depth) {
             if (uncomp_size <= ARCHIVE_MAX_EXPAND) {
                 var entry_data = data + data_offset;
                 var entry_findings = analyze_findings(entry_data, uncomp_size,
-                scan_target_new(SCAN_TARGET_FILE, str_from("embedded")));
+                  scan_target_new(SCAN_TARGET_FILE, str_from("embedded")));
                 # Also run YARA on embedded content (reuse global engine)
                 var engine = get_yara_engine();
                 var yf = yara_engine_scan(engine, entry_data, uncomp_size);
@@ -4334,11 +4357,11 @@ fn gzip_scan(data, data_len, rules_path) {
 
     # Add informational finding about compressed archive
     var f = finding_new(
-    scan_target_new(SCAN_TARGET_FILE, str_from("archive")),
-    CATEGORY_SUSPICIOUS, SEVERITY_INFO,
-    str_from("compressed_archive"),
-    str_from("File is a GZIP compressed archive (embedded content not scanned — deflate decompression pending)")
-    );
+      scan_target_new(SCAN_TARGET_FILE, str_from("archive")),
+      CATEGORY_SUSPICIOUS, SEVERITY_INFO,
+      str_from("compressed_archive"),
+      str_from("File is a GZIP compressed archive (embedded content not scanned — deflate decompression pending)")
+      );
     vec_push(findings, f);
     return findings;
 }
@@ -4392,7 +4415,7 @@ fn tar_scan_entries(data, data_len, rules_path, max_depth) {
 
                 # Run analysis on embedded file
                 var entry_findings = analyze_findings(entry_data, size,
-                scan_target_new(SCAN_TARGET_FILE, str_from("tar-embedded")));
+                  scan_target_new(SCAN_TARGET_FILE, str_from("tar-embedded")));
 
                 # Run YARA on embedded content (reuse global engine)
                 var engine = get_yara_engine();
@@ -5746,7 +5769,7 @@ fn yar_parse_strings(parser) {
                     }
                     hex_str = str_cat(hex_str, load64(load64(parser + 8) + 8));
                     if (load64(load64(parser + 8)) == YAR_TOK_NUMBER |
-                    load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+                      load64(load64(parser + 8)) == YAR_TOK_IDENT) {
                         hex_str = str_cat(hex_str, str_from(" "));
                     }
                     yar_advance(parser);
@@ -5994,7 +6017,7 @@ fn yara_parse_rules(src) {
             yar_advance(parser);
             # Skip the import target (string literal or identifier)
             if (load64(load64(parser + 8)) == YAR_TOK_STRING_LIT |
-            load64(load64(parser + 8)) == YAR_TOK_IDENT) {
+              load64(load64(parser + 8)) == YAR_TOK_IDENT) {
                 yar_advance(parser);
             }
         } else {
@@ -6089,7 +6112,7 @@ fn yar_parse_meta(parser, rule) {
                 yar_advance(parser);
             } else {
                 if (load64(load64(parser + 8)) == YAR_TOK_TRUE |
-                load64(load64(parser + 8)) == YAR_TOK_FALSE) {
+                  load64(load64(parser + 8)) == YAR_TOK_FALSE) {
                     yar_advance(parser);
                 } else {
                     yar_advance(parser);
@@ -6158,7 +6181,7 @@ fn yara_engine_load_builtin_rules(engine) {
     vec_push(load64(nop_rule + 24), str_from("shellcode"));
     # 32 consecutive NOPs
     vec_push(load64(nop_rule + 32), yara_pattern_from_hex(str_from("$nop"),
-    str_from("90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90")));
+        str_from("90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90")));
     store64(nop_rule + 40, YARA_COND_ANY);
     yara_engine_add_rule(engine, nop_rule);
 
@@ -6246,6 +6269,9 @@ fn report_summary_new() {
     return s;
 }
 
+# `session_id` is a Str (see the struct comment above) — every renderer
+# emits it as text. Passing a bare i64 here renders as a pointer-shaped
+# integer in markdown and crashes the JSON/SARIF string emitters.
 fn report_from_results(session_id, results) {
     var report = alloc(48);
     store64(report, session_id);
@@ -6297,138 +6323,175 @@ fn report_from_results(session_id, results) {
 }
 
 # ================================================================
+# Report — Str helpers shared by the renderers
+# ================================================================
+
+# A Str field on a report node may legitimately be 0: `scan_target_memory()`
+# stores 0 for `ScanTarget.data`, and a consumer-built ThreatFinding may omit
+# a description. Every renderer funnels Str reads through this so a 0 becomes
+# an empty string instead of a load from address 8.
+fn report_str_or_empty(s) {
+    if (s == 0) { return str_from(""); }
+    return s;
+}
+
+# Wrap a report Str as a JSON string value, tolerating a 0 field.
+fn report_json_str(s) {
+    return json_v_str_new(report_str_or_empty(s));
+}
+
+# ================================================================
 # Report — JSON renderer
 # ================================================================
 
+# JSON is emitted through bayan's tagged-value tree (`json_v_*`), never the
+# flat `json_build(pairs)` helper. `json_build` takes a Vec of 16-byte
+# {key: Str, value: Str} pairs and stringifies every value — it cannot
+# express nesting, integers or booleans. Handing it a HashMap (what this
+# renderer did through 1.2.5) makes it read the map header's `cap` field as
+# a vec length and walk the 24-byte entry array on an 8-byte stride, so it
+# dereferences empty slots as pair pointers → SIGSEGV. `json_v_*` is typed,
+# nests, and escapes strings at build time.
 fn report_render_json(report) {
-    var root = map_new();
-    map_set(root, "session_id", load64(report));
-    map_set(root, "generated_at", load64(report + 8));
-    map_set(root, "engine_version", load64(report + 16));
-    map_set(root, "total_findings", load64(report + 32));
+    var root = json_v_obj_new();
+    json_v_obj_set(root, str_from("session_id"), report_json_str(load64(report)));
+    json_v_obj_set(root, str_from("generated_at"), report_json_str(load64(report + 8)));
+    json_v_obj_set(root, str_from("engine_version"), report_json_str(load64(report + 16)));
+    json_v_obj_set(root, str_from("total_findings"), json_v_int_new(load64(report + 32)));
 
     # Summary object
     var s = load64(report + 40);
-    var sm = map_new();
-    map_set(sm, "targets_scanned", load64(s));
-    map_set(sm, "targets_clean", load64(s + 8));
-    map_set(sm, "targets_with_findings", load64(s + 16));
-    map_set(sm, "critical", load64(s + 24));
-    map_set(sm, "high", load64(s + 32));
-    map_set(sm, "medium", load64(s + 40));
-    map_set(sm, "low", load64(s + 48));
-    map_set(sm, "info", load64(s + 56));
-    map_set(root, "summary", sm);
+    var sm = json_v_obj_new();
+    json_v_obj_set(sm, str_from("targets_scanned"), json_v_int_new(load64(s)));
+    json_v_obj_set(sm, str_from("targets_clean"), json_v_int_new(load64(s + 8)));
+    json_v_obj_set(sm, str_from("targets_with_findings"), json_v_int_new(load64(s + 16)));
+    json_v_obj_set(sm, str_from("critical"), json_v_int_new(load64(s + 24)));
+    json_v_obj_set(sm, str_from("high"), json_v_int_new(load64(s + 32)));
+    json_v_obj_set(sm, str_from("medium"), json_v_int_new(load64(s + 40)));
+    json_v_obj_set(sm, str_from("low"), json_v_int_new(load64(s + 48)));
+    json_v_obj_set(sm, str_from("info"), json_v_int_new(load64(s + 56)));
+    json_v_obj_set(root, str_from("summary"), sm);
 
     # Results array
-    var results_arr = vec_new();
+    var results_arr = json_v_arr_new();
     var nresults = vec_len(load64(report + 24));
     for (var i = 0; i < nresults; i = i + 1) {
         var r = vec_get(load64(report + 24), i);
-        var rm = map_new();
-        map_set(rm, "target", load64(load64(r) + 8));
-        map_set(rm, "scan_duration_ms", load64(r + 16));
+        var rm = json_v_obj_new();
+        json_v_obj_set(rm, str_from("target"), report_json_str(load64(load64(r) + 8)));
+        json_v_obj_set(rm, str_from("scan_duration_ms"), json_v_int_new(load64(r + 16)));
 
-        var findings_arr = vec_new();
+        var findings_arr = json_v_arr_new();
         var nf = vec_len(load64(r + 8));
         for (var j = 0; j < nf; j = j + 1) {
             var f = vec_get(load64(r + 8), j);
-            var fm = map_new();
-            map_set(fm, "severity", severity_name(load64(f + 16)));
-            map_set(fm, "category", category_name(load64(f + 8)));
-            map_set(fm, "rule_name", load64(f + 24));
-            map_set(fm, "description", load64(f + 32));
-            map_set(fm, "timestamp", load64(f + 48));
-            vec_push(findings_arr, fm);
+            var fm = json_v_obj_new();
+            json_v_obj_set(fm, str_from("severity"), report_json_str(severity_name(load64(f + 16))));
+            json_v_obj_set(fm, str_from("category"), report_json_str(category_name(load64(f + 8))));
+            json_v_obj_set(fm, str_from("rule_name"), report_json_str(load64(f + 24)));
+            json_v_obj_set(fm, str_from("description"), report_json_str(load64(f + 32)));
+            json_v_obj_set(fm, str_from("timestamp"), json_v_int_new(load64(f + 48)));
+            json_v_arr_push(findings_arr, fm);
         }
-        map_set(rm, "findings", findings_arr);
-        vec_push(results_arr, rm);
+        json_v_obj_set(rm, str_from("findings"), findings_arr);
+        json_v_arr_push(results_arr, rm);
     }
-    map_set(root, "results", results_arr);
+    json_v_obj_set(root, str_from("results"), results_arr);
 
-    return json_build(root);
+    return json_v_build(root);
 }
 
 # ================================================================
 # Report — Markdown renderer
 # ================================================================
 
-# Escape pipe characters for markdown table cells.
+# Make a Str safe to drop into a markdown table cell: escape '|' (which
+# would otherwise open a new column) and fold CR/LF to a space (which
+# would otherwise end the row). Returns `s` untouched when there is
+# nothing to rewrite, so the common path allocates nothing.
 fn md_escape_pipe(s) {
+    if (s == 0) { return str_from(""); }
     var len = str_len(s);
     var data = str_data(s);
-    var out = str_from("");
 
+    var needs_escape = 0;
+    for (var i = 0; i < len; i = i + 1) {
+        var ch = load8(data + i);
+        if (ch == 0x7C) { needs_escape = 1; }
+        if (ch == 0x0A) { needs_escape = 1; }
+        if (ch == 0x0D) { needs_escape = 1; }
+    }
+    if (needs_escape == 0) { return s; }
+
+    var sb = str_builder_new();
     for (var i = 0; i < len; i = i + 1) {
         var ch = load8(data + i);
         if (ch == 0x7C) {
-            # Replace '|' with '\|'
-            out = str_cat(out, str_from("\\|"));
+            str_builder_add_byte(sb, 0x5C);  # '\'
+            str_builder_add_byte(sb, ch);
+        } elif (ch == 0x0A) {
+            str_builder_add_byte(sb, 0x20);
+        } elif (ch == 0x0D) {
+            str_builder_add_byte(sb, 0x20);
         } else {
-            # Single byte to string — allocate 1-byte buffer
-            var buf = alloc(1);
-            store8(buf, ch);
-            var one = str_from("");
-            # Build character manually — use str_cat with a char trick
-            # Simpler: rebuild from the original slice approach
-            out = str_cat(out, str_from(""));
+            str_builder_add_byte(sb, ch);
         }
     }
+    return str_builder_build(sb);
+}
 
-    # Fallback: if pipe not found just return original
-    return s;
+# Append one markdown table cell: " <text> |". Rows open with a bare "|"
+# and close with a newline, so cells compose into "| a | b |\n".
+fn md_cell(sb, s) {
+    str_builder_add_byte(sb, 0x20);
+    str_builder_add(sb, md_escape_pipe(s));
+    str_builder_add_cstr(sb, " |");
 }
 
 fn report_render_markdown(report) {
     var s = load64(report + 40);
 
-    var out = str_from("# Phylax Threat Report\n\n");
-    out = str_cat(out, str_from("- **Session**: "));
-    out = str_cat(out, str_from_int(load64(report)));
-    out = str_cat(out, str_from("\n"));
-    out = str_cat(out, str_from("- **Generated**: "));
-    out = str_cat(out, str_from_int(load64(report + 8)));
-    out = str_cat(out, str_from("\n"));
-    out = str_cat(out, str_from("- **Engine**: phylax v"));
-    out = str_cat(out, VERSION);
-    out = str_cat(out, str_from("\n"));
-    out = str_cat(out, str_from("- **Total Findings**: "));
-    out = str_cat(out, str_from_int(load64(report + 32)));
-    out = str_cat(out, str_from("\n\n"));
+    # str_builder, not repeated str_cat — str_cat copies the whole
+    # accumulator on every append, which is quadratic in the number of
+    # findings.
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "# Phylax Threat Report\n\n");
+    str_builder_add_cstr(sb, "- **Session**: ");
+    str_builder_add(sb, report_str_or_empty(load64(report)));
+    str_builder_add_cstr(sb, "\n- **Generated**: ");
+    str_builder_add(sb, report_str_or_empty(load64(report + 8)));
+    str_builder_add_cstr(sb, "\n- **Engine**: phylax v");
+    str_builder_add(sb, report_str_or_empty(load64(report + 16)));
+    str_builder_add_cstr(sb, "\n- **Total Findings**: ");
+    str_builder_add_int(sb, load64(report + 32));
+    str_builder_add_cstr(sb, "\n\n");
 
     # Summary table
-    out = str_cat(out, str_from("## Summary\n\n"));
-    out = str_cat(out, str_from("| Metric | Count |\n"));
-    out = str_cat(out, str_from("|--------|-------|\n"));
-    out = str_cat(out, str_from("| Targets Scanned | "));
-    out = str_cat(out, str_from_int(load64(s)));
-    out = str_cat(out, str_from(" |\n"));
-    out = str_cat(out, str_from("| Clean | "));
-    out = str_cat(out, str_from_int(load64(s + 8)));
-    out = str_cat(out, str_from(" |\n"));
-    out = str_cat(out, str_from("| With Findings | "));
-    out = str_cat(out, str_from_int(load64(s + 16)));
-    out = str_cat(out, str_from(" |\n"));
-    out = str_cat(out, str_from("| Critical | "));
-    out = str_cat(out, str_from_int(load64(s + 24)));
-    out = str_cat(out, str_from(" |\n"));
-    out = str_cat(out, str_from("| High | "));
-    out = str_cat(out, str_from_int(load64(s + 32)));
-    out = str_cat(out, str_from(" |\n"));
-    out = str_cat(out, str_from("| Medium | "));
-    out = str_cat(out, str_from_int(load64(s + 40)));
-    out = str_cat(out, str_from(" |\n"));
-    out = str_cat(out, str_from("| Low | "));
-    out = str_cat(out, str_from_int(load64(s + 48)));
-    out = str_cat(out, str_from(" |\n"));
-    out = str_cat(out, str_from("| Info | "));
-    out = str_cat(out, str_from_int(load64(s + 56)));
-    out = str_cat(out, str_from(" |\n\n"));
+    str_builder_add_cstr(sb, "## Summary\n\n");
+    str_builder_add_cstr(sb, "| Metric | Count |\n");
+    str_builder_add_cstr(sb, "|--------|-------|\n");
+    str_builder_add_cstr(sb, "| Targets Scanned | ");
+    str_builder_add_int(sb, load64(s));
+    str_builder_add_cstr(sb, " |\n| Clean | ");
+    str_builder_add_int(sb, load64(s + 8));
+    str_builder_add_cstr(sb, " |\n| With Findings | ");
+    str_builder_add_int(sb, load64(s + 16));
+    str_builder_add_cstr(sb, " |\n| Critical | ");
+    str_builder_add_int(sb, load64(s + 24));
+    str_builder_add_cstr(sb, " |\n| High | ");
+    str_builder_add_int(sb, load64(s + 32));
+    str_builder_add_cstr(sb, " |\n| Medium | ");
+    str_builder_add_int(sb, load64(s + 40));
+    str_builder_add_cstr(sb, " |\n| Low | ");
+    str_builder_add_int(sb, load64(s + 48));
+    str_builder_add_cstr(sb, " |\n| Info | ");
+    str_builder_add_int(sb, load64(s + 56));
+    str_builder_add_cstr(sb, " |\n\n");
 
     # Findings detail table
-    out = str_cat(out, str_from("## Findings\n\n"));
-    out = str_cat(out, str_from("| Target | Severity | Category | Rule | Description |\n"));
-    out = str_cat(out, str_from("|--------|----------|----------|------|-------------|\n"));
+    str_builder_add_cstr(sb, "## Findings\n\n");
+    str_builder_add_cstr(sb, "| Target | Severity | Category | Rule | Description |\n");
+    str_builder_add_cstr(sb, "|--------|----------|----------|------|-------------|\n");
 
     var nresults = vec_len(load64(report + 24));
     for (var i = 0; i < nresults; i = i + 1) {
@@ -6436,46 +6499,60 @@ fn report_render_markdown(report) {
         var nf = vec_len(load64(r + 8));
         for (var j = 0; j < nf; j = j + 1) {
             var f = vec_get(load64(r + 8), j);
-            out = str_cat(out, str_from("| "));
-            out = str_cat(out, load64(load64(r) + 8));
-            out = str_cat(out, str_from(" | "));
-            out = str_cat(out, severity_name(load64(f + 16)));
-            out = str_cat(out, str_from(" | "));
-            out = str_cat(out, category_name(load64(f + 8)));
-            out = str_cat(out, str_from(" | "));
-            out = str_cat(out, load64(f + 24));
-            out = str_cat(out, str_from(" | "));
-            out = str_cat(out, load64(f + 32));
-            out = str_cat(out, str_from(" |\n"));
+            str_builder_add_byte(sb, 0x7C);
+            md_cell(sb, load64(load64(r) + 8));
+            md_cell(sb, severity_name(load64(f + 16)));
+            md_cell(sb, category_name(load64(f + 8)));
+            md_cell(sb, load64(f + 24));
+            md_cell(sb, load64(f + 32));
+            str_builder_add_byte(sb, 0x0A);
         }
     }
 
-    return out;
+    return str_builder_build(sb);
 }
 
 # ================================================================
 # Report — SARIF v2.1.0 renderer
 # ================================================================
 
+var SARIF_SCHEMA_URI = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json";
+var PHYLAX_INFO_URI  = "https://github.com/MacCracken/phylax";
+
+# SARIF's `startTimeUtc` is a §3.30.7 dateTime, i.e. RFC 3339 — a literal
+# 'T' between date and time and a 'Z' zone designator. `phylax_timestamp`
+# renders the human "YYYY-MM-DD HH:MM:SS" form used by markdown, so patch
+# the two bytes rather than duplicating the civil-date math.
+fn sarif_rfc3339(ts) {
+    if (ts == 0) { return str_from(""); }
+    if (str_len(ts) != 19) { return ts; }
+    var src = str_data(ts);
+    var buf = alloc(20);
+    memcpy(buf, src, 19);
+    store8(buf + 10, 0x54);  # 'T'
+    store8(buf + 19, 0x5A);  # 'Z'
+    return str_new(buf, 20);
+}
+
 fn report_render_sarif(report) {
-    var sarif = map_new();
-    map_set(sarif, "$schema", str_from("https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json"));
-    map_set(sarif, "version", str_from("2.1.0"));
+    var sarif = json_v_obj_new();
+    json_v_obj_set(sarif, str_from("$schema"), json_v_str_new(str_from(SARIF_SCHEMA_URI)));
+    json_v_obj_set(sarif, str_from("version"), json_v_str_new(str_from("2.1.0")));
 
     # Build the single run
-    var run = map_new();
+    var run = json_v_obj_new();
 
     # Tool object
-    var tool = map_new();
-    var driver = map_new();
-    map_set(driver, "name", str_from("phylax"));
-    map_set(driver, "version", load64(report + 16));
-    map_set(driver, "informationUri", str_from("https://github.com/MacCracken/phylax"));
-    map_set(tool, "driver", driver);
-    map_set(run, "tool", tool);
+    var tool = json_v_obj_new();
+    var driver = json_v_obj_new();
+    json_v_obj_set(driver, str_from("name"), json_v_str_new(str_from("phylax")));
+    json_v_obj_set(driver, str_from("version"), report_json_str(load64(report + 16)));
+    json_v_obj_set(driver, str_from("informationUri"), json_v_str_new(str_from(PHYLAX_INFO_URI)));
+    json_v_obj_set(tool, str_from("driver"), driver);
+    json_v_obj_set(run, str_from("tool"), tool);
 
     # Results array
-    var sarif_results = vec_new();
+    var sarif_results = json_v_arr_new();
     var nresults = vec_len(load64(report + 24));
 
     for (var i = 0; i < nresults; i = i + 1) {
@@ -6484,9 +6561,9 @@ fn report_render_sarif(report) {
 
         for (var j = 0; j < nf; j = j + 1) {
             var f = vec_get(load64(r + 8), j);
-            var sr = map_new();
+            var sr = json_v_obj_new();
 
-            map_set(sr, "ruleId", load64(f + 24));
+            json_v_obj_set(sr, str_from("ruleId"), report_json_str(load64(f + 24)));
 
             # Map severity to SARIF level
             var level = str_from("note");
@@ -6494,48 +6571,48 @@ fn report_render_sarif(report) {
             if (load64(f + 16) == SEVERITY_HIGH)     { level = str_from("error"); }
             if (load64(f + 16) == SEVERITY_MEDIUM)   { level = str_from("warning"); }
             if (load64(f + 16) == SEVERITY_LOW)      { level = str_from("note"); }
-            map_set(sr, "level", level);
+            json_v_obj_set(sr, str_from("level"), json_v_str_new(level));
 
             # Message
-            var msg = map_new();
-            map_set(msg, "text", load64(f + 32));
-            map_set(sr, "message", msg);
+            var msg = json_v_obj_new();
+            json_v_obj_set(msg, str_from("text"), report_json_str(load64(f + 32)));
+            json_v_obj_set(sr, str_from("message"), msg);
 
             # Location — physical location with artifact URI
-            var locations = vec_new();
-            var loc = map_new();
-            var phys = map_new();
-            var artifact = map_new();
-            map_set(artifact, "uri", load64(load64(r) + 8));
-            map_set(phys, "artifactLocation", artifact);
-            map_set(loc, "physicalLocation", phys);
-            vec_push(locations, loc);
-            map_set(sr, "locations", locations);
+            var locations = json_v_arr_new();
+            var loc = json_v_obj_new();
+            var phys = json_v_obj_new();
+            var artifact = json_v_obj_new();
+            json_v_obj_set(artifact, str_from("uri"), report_json_str(load64(load64(r) + 8)));
+            json_v_obj_set(phys, str_from("artifactLocation"), artifact);
+            json_v_obj_set(loc, str_from("physicalLocation"), phys);
+            json_v_arr_push(locations, loc);
+            json_v_obj_set(sr, str_from("locations"), locations);
 
             # Properties — extra metadata
-            var props = map_new();
-            map_set(props, "severity", severity_name(load64(f + 16)));
-            map_set(props, "category", category_name(load64(f + 8)));
-            map_set(props, "timestamp", load64(f + 48));
-            map_set(sr, "properties", props);
+            var props = json_v_obj_new();
+            json_v_obj_set(props, str_from("severity"), report_json_str(severity_name(load64(f + 16))));
+            json_v_obj_set(props, str_from("category"), report_json_str(category_name(load64(f + 8))));
+            json_v_obj_set(props, str_from("timestamp"), json_v_int_new(load64(f + 48)));
+            json_v_obj_set(sr, str_from("properties"), props);
 
-            vec_push(sarif_results, sr);
+            json_v_arr_push(sarif_results, sr);
         }
     }
 
-    map_set(run, "results", sarif_results);
+    json_v_obj_set(run, str_from("results"), sarif_results);
 
     # Invocation
-    var invocations = vec_new();
-    var inv = map_new();
-    map_set(inv, "executionSuccessful", 1);
-    map_set(inv, "startTimeUtc", load64(report + 8));
-    vec_push(invocations, inv);
-    map_set(run, "invocations", invocations);
+    var invocations = json_v_arr_new();
+    var inv = json_v_obj_new();
+    json_v_obj_set(inv, str_from("executionSuccessful"), json_v_bool_new(1));
+    json_v_obj_set(inv, str_from("startTimeUtc"), json_v_str_new(sarif_rfc3339(load64(report + 8))));
+    json_v_arr_push(invocations, inv);
+    json_v_obj_set(run, str_from("invocations"), invocations);
 
-    var runs = vec_new();
-    vec_push(runs, run);
-    map_set(sarif, "runs", runs);
+    var runs = json_v_arr_new();
+    json_v_arr_push(runs, run);
+    json_v_obj_set(sarif, str_from("runs"), runs);
 
-    return json_build(sarif);
+    return json_v_build(sarif);
 }

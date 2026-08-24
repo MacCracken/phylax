@@ -30,10 +30,14 @@ cyrius distlib                                       # → dist/phylax.cyr (full
 cyrius distlib core                                  # → dist/phylax-core.cyr (detection-only)
 ```
 
-The test suite is split per-module under `tests/test_*.tcyr` (14 files, 188 assertions
-total as of 1.1.1) so a crash in one module doesn't poison the rest of the run. Add a
-new module's tests as `tests/test_<module>.tcyr`; CI picks up `tests/*.tcyr`
-automatically.
+The test suite is split per-module under `tests/test_*.tcyr` (16 files, plus
+`tests/phylax-core.tcyr`; 342 assertions total as of the 1.2.5 crash-fix pass) so a
+crash in one module doesn't poison the rest of the run. Add a new module's tests as
+`tests/test_<module>.tcyr`; CI picks up `tests/*.tcyr` automatically.
+
+`tests/test_cli.tcyr` is the one file that includes `src/cli.cyr` on top of
+`src/lib.cyr` — its `main()` shadows cli.cyr's. That is what makes the argv-facing
+subcommand helpers testable; put CLI-boundary tests there.
 
 ## Consumers
 
@@ -89,7 +93,7 @@ src/lib_core.cyr      — detection-only include list, matches [lib.core] profil
 src/<module>.cyr      — 17 modules (types, utils, analyze, strings, script, hashing,
                         pe, elf, archive, yara, queue, quarantine, report,
                         integration, cli)
-tests/phylax.tcyr     — full test suite (178 assertions)
+tests/test_*.tcyr     — per-module test files (16 files, 342 assertions)
 tests/phylax-core.tcyr — [lib.core] smoke test (proves core compiles standalone)
 tests/phylax.bcyr     — full benchmarks
 tests/phylax-core.bcyr — [lib.core] benchmarks

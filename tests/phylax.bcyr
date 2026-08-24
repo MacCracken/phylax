@@ -96,8 +96,44 @@ fn bench_queue_dequeue() {
     return 0;
 }
 
+# ---- Report rendering ------------------------------------------------
+#
+# Built once at startup: the renderers are what's being measured, not the
+# scan that feeds them.
+
+var BENCH_REPORT = 0;
+
+fn bench_report_build(nfindings) {
+    var results = vec_new();
+    for (var i = 0; i < nfindings; i = i + 1) {
+        var target = scan_target_file(str_from("/tmp/bench/sample.bin"));
+        var result = scan_result_new(target);
+        vec_push(load64(result + 8), finding_new(target, CATEGORY_MALWARE, SEVERITY_HIGH,
+            str_from("BenchRule"), str_from("a representative finding description")));
+        vec_push(results, result);
+    }
+    return report_from_results(str_from("phylax-bench"), results);
+}
+
+fn bench_report_json() {
+    report_render_json(BENCH_REPORT);
+    return 0;
+}
+
+fn bench_report_sarif() {
+    report_render_sarif(BENCH_REPORT);
+    return 0;
+}
+
+fn bench_report_markdown() {
+    report_render_markdown(BENCH_REPORT);
+    return 0;
+}
+
 fn main() {
     phylax_init();
+
+    BENCH_REPORT = bench_report_build(100);
 
     var benches = vec_new();
 
@@ -113,6 +149,9 @@ fn main() {
     var b10 = bench_new("tlsh_1k"); bench_run(b10, &bench_tlsh, 5000); vec_push(benches, b10);
     var b11 = bench_new("queue_enqueue"); bench_run(b11, &bench_queue_enqueue, 100); vec_push(benches, b11);
     var b12 = bench_new("queue_dequeue"); bench_run(b12, &bench_queue_dequeue, 100); vec_push(benches, b12);
+    var b13 = bench_new("report_json_100"); bench_run(b13, &bench_report_json, 1000); vec_push(benches, b13);
+    var b14 = bench_new("report_sarif_100"); bench_run(b14, &bench_report_sarif, 1000); vec_push(benches, b14);
+    var b15 = bench_new("report_markdown_100"); bench_run(b15, &bench_report_markdown, 1000); vec_push(benches, b15);
 
     bench_report_all(benches);
     return 0;
