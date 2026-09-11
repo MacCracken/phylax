@@ -2,6 +2,70 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.2.7] - 2026-09-11
+
+**Toolchain `6.5.35` → `6.6.2` — and `http_post` has never reported a network
+failure.** The `Result` / `Option` / `Either` value form forced three binds in
+`src/utils.cyr`, and all three guarded errors that could not fire in either
+spelling.
+
+### Fixed — every error path in `http_post` was dead
+
+`http_post` has four live callers in `src/integration.cyr` (the outbound webhook
+POSTs) and is exported from both dist bundles. Its three guards read:
+
+```
+var fd = tcp_socket();
+if (fd < 0) { return http_post_err(); }
+var r = sock_connect(fd, host, port);
+if (r < 0) { sys_close(fd); return http_post_err(); }
+...
+var n = sock_recv(fd, rbuf + total, 65536 - total);
+if (n <= 0) { rgo = 0; }
+else { total = total + n; ... }
+```
+
+None of those comparisons could ever be true, **before or after the flip**.
+`tcp_socket` / `sock_connect` / `sock_recv` all return a `Result`. Pre-6.6.0 that
+was a boxed pointer — always positive. Since the value form it is a tag, `Ok=0`
+and `Err=1` — also never negative. And the `Err` *payload* is a positive errno
+(`return Err(0 - r)` in `lib/net.cyr`), so neither half of either representation
+is ever below zero.
+
+The consequence ran deepest at the third site. `sock_recv` failing took the
+`else` branch and executed `total = total + <errno>`, advancing the response
+cursor by an errno-sized jump across the uninitialised tail of `alloc(65536)` —
+a bump allocator, so that memory is not zeroed — then looped and did it again. A
+read error read as *"received `<errno>` bytes"*, and the garbage was handed to
+`_http_parse_response`. A socket failure or a refused connection likewise fell
+straight through to `send`/`recv` on an unusable descriptor.
+
+All three now bind both halves and test `is_err_result`. This is a behaviour
+change: these paths now return `http_post_err()` where they previously returned a
+parse of uninitialised memory.
+
+### Changed — dependency pins
+
+| dep | was | now |
+|---|---|---|
+| cyrius | 6.5.35 | **6.6.2** |
+| majra | 2.7.0 | **2.7.2** |
+| bote | 3.3.7 | **3.3.8** |
+| libro | 2.8.12 | **2.10.0** |
+
+Both dist bundles regenerated; `cyrius.lock` re-resolved (the 6.6.2 fold adds
+`lib/boxed.cyr`, which `tagged.cyr` now includes).
+
+### Note — `scan_result_highest_severity` returns a pair
+
+`src/types.cyr:297` returns `None()` on the empty case and `Some(...)` otherwise,
+so it is pair-returning and both dist bundles export it that way. The compiler
+emits a propagation warning on the `None()` line; that is a known false positive —
+`lib/tagged.cyr` documents the nullary constructor as correctly tag-only — and
+phylax's lint step is advisory, so it does not redden CI. **Consumers must bind
+both halves**: `var t, v = scan_result_highest_severity(r);`. A single-var bind is
+a hard error at 6.6.2. Same applies to `yara_engine_load_rules_toml`.
+
 ## [1.2.6] - 2026-08-23
 
 **P(-1) closeout release.** Folds the crash-fix pass that followed 1.2.5 into a

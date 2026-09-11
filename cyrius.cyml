@@ -1,11 +1,11 @@
 [package]
 name = "phylax"
-version = "${file:VERSION}"
+version = "1.2.7"
 description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF parsing, binary classification"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "6.5.35"
+cyrius = "6.6.2"
 
 [build]
 entry = "src/main.cyr"
@@ -162,7 +162,7 @@ stdlib = [
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
 path = "../majra"
-tag = "2.7.0"
+tag = "2.7.2"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
 # bote 3.x reorganized its module layout: `dispatch.cyr` now pulls
@@ -182,7 +182,7 @@ modules = ["src/pubsub.cyr", "src/counter.cyr"]
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
 path = "../bote"
-tag = "3.3.7"
+tag = "3.3.8"
 modules = ["dist/bote-core.cyr"]
 
 # Explicit libro pin — now a pure belt-and-suspenders alignment, not
@@ -217,5 +217,5 @@ modules = ["dist/bote-core.cyr"]
 [deps.libro]
 git = "https://github.com/MacCracken/libro.git"
 path = "../libro"
-tag = "2.8.12"
+tag = "2.10.0"
 modules = ["dist/libro.cyr"]
