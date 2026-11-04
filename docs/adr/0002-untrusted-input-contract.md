@@ -1,7 +1,7 @@
 # ADR 0002 — The untrusted-input contract for the detection surface
 
 - **Status**: Accepted
-- **Date**: 2026-08-23
+- **Date**: 2026-08-23 (amended 2026-11-04, 1.3.0 — rule 3)
 - **Context**: the 1.2.6 P(-1) closeout audit — a hostile-input sweep of every
   public entry point, plus a guard-page fuzz of the structured parsers
 
@@ -96,6 +96,24 @@ sigil's own `sha256_hex`/`sha512_hex` call it — so a consumer linking
 `dist/phylax.cyr` alongside sigil got ADR 0001's exact representation bug
 injected into sigil's internals. All three are now `phylax_`-prefixed, matching
 the existing `phylax_hex_decode` and the `PHYLAX_ERR_*` precedent from 1.2.4.
+
+*Amended at 1.3.0 — the rule covers globals and constants, not just functions,
+and the cost of breaking it can be per-target.* `src/types.cyr` still defined
+19 names the stdlib also defines — `SYS_*`, `O_RDONLY` / `O_NOFOLLOW`,
+`SOCK_STREAM`, the `IN_*` masks — holding x86_64 numbers, while the stdlib
+defines them per target. A same-named global wins program-wide, inside the
+stdlib's own wrappers too. On x86 the values agreed, so nothing showed, but on
+aarch64 `sys_inotify_add_watch` issued 254 (`-ENOSYS`) and `O_NOFOLLOW` meant
+`O_LARGEFILE`. Separately, `F64_255` collided with a `const` the 6.7.6 mabda fold
+declares, which is a hard compile error for a consumer that uses both. All 21
+are gone. Two consequences follow:
+
+- **Take per-target constants from the stdlib, never define them**, and call its
+  `sys_*` wrappers rather than `syscall(N, …)`. `tests/test_platform.tcyr`
+  asserts this target's values live, and is run under `cyrius test --aarch64`.
+- **Check the rule mechanically.** At 1.3.0 all 535 phylax top-level names
+  were scanned against every file in the toolchain's `lib/`. That is the check
+  to repeat at each pin bump; it is not yet a CI gate (roadmap → CI gate gaps).
 
 ## Consequences
 

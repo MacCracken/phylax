@@ -122,24 +122,26 @@ File Path
 
 ## Dependencies
 
-Current as of **1.2.8** (cyrius 6.6.20). Canonical detail — including why the
+Current as of **1.3.0** (cyrius 6.7.9). Canonical detail — including why the
 declaration *shape* of the folded modules matters — lives in
 [`docs/development/dependency-watch.md`](../development/dependency-watch.md).
 
 | Dependency | Version | Kind | Purpose |
 |-----------|---------|------|---------|
-| Cyrius stdlib | 6.6.20 | toolchain | 34 declared modules (string, vec, hashmap, io, fs, net, bayan, ...) |
-| sakshi | 2.5.7 | folded stdlib | Structured logging |
-| sigil | 3.13.10 | folded stdlib | SHA-256 cryptographic hashing (SHA-NI dispatch) |
-| bayan | 1.5.12 | folded stdlib | JSON / TOML / CSV / base64 / bigint |
-| bote | 3.3.17 | git dep | MCP tool registry and JSON-RPC dispatch (`dist/bote-core.cyr`) |
-| majra | 2.9.3 | git dep | Pub/sub events — **vestigial**, staged + DCE-pruned |
-| libro | 2.10.8 | git dep | Audit chain — **vestigial**, staged + DCE-pruned |
+| Cyrius stdlib | 6.7.9 | toolchain | 34 declared modules (string, vec, hashmap, io, fs, net, bayan, ...) |
+| sakshi | 2.5.8 | folded stdlib | Structured logging |
+| sigil | 3.13.11 | folded stdlib | SHA-256 cryptographic hashing (SHA-NI dispatch) |
+| bayan | 1.5.13 | folded stdlib | JSON / TOML / CSV / base64 / bigint |
+| bote | 3.4.10 | git dep | MCP tool registry and JSON-RPC dispatch (`dist/bote-core.cyr`) |
+| majra | 2.12.0 | git dep | Pub/sub events — **vestigial**, staged + DCE-pruned |
+| libro | 2.11.0 | git dep | Audit chain — **vestigial**, staged + DCE-pruned |
 
 Consumer bundles (`dist/phylax.cyr`, `dist/phylax-core.cyr`) carry a
 compile-verified requires block; their `.deps` sidecars name only the leaves the
 bundle needs (`math http net fs syscalls` / `math http net syscalls`) — the rest
 arrive through phylax's git deps' own bundles. See CHANGELOG 1.2.8 → Breaking.
+Per-target syscall numbers and flags (`SYS_*`, `O_*`, `STAT_*`, `IN_*`) come
+from the stdlib only — phylax defines none (CHANGELOG 1.3.0).
 
 `bayan` (cyrius 6.1.25 carve) supplies the former `json` / `toml` / `csv` /
 `base64` / `bigint` stdlib modules.

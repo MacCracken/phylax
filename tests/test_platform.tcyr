@@ -1,0 +1,114 @@
+# Platform tests — the per-target values phylax depends on, exercised LIVE.
+#
+# Run on both arches; the aarch64 run is the point of this file:
+#   cyrius test tests/test_platform.tcyr
+#   cyrius test --aarch64 tests/test_platform.tcyr      # under qemu-aarch64
+#
+# Until 1.3.0 src/types.cyr defined x86_64 numbers for SYS_*, O_NOFOLLOW and
+# friends as globals. Under last-definition-wins those beat the stdlib's
+# per-target enum values PROGRAM-WIDE — inside the stdlib's own wrappers too —
+# so on aarch64 `sys_inotify_add_watch` issued x86's 254 (unassigned there:
+# -ENOSYS, `phylax watch` watched nothing) and the mmap read path opened with
+# x86's O_NOFOLLOW, which on aarch64 is O_LARGEFILE (symlinks were followed).
+# The x86 suite could not see either: there the two sets of values agree.
+# Every assertion below is checked against the pre-fix tree on aarch64.
+
+include "src/lib.cyr"
+
+var PT_DIR = "/tmp/phylax-test-platform";
+
+# ----------------------------------------------------------------
+# The names phylax uses resolve to THIS target's values.
+# ----------------------------------------------------------------
+
+fn test_platform_constants() {
+    test_group("platform_constants");
+
+    #ifdef CYRIUS_ARCH_AARCH64
+    assert_eq(O_NOFOLLOW, 32768, "O_NOFOLLOW is aarch64's 0o100000 (x86's 131072 is O_LARGEFILE here)");
+    assert_eq(SYS_INOTIFY_ADD_WATCH, 27, "SYS_INOTIFY_ADD_WATCH is aarch64's 27");
+    assert_eq(SYS_FSTAT, 80, "SYS_FSTAT is aarch64's 80");
+    assert_eq(SYS_SOCKET, 198, "SYS_SOCKET is aarch64's 198");
+    assert_eq(SYS_BIND, 200, "SYS_BIND is aarch64's 200");
+    assert_eq(SYS_LISTEN, 201, "SYS_LISTEN is aarch64's 201");
+    #endif
+    #ifdef CYRIUS_ARCH_X86
+    assert_eq(O_NOFOLLOW, 131072, "O_NOFOLLOW is x86_64's 0o400000");
+    assert_eq(SYS_INOTIFY_ADD_WATCH, 254, "SYS_INOTIFY_ADD_WATCH is x86_64's 254");
+    assert_eq(SYS_FSTAT, 5, "SYS_FSTAT is x86_64's 5");
+    assert_eq(SYS_SOCKET, 41, "SYS_SOCKET is x86_64's 41");
+    assert_eq(SYS_BIND, 49, "SYS_BIND is x86_64's 49");
+    assert_eq(SYS_LISTEN, 50, "SYS_LISTEN is x86_64's 50");
+    #endif
+    # Arch-independent on Linux, so phylax may define these itself.
+    assert_eq(AF_UNIX, 1, "AF_UNIX is 1");
+    assert_eq(SOCK_STREAM, 1, "SOCK_STREAM is 1");
+}
+
+# ----------------------------------------------------------------
+# inotify: `phylax watch`'s mask is accepted, and an event arrives.
+# ----------------------------------------------------------------
+
+fn test_inotify_live() {
+    test_group("inotify_live");
+    sys_mkdir(PT_DIR, 448);
+    sys_unlink("/tmp/phylax-test-platform/created.txt");
+
+    var ifd = sys_inotify_init();
+    assert(ifd >= 0, "inotify_init returns an fd");
+    if (ifd < 0) { return 0; }
+    var wd = sys_inotify_add_watch(ifd, PT_DIR, WATCH_MASK);
+    assert(wd >= 0, "inotify_add_watch(WATCH_MASK) succeeds (was -ENOSYS on aarch64)");
+
+    # Only read when the watch exists: with no watch the read would block.
+    var got_create = 0;
+    if (wd >= 0) {
+        file_write_all("/tmp/phylax-test-platform/created.txt", "x", 1);
+        var ev = alloc(4096);
+        var n = sys_read(ifd, ev, 4096);
+        # struct inotify_event { i32 wd; u32 mask; u32 cookie; u32 len; name[] }
+        if (n >= 16) {
+            if ((load32(ev + 4) & IN_CREATE) != 0) { got_create = 1; }
+        }
+    }
+    assert_eq(got_create, 1, "creating a file delivers an IN_CREATE event");
+    sys_close(ifd);
+    return 0;
+}
+
+# ----------------------------------------------------------------
+# phylax_read_file's mmap path (> 64 KiB) refuses a symlink.
+# ----------------------------------------------------------------
+
+fn test_symlink_refused() {
+    test_group("symlink_refused");
+    sys_mkdir(PT_DIR, 448);
+    var target = "/tmp/phylax-test-platform/big.bin";
+    var link = "/tmp/phylax-test-platform/link.bin";
+    var size = 102400;
+    var buf = alloc(size);
+    for (var i = 0; i < size; i = i + 1) { store8(buf + i, i & 0xff); }
+    file_write_all(target, buf, size);
+    sys_unlink(link);
+    assert_eq(sys_symlink(target, link), 0, "symlink created");
+
+    G_SCAN_ALLOC_TOTAL = 0;
+    var t = phylax_read_file(target);
+    assert(t != 0, "the 100 KiB target itself reads (mmap path)");
+    G_SCAN_ALLOC_TOTAL = 0;
+    assert_eq(phylax_read_file(link), 0, "a symlink to it is refused by O_NOFOLLOW (was followed on aarch64)");
+    return 0;
+}
+
+fn main() {
+    phylax_init();
+
+    test_platform_constants();
+    test_inotify_live();
+    test_symlink_refused();
+
+    return assert_summary();
+}
+
+var exit_code = main();
+sys_exit(exit_code);

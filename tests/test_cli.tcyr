@@ -175,6 +175,49 @@ fn test_watch_mask() {
     assert_eq(WATCH_MASK, IN_MODIFY | IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE, "mask is exactly the four events");
 }
 
+# ----------------------------------------------------------------
+# daemon: the AF_UNIX listening socket, end to end. Until 1.3.0 cmd_daemon
+# made raw syscalls on x86_64 numbers from src/types.cyr; daemon_listen now
+# uses the stdlib's per-target sys_* wrappers. Run this under
+# `cyrius test --aarch64` too.
+# ----------------------------------------------------------------
+
+fn test_daemon_listen() {
+    test_group("daemon_listen");
+    var sock = "/tmp/phylax-test-cli/d.sock";
+
+    var lfd = daemon_listen(sock);
+    assert(lfd >= 0, "daemon_listen binds and listens");
+    if (lfd < 0) { return 0; }
+
+    # A client connects through the same path; the daemon side accepts it.
+    var cfd = sys_socket(AF_UNIX, SOCK_STREAM, 0);
+    assert(cfd >= 0, "client socket created");
+    var addr = alloc(112);
+    store16(addr, AF_UNIX);
+    var plen = strlen(sock);
+    memcpy(addr + 2, sock, plen);
+    store8(addr + 2 + plen, 0);
+    assert_eq(sys_connect(cfd, addr, 2 + plen + 1), 0, "client connects to the daemon socket");
+    var afd = sys_accept4(lfd, 0, 0, 0);
+    assert(afd >= 0, "daemon accepts the connection");
+
+    # One byte across, so this is a real stream, not just a queued connect.
+    var got = 0;
+    if (afd >= 0) {
+        sys_write(cfd, "x", 1);
+        var b = alloc(8);
+        if (sys_read(afd, b, 1) == 1) { got = load8(b); }
+        sys_close(afd);
+    }
+    assert_eq(got, 120, "a byte written by the client reaches the daemon");
+    sys_close(cfd);
+    sys_close(lfd);
+
+    assert_eq(daemon_listen("/tmp/phylax-no-such-dir/d.sock"), 0 - 2, "an unbindable path reports -2");
+    return 0;
+}
+
 fn main() {
     phylax_init();
     setup_fixtures();
@@ -185,6 +228,7 @@ fn main() {
     test_run_scan_rules_path();
     test_path_has_extension();
     test_watch_mask();
+    test_daemon_listen();
 
     return assert_summary();
 }

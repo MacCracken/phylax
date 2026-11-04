@@ -1,24 +1,27 @@
 # syscall_x86_64_linux.cyr — x86_64 wrapper backfill for stdlib gaps
 #
-# Self-gated with `#ifdef CYRIUS_ARCH_X86_64` so this file ships in the
-# bundled `dist/phylax.cyr` alongside the aarch64 peer; only the matching
-# arch's block compiles in any given consumer build.
+# Self-gated with `#ifdef CYRIUS_ARCH_X86` so this file ships in the bundled
+# `dist/phylax.cyr` alongside the aarch64 peer; only the matching arch's block
+# compiles in any given consumer build.
+#
+# ⚠ The guard is `CYRIUS_ARCH_X86`, the name the toolchain defines (as the
+# stdlib's own peers use it). The 1.2.6 closeout emptied this file and, in the
+# same edit, respelled the guard `CYRIUS_ARCH_X86_64` — which no cyrius from
+# 6.5.35 to 6.7.9 defines. Inert only because the block was empty; anything
+# added under that name would have been silently dropped on x86. Restored at
+# 1.3.0.
 #
 # ⚠ CURRENTLY EMPTY BY DESIGN — do not delete the file.
 #
-# It used to define `sys_stat`, `sys_fstat` and `sys_rename`. As of the
-# cyrius 6.5.x stdlib all three exist upstream and are BYTE-IDENTICAL to the
-# copies here (`lib/syscalls_x86_64_linux.cyr:341` / `:414` and
-# `lib/syscalls_linux_common.cyr:146`), so the local copies bought nothing
-# and cost three `duplicate fn ... last definition wins` warnings per build.
-# Removed at the 1.2.6 P(-1) closeout.
-#
-# The file itself stays because the aarch64 peer is NOT empty: aarch64 Linux
-# deprecated the bare `rename(2)`, so `src/syscall_aarch64_linux.cyr` still
-# has to compose one through `renameat`. Keeping both peers in `[lib]` keeps
-# the two arches symmetrical in the manifest and leaves an obvious home for
-# the next x86_64-only gap.
+# It used to define `sys_stat`, `sys_fstat` and `sys_rename`; the cyrius 6.5.x
+# stdlib provides all three (removed at the 1.2.6 P(-1) closeout). As of 1.3.0
+# the aarch64 peer is empty too — the stdlib's aarch64 `sys_rename` composes
+# `renameat` exactly as phylax's copy did. Both peers stay in `[lib]` as the
+# home for the next per-arch gap, which must be an arch-gated FUNCTION, never a
+# `var SYS_* = <number>`: a global of that name beats the stdlib's per-target
+# enum value program-wide, inside the stdlib's own wrappers too (see the note
+# in src/types.cyr and tests/test_platform.tcyr).
 
-#ifdef CYRIUS_ARCH_X86_64
+#ifdef CYRIUS_ARCH_X86
 
 #endif

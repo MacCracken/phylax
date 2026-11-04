@@ -4,28 +4,16 @@
 # the bundled `dist/phylax.cyr` alongside the x86_64 peer; only the
 # matching arch's block compiles in any given consumer build.
 #
-# As of cyrius 5.10.44, `lib/syscalls_aarch64_linux.cyr` exposes the
-# at-family wrappers phylax needs (sys_stat / sys_fstat / sys_open /
-# sys_close / sys_mkdir / sys_unlink / sys_inotify_init / etc.) but
-# does NOT define the rename syscall — aarch64 Linux deprecated the
-# bare `rename(2)` (no `SYS_RENAME` const, no `SYS_RENAMEAT` const,
-# no `sys_rename` wrapper). Phylax's `quarantine.cyr` quarantine /
-# release paths need atomic renames, so the wrapper is provided here.
-# On x86_64, the peer file `src/syscall_x86_64_linux.cyr` provides
-# the same `sys_rename` signature via the direct `SYS_RENAME` syscall.
+# ⚠ CURRENTLY EMPTY BY DESIGN — do not delete the file.
+#
+# Until 1.3.0 this held `var SYS_RENAMEAT = 38;` and a `sys_rename` composed
+# through renameat(AT_FDCWD, old, AT_FDCWD, new), written when cyrius 5.10.x's
+# aarch64 peer had no rename at all. The stdlib now ships that exact wrapper
+# (`lib/syscalls_aarch64_linux.cyr`, `sys_rename` → `sys_renameat`), so the
+# local copy only produced a `duplicate fn 'sys_rename'` warning on every
+# aarch64 build. Removed. Keep any future gap here as an arch-gated function,
+# never as a `var SYS_* = <number>` (see src/syscall_x86_64_linux.cyr).
 
 #ifdef CYRIUS_ARCH_AARCH64
-
-# renameat(2) — aarch64 Linux generic-table syscall number 38.
-# Not yet exposed by the cyrius stdlib's aarch64 peer; the const +
-# wrapper live here until they migrate upstream.
-var SYS_RENAMEAT = 38;
-
-# rename(2) — composed via renameat(AT_FDCWD, old, AT_FDCWD, new).
-# `AT_FDCWD` (= -100) comes from `lib/syscalls_aarch64_linux.cyr`
-# (already in scope when this file is included).
-fn sys_rename(old_path, new_path) {
-    return syscall(SYS_RENAMEAT, AT_FDCWD, old_path, AT_FDCWD, new_path);
-}
 
 #endif

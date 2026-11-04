@@ -48,17 +48,15 @@ jobs:
         # stale tracked lib/ can't shadow the toolchain snapshot. Required
         # since cyrius 6.1.25's bayan carve (json/toml/csv/base64/bigint
         # folded into lib/bayan.cyr); see ci.yml for the full rationale.
+        # Check the committed lock BEFORE `cyrius deps` can write it -- see
+        # ci.yml's "Resolve dependencies" step for why the order matters.
         run: |
           rm -rf lib
+          cyrius deps --locked
           cyrius deps
 
       - name: Verify dep hashes
-        run: |
-          if [ -f cyrius.lock ]; then
-            cyrius deps --verify
-          else
-            echo "::warning::cyrius.lock not committed — skipping hash verification"
-          fi
+        run: cyrius deps --locked
 
       - name: Build x86_64 (DCE)
         run: |
@@ -67,12 +65,16 @@ jobs:
           echo "phylax: $(wc -c < build/phylax) bytes"
 
       - name: Cross-build aarch64 (best-effort)
+        # ⚠ Until 1.3.0 this tested for `cc5_aarch64`, which the toolchain no
+        # longer ships (it is `cycc_aarch64`), so no release ever carried an
+        # aarch64 binary. From 1.3.0 the aarch64 build is correct, not just
+        # compiling (full suite under qemu-aarch64; see ci.yml), so it ships.
         run: |
-          if [ -x "$HOME/.cyrius/bin/cc5_aarch64" ]; then
+          if [ -x "$HOME/.cyrius/bin/cycc_aarch64" ]; then
             CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/phylax-aarch64
             echo "phylax-aarch64: $(wc -c < build/phylax-aarch64) bytes"
           else
-            echo "::warning::cc5_aarch64 not in toolchain — aarch64 binary skipped"
+            echo "::warning::cycc_aarch64 not in toolchain — aarch64 binary skipped"
           fi
 
       - name: Test

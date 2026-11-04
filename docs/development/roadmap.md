@@ -59,6 +59,19 @@
 - Suite 404 → **421 across 18 files**, also 421/421 on aarch64 under qemu
 - Binary 915,728 → 866,640 B; 232 duplicate-fn warnings → 0
 
+### v1.3.0 — cyrius 6.7.9 + aarch64 correctness (2026-11-04)
+- cyrius 6.6.20 → **6.7.9**; majra 2.12.0 / bote 3.4.10 / libro 2.11.0 (newest
+  tags pinned to 6.7.9); folded sakshi 2.5.8 / sigil 3.13.11 / bayan 1.5.13
+- **aarch64 correct, not just compiling:** phylax's x86 `SYS_*` / `O_NOFOLLOW`
+  globals overrode the stdlib's per-target values program-wide → `phylax watch`
+  got `-ENOSYS`, the mmap path followed symlinks. 19 names removed; daemon on
+  stdlib `sys_*` wrappers; x86 peer guard back to `CYRIUS_ARCH_X86`
+- `tests/test_platform.tcyr` (14, live per-target checks); suite **441 / 19 files
+  on x86_64 and aarch64**; CI runs the suite under qemu; releases ship aarch64
+- CI/release check the lock with `cyrius deps --locked` before anything writes it
+- `F64_255` / `F64_ONE` removed (mabda `const` collision for consumers)
+- ⚠ DCE binary 866 KB → 2.36 MB: compaction cap (fixed in cyrius 6.7.14)
+
 ## Backlog
 
 ### v0.9.1 — TAR Support
@@ -108,28 +121,34 @@
   thin sigil files are no longer vendored when `sigil` is a stdlib leaf. At 1.2.8
   the `lib/sigil_*.cyr` leaves are gone and the 232 duplicate-fn warnings with them.
 
-### aarch64 correctness (compiles and passes; not yet correct)
-- `src/types.cyr` hardcodes x86_64 values that override the stdlib's per-target
-  ones: `O_NOFOLLOW = 131072` is `O_LARGEFILE` on aarch64 (`O_NOFOLLOW` there is
-  32768), so `phylax_read_file`'s symlink refusal is off on aarch64; the `SYS_*` /
-  `SYS_INOTIFY_*` numbers are x86 numbers. Drop the local copies in favour of the
-  stdlib's (cyrius 6.6.3/6.6.4 name phylax for exactly this).
-- CI's aarch64 step checks for `cc5_aarch64`; the toolchain ships `cycc_aarch64`,
-  so the step always skips. Its comment (blocked on `f64_log2`) is also stale —
-  the build worked on 6.6.2 and the suite is 421/421 under qemu at 1.2.8.
-- `syscall_aarch64_linux.cyr`'s `sys_rename` duplicates the stdlib's (warning only).
+### ~~aarch64 correctness~~ (DONE at 1.3.0)
+- x86-hardcoded `SYS_*` / `O_*` / `IN_*` globals removed from `src/types.cyr`;
+  daemon moved to stdlib wrappers; duplicate aarch64 `sys_rename` removed; CI's
+  aarch64 step fixed (`cycc_aarch64`) and now runs the suite under qemu.
+  `tests/test_platform.tcyr` keeps it honest. See CHANGELOG 1.3.0.
+
+### Binary size — the DCE compaction cap
+- On cyrius < 6.7.14, `CYRIUS_DCE=1` stops compacting past 4,096 dead-code runs.
+  phylax crossed it at 1.3.0 (bote-core 3.4.10: 4,048 → 4,105 dead fns), so the
+  binary keeps 1.5 MB of NOPed code (866 KB → 2.36 MB). Behaviour is unaffected.
+- Fix: pin cyrius ≥ 6.7.14 (IN-4 removes the cap). Pruning the vestigial
+  majra/libro blocks does NOT help (re-measured at 1.3.0).
 
 ### Outbound HTTP and daemon hardening
 - `http_post`: use `sock_send_all` (6.6.8) instead of ignoring `sock_send`'s count;
   send `Host: host:port` (6.6.11 fixed the stdlib client's equivalent).
 - Daemon: the raw `sys_write(client, …)` reply path can still raise SIGPIPE;
-  6.6.16's CVE-74 fix covers the socket send path only.
+  6.6.16's fix (CYRIUS-2026-0025, formerly CVE-74) covers the socket send path only.
 
 ### CI gate gaps
-- CI runs `cyrius deps` before `cyrius deps --verify`; since 6.6.9 `deps` writes
-  missing lock rows, so a missing row cannot fail the gate.
-- Nothing builds a *consumer* of `dist/phylax*.cyr`; 1.2.8 did it by hand in
-  scratch. A tiny consumer job would make the sidecar contract a gate.
+- ~~CI ran `cyrius deps` before `--verify`, so a missing lock row could not fail
+  the gate~~ — closed at 1.3.0 with `cyrius deps --locked` run first.
+- Nothing builds a *consumer* of `dist/phylax*.cyr`; 1.2.8 and 1.3.0 did it by
+  hand in scratch (`CYRIUS_LOCAL=1` for the `path` override since 6.7.6). A tiny
+  consumer job would make the sidecar contract a gate.
+- Nothing gates ADR 0002's name rule. 1.3.0 found `F64_255` / `F64_ONE` by
+  scanning phylax's top-level names against the toolchain's `lib/` by hand; a
+  scripted version of that scan belongs in CI.
 
 ## v1.0 Criteria
 

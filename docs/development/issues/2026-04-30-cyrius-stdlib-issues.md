@@ -1,6 +1,18 @@
 # Cyrius stdlib gaps surfaced during the phylax 1.1.0 final pass
 
-**Status**: open. None of these block the phylax 1.1.0 release on
+**Status**: RESOLVED (closed at phylax 1.3.0, 2026-11-04). Retained as history.
+- §1 `f64_log2`: aarch64 lowers it to `lib/math.cyr`'s `_f64_log2_polyfill`
+  (rewritten from fdlibm/msun in cyrius 6.6.x, within 1 ulp). phylax built for
+  aarch64 on 6.6.2 already. From 1.2.8, `src/analyze.cyr` includes
+  `lib/math.cyr` explicitly, which distlib's aarch64 verify needs.
+- §2 `sys_stat` / `sys_fstat` asymmetry: the stdlib provides both on both
+  arches; phylax's backfill was removed at 1.2.6, and the aarch64 `sys_rename`
+  backfill at 1.3.0.
+- At 1.3.0 the full suite (441 assertions) passes on aarch64 under qemu, and
+  CI runs it there. The remaining aarch64 *correctness* defect, x86 `SYS_*` /
+  `O_NOFOLLOW` globals overriding the stdlib, is in CHANGELOG 1.3.0.
+
+*Original status (1.1.0):* open. None of these block the phylax 1.1.0 release on
 x86_64 Linux. The first one (`f64_log2`) blocks aarch64 cross-builds
 hard; the rest are advisories or worked around inside phylax with
 local backfill.

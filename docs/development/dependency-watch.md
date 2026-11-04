@@ -1,7 +1,7 @@
 # Dependency Watch
 
-Status tracking for all dependencies. Current as of **phylax 1.2.8**
-(2026-11-03, cyrius 6.6.20). The stdlib table below predates 1.2.5 in places;
+Status tracking for all dependencies. Current as of **phylax 1.3.0**
+(2026-11-04, cyrius 6.7.9). The stdlib table below predates 1.2.5 in places;
 the External Dependencies table and the Toolchain section are current.
 
 ## Cyrius Stdlib Modules (31)
@@ -62,11 +62,11 @@ alone and must be explicitly `include`d. See `thread_local` below.
 
 | Dependency | Version | Purpose | Notes |
 |-----------|---------|---------|-------|
-| `sakshi` | 2.5.7 | Structured logging | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. Tracks the toolchain fold (6.6.20 vendors 2.5.7). |
-| `sigil` | 3.13.10 | Cryptographic primitives | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. SHA-256 (SHA-NI dispatch); only `sha256` consumed. 6.6.20 vendors 3.13.10. |
-| `majra` | 2.9.3 | Pubsub/counter | **Vestigial** — bote-core dropped `events_majra`, so nothing references it; staged + DCE-pruned. Aligned to bote 3.3.17's own majra pin. |
-| `bote` | 3.3.17 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle (the 11 hand-picked `src/*.cyr` modules no longer link under bote 3.x). 3.3.17 is the newest tag pinned to cyrius 6.6.20. |
-| `libro` | 2.10.8 | Belt-and-suspenders pin | Aligned to bote 3.3.17's transitive libro; not referenced by phylax or bote-core (DCE-pruned). Declares sigil as a git dep, which is inert since cyrius 6.6.11 (see Known dep-shape cost). |
+| `sakshi` | 2.5.8 | Structured logging | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. Tracks the toolchain fold (6.7.9 vendors 2.5.8). |
+| `sigil` | 3.13.11 | Cryptographic primitives | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. SHA-256 (SHA-NI dispatch); only `sha256` consumed. 6.7.9 vendors 3.13.11 (libro 2.11.0 asks for 3.13.12 as a git dep; the fold wins). |
+| `majra` | 2.12.0 | Pubsub/counter | **Vestigial** — bote-core dropped `events_majra`, so nothing references it; staged + DCE-pruned. Aligned to bote 3.4.10's own majra pin. |
+| `bote` | 3.4.10 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle. 3.4.10 is the newest tag pinned to cyrius 6.7.9. ⚠ Its bote-core grew 249 → 306 fns (phylax calls 3), which pushes phylax past the DCE compaction cap on cyrius < 6.7.14 (see Toolchain). |
+| `libro` | 2.11.0 | Belt-and-suspenders pin | Aligned to bote 3.4.10's transitive libro; not referenced by phylax or bote-core (DCE-pruned). Pulls patra 1.16.0. Declares sigil as a git dep — inert since cyrius 6.6.11. |
 
 ### Folded modules: why the declaration shape matters
 
@@ -95,12 +95,21 @@ deps' own requires blocks. Verified with scratch consumers of both bundles (x86_
 
 ### ⚠ No `path =` lines on git deps
 
-Through cyrius 6.6.x a `path` beside `git`/`tag` **wins** whenever the sibling checkout exists: the
-resolver vendors the sibling's working tree, skips the commit-pin check, and an implicit resolve
-(`cyrius build`) rewrites `cyrius.lock`. CI has no siblings, so it builds the tag — local and CI
-silently diverge. Measured at 1.2.8 (`../bote` at an untagged 3.8.5 vendored, failed to compile, and
-rewrote the lock). The 1.2.7 lock was partly path-resolved. cyrius 6.7.6 makes `path` a
-local-mode-only override; until phylax pins that, don't commit one.
+Through cyrius 6.6.x a `path` beside `git`/`tag` **won** whenever the sibling checkout existed: the
+resolver vendored the sibling's working tree, skipped the commit-pin check, and an implicit resolve
+(`cyrius build`) rewrote `cyrius.lock`. CI has no siblings, so it built the tag. Measured at 1.2.8
+(`../bote` at an untagged 3.8.5 was vendored, failed to compile, and rewrote the lock). **cyrius 6.7.6
+(pinned since 1.3.0) makes `path` a local-mode-only override** (`CYRIUS_LOCAL=1` / `--local`: resolves
+into `build/local-deps/lib/`, leaves `lib/` and the lock alone, names the sibling's commit and dirty
+state). phylax still commits none.
+
+### Lock checks: `cyrius deps --locked`, before anything writes the lock
+
+`cyrius deps` writes `cyrius.lock` — since 6.6.9 it adds missing rows — so `deps` followed by
+`deps --verify` repairs the lock it was supposed to audit (measured at 1.3.0: delete a row, and that
+sequence passes). `cyrius deps --locked` (6.7.6) resolves the tags, compares them with the committed
+lock (and, if `lib/` exists, every vendored file's bytes), writes nothing, and exits 1 on any
+difference. CI and release run it first, vendor, then run it again.
 
 ### Known dep-shape cost — RESOLVED (cyrius 6.6.11)
 
@@ -114,7 +123,18 @@ blocks remain a dep-pruning candidate on their own merits.
 
 ## Toolchain
 
-- **Cyrius**: 6.6.20 (pinned in `cyrius.cyml`)
+- **Cyrius**: 6.7.9 (pinned in `cyrius.cyml`)
+- **⚠ DCE compaction cap, cyrius < 6.7.14.** `CYRIUS_DCE=1` declines to compact past 4,096
+  dead-code runs ("compaction declined … the repair registry cap") and leaves the NOPed bytes in
+  the binary. phylax crossed it at 1.3.0 via bote-core 3.4.10 (4,048 → 4,105 dead fns; 866 KB →
+  2.36 MB). Fixed upstream in 6.7.14 (IN-4). Watch for the note on every dep bump.
+- **Per-target constants come from the stdlib.** A phylax global named like a stdlib `SYS_*` / `O_*`
+  enum member wins program-wide (inside stdlib wrappers too). On aarch64 that broke inotify
+  (`-ENOSYS`) and `O_NOFOLLOW` until 1.3.0. The aarch64 backend's ESYSXLAT rewrites only a fixed
+  table of raw x86 numbers and passes the rest through verbatim. The x86 arch macro is
+  `CYRIUS_ARCH_X86`, not `CYRIUS_ARCH_X86_64`.
+- **6.7.2: array sizes accept const expressions** (`var statbuf[STAT_BUFSZ]`). **6.7.6: mabda
+  declares `const F64_255`** — any same-named phylax global would be a consumer hard error.
 - **6.6.18 `distlib` compile-verifies on six targets** (incl. aarch64) and refuses — exit 1,
   "sidecar NOT written" — after rewriting the bundle body. A leaf a bundled module needs only on
   another target must be an explicit `include` in that module (`lib/math.cyr` in

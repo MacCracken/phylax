@@ -2,6 +2,191 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.3.0] - 2026-11-04
+
+**Toolchain `6.6.20` → `6.7.9`, every dep moved to the release pinned against
+6.7.9 — and aarch64 goes from "compiles" to "correct".** On aarch64,
+`phylax watch` could not watch anything and the mmap read path followed symlinks
+it was meant to refuse. Both came from x86_64 numbers that phylax defined as
+globals; these beat the stdlib's per-target values everywhere, including inside
+the stdlib's own wrappers. The x86 suite could not see either problem, because
+on x86 the two sets of numbers agree. The full suite now runs on aarch64 under
+qemu (441/441), CI runs it, and releases ship the aarch64 binary.
+
+### Breaking
+
+- **The dist bundles no longer define 19 names.** `SYS_RENAME`, `SYS_UNLINK`,
+  `SYS_SOCKET`, `SYS_BIND`, `SYS_LISTEN`, `SYS_ACCEPT`, `SYS_INOTIFY_INIT`,
+  `SYS_INOTIFY_ADD_WATCH`, `SYS_INOTIFY_RM_WATCH`, `SYS_FSTAT`, `O_RDONLY`,
+  `O_NOFOLLOW`, `SOCK_STREAM`, `IN_CREATE`, `IN_MODIFY`, `IN_CLOSE_WRITE`,
+  `IN_MOVED_TO`, `F64_ONE` and `F64_255`.
+  **Migration:** the stdlib defines every one of these under the same name
+  except `SYS_INOTIFY_INIT`, `SYS_ACCEPT` and `F64_255`, and defines them per
+  target, so a consumer that used them keeps compiling and now gets this arch's
+  value. Exceptions: for `SYS_INOTIFY_INIT`, call `sys_inotify_init()` (the
+  stdlib uses `inotify_init1`). For `SYS_ACCEPT`, call `sys_accept4(fd, 0, 0, 0)`;
+  `lib/net.cyr` has its own `var SYS_ACCEPT = 43`, which is the x86 number on
+  every target. For `F64_255`, define it yourself, or take mabda's `const`.
+- **Tagged releases now carry `phylax-<tag>-aarch64-linux`.** `release.yml`
+  always meant to. Its gate tested for `cc5_aarch64`, a compiler name the
+  toolchain no longer ships, so no release ever had one.
+
+### Fixed — aarch64
+
+All of these were measured under qemu-aarch64. None can be seen on x86_64.
+
+- **`phylax watch` watched nothing on aarch64.** `src/types.cyr`'s
+  `var SYS_INOTIFY_ADD_WATCH = 254` overrode the stdlib's per-target enum value
+  (27) program-wide under last-definition-wins, *including* inside the stdlib's
+  own `sys_inotify_add_watch`. On aarch64, 254 is unassigned, so the call
+  returned `-ENOSYS`. End to end, the 1.2.8 aarch64 binary logs `watch: failed to
+  watch <dir>`. The 1.3.0 one registers the watch (`qemu-aarch64 -strace`:
+  `inotify_add_watch(3, …, 394) = 1`), receives events, and scans the new file.
+- **The mmap read path followed symlinks on aarch64.** `O_NOFOLLOW = 131072` is
+  x86's value; on aarch64 that number is `O_LARGEFILE`, and `O_NOFOLLOW` is
+  32768. So `phylax_read_file`'s symlink refusal for files over 64 KiB was
+  silently off. Measured on the pre-sweep tree (1.2.8's source built on 6.7.9):
+  `phylax_read_file` on the symlink returned the target's bytes; 1.3.0 returns 0.
+- **The daemon made raw syscalls with x86 numbers.** They only worked on aarch64
+  because the backend's syscall translator (ESYSXLAT) happens to rewrite those
+  four numbers; numbers outside its table pass through verbatim, which is
+  exactly what happened to 254. Socket setup is now `daemon_listen`
+  (`src/cli.cyr`), built on the stdlib's `sys_socket` / `sys_bind` /
+  `sys_listen`, and the accept loop uses `sys_accept4`. `listen`'s result, which
+  was ignored, is now checked.
+- **All 19 names are gone from `src/types.cyr`** (listed under Breaking).
+  `AF_UNIX`, which the stdlib does not define and which is 1 on every Linux
+  target, stays, along with phylax's own `WATCH_MASK`.
+- **`src/syscall_aarch64_linux.cyr`'s `sys_rename` is gone.** The stdlib has
+  shipped the same `renameat` composition since at least 6.6.20, so the copy
+  only produced a `duplicate fn 'sys_rename'` warning on every aarch64 build.
+  aarch64 builds now emit the same 3 warnings as x86_64.
+- **`src/syscall_x86_64_linux.cyr` is gated on `CYRIUS_ARCH_X86` again.** The
+  1.2.6 closeout emptied the file and, in the same edit, respelled the guard
+  `CYRIUS_ARCH_X86_64`, a macro no cyrius from 6.5.35 to 6.7.9 defines. It was
+  inert only because the block was empty.
+- **Stat buffers are sized `var statbuf[STAT_BUFSZ]`** rather than a literal
+  144 (cyrius 6.7.2 accepts a const expression there).
+
+### Fixed — dist bundles
+
+- **`F64_255` was a hard error for any consumer that also uses mabda.** cyrius
+  6.7.6's mabda fold declares `const F64_255 = 255.0`, so a consumer that
+  includes `dist/phylax.cyr` beside `lib/mabda.cyr` got "already declared as a
+  top-level const". `F64_ONE` duplicated `lib/math.cyr`'s with the same value.
+  Neither was used by phylax, so both were deleted. I scanned all 535 phylax
+  top-level names against every file in the 6.7.9 stdlib snapshot, and these
+  were the only two collisions left.
+
+### Changed — dependency pins
+
+| dep | was | now | note |
+|---|---|---|---|
+| cyrius | 6.6.20 | **6.7.9** | |
+| majra | 2.9.3 | **2.12.0** | = bote 3.4.10's own pin; vestigial (DCE-pruned) |
+| bote | 3.3.17 | **3.4.10** | newest tag pinned to 6.7.9; `dist/bote-core.cyr` |
+| libro | 2.10.8 | **2.11.0** | = bote 3.4.10's own pin; vestigial (DCE-pruned) |
+| sakshi (folded) | 2.5.7 | **2.5.8** | moves with the `cyrius` pin |
+| sigil (folded) | 3.13.10 | **3.13.11** | moves with the `cyrius` pin |
+| bayan (folded) | 1.5.12 | **1.5.13** | moves with the `cyrius` pin |
+| patra (via libro) | 1.15.2 | **1.16.0** | = the 6.7.9 fold |
+
+Each git dep is the newest published tag whose own `cyrius` pin is 6.7.9, and
+GitHub confirms all three at the SHAs the lock commit-pins. libro 2.11.0 asks for
+sigil 3.13.12 as a git dep; the 6.7.9 fold (3.13.11) is what links. The lock was
+re-cut from scratch, which dropped the 1.2.8 tag lines that a tag bump retains by
+design: 65 files and 5 commit pins, as before.
+
+### Changed — CI and release
+
+- **The lock is checked before anything can write it.** `cyrius deps` writes
+  `cyrius.lock` (since 6.6.9 it adds any missing row), so the old `deps` then
+  `deps --verify` sequence repaired the lock it was meant to audit. Measured:
+  delete a row, and the old sequence **passes**. Both workflows now run
+  `cyrius deps --locked` (6.7.6) first; it compares the tags with the committed
+  lock, writes nothing, and exits 1 on any missing, extra or differing row. CI
+  then vendors and runs `--locked` again, which also checks every vendored
+  file's bytes (a tampered `lib/` file exits 1). This closes the 1.2.8
+  Known/not-fixed item.
+- **CI's aarch64 step actually runs.** It tests for `cycc_aarch64`, then runs the
+  full suite under qemu-aarch64 (`cyrius test --aarch64`). It stays best-effort
+  only because it installs `qemu-user` on the runner.
+- **`tests/test_platform.tcyr`** (new, 14 assertions) checks the per-target
+  values and the live behaviour: an inotify watch with `WATCH_MASK` delivering
+  `IN_CREATE`, and a symlink refused by the mmap path. **On the pre-sweep tree
+  under aarch64 (1.2.8's source on 6.7.9), 9 of its 14 fail;** on 1.3.0 it is
+  14/14 on both arches.
+  `tests/test_cli.tcyr` adds a `daemon_listen` round-trip (+6): connect, accept,
+  one byte across, and an unbindable path reporting -2.
+
+### Known — the DCE binary is 2.7× larger (866,640 → 2,362,240 B)
+
+This is not a codegen regression and not a behaviour change. DCE finds the same
+dead code, but **declines to compact** once a build has more than 4,096 dead-code
+runs ("compaction declined … the repair registry cap"; the cap was also present
+in 6.6.20), so the dead bytes are NOPed and left in place. What crossed the line
+is bote: `dist/bote-core.cyr` grew from 249 to 306 functions between 3.3.17 and
+3.4.10, phylax calls 3 of them, and phylax's dead-function count went from 4,048
+to 4,105. Measured: the same tree on 6.7.9 with only bote back at 3.3.17 has
+4,048 dead functions, compacts, and comes out at 866,016 B.
+Dropping the vestigial `[deps.libro]` / `[deps.majra]` blocks does not help (re-measured: 4,109 unchanged; 4,387 without majra).
+**cyrius 6.7.14 removes the cap** (IN-4). The aarch64 binary is 2,730,568 B.
+
+### Performance
+
+Neutral. Measured with an interleaved A/B, 1.2.8 on 6.6.20 and 1.3.0 on 6.7.9
+run alternately for 3 rounds, because a back-to-back comparison against the
+earlier baseline showed a uniform 1–3% "gain" that was machine drift.
+
+| bench | 1.2.8 (6.6.20) | 1.3.0 (6.7.9) | delta |
+|---|---|---|---|
+| entropy_1k | 15.221 us | 14.501 us | −4.7% (placement — see 1.2.8) |
+| entropy_1m | 4.064 ms | 4.049 ms | −0.4% |
+| chi_squared | 17.432 us | 17.390 us | −0.2% |
+| file_detection | 26 ns | 26 ns | 0 |
+| sha256_4k | 19.580 us | 19.560 us | −0.1% |
+| memmem_4k | 7.296 us | 7.294 us | 0.0% |
+| hex_encode_256 | 3.688 us | 3.684 us | −0.1% |
+| extract_ascii | 34.711 us | 34.862 us | +0.4% |
+| ssdeep_4k | 101.580 us | 102.224 us | +0.6% |
+| tlsh_1k | 380.000 us | 380.893 us | +0.2% |
+| queue_enqueue | 64.378 us | 64.131 us | −0.4% |
+| queue_dequeue | 9.597 ms | 9.640 ms | +0.4% |
+| report_json_100 | 732.483 us | 733.778 us | +0.2% |
+| report_sarif_100 | 945.654 us | 940.133 us | −0.6% |
+| report_markdown_100 | 119.785 us | 120.841 us | +0.9% |
+
+`entropy_1k` moved around between intermediate builds (13.9 us after the bump
+alone, 14.7 us after the sweep, which only touched constants and CLI code). That
+is the placement sensitivity documented in `src/analyze.cyr`.
+
+### Verification
+
+- **441 assertions across 19 files, on x86_64 and on aarch64 (qemu)**: 421, plus
+  14 in `test_platform`, plus 6 in `daemon_listen`.
+- End to end on both arches: `phylax daemon` answers a socket request with the
+  same reply as 1.2.8 (7 findings on a 2.3 MB binary); `phylax watch` works as
+  described above.
+- Both dist bundles consumed by scratch projects: 11/11 on x86_64 and aarch64.
+  Under 6.7.6+ that needs `CYRIUS_LOCAL=1` for the `path` override, which
+  resolves into `build/local-deps/lib/`.
+- `fmt --check`, vet and deny clean; lint unchanged at 8; `deps --locked` clean;
+  `distlib --check` 0; CI's security scan 0.
+
+### Known / not fixed
+
+- The binary size, above, until a pin of cyrius 6.7.14 or later.
+- The x86_64-agnos distlib verify reports `sys_stat` / `sys_rename` arity
+  errors. agnos is checked but not required, and phylax does not target it.
+- `phylax_read_file`'s small-file path (64 KiB or less) uses `file_read_all`,
+  which follows symlinks; only the mmap path refuses them. This predates 1.3.0
+  and now behaves the same on both arches.
+- Still open from 1.2.8: `http_post` should use `sock_send_all` and send
+  `Host:` with the port; the daemon's raw `sys_write` reply can raise SIGPIPE
+  (CYRIUS-2026-0025, formerly CVE-74, covers the socket send path only).
+- No gate catches the name-collision class (ADR 0002); the 1.3.0 scan was done
+  by hand.
+
 ## [1.2.8] - 2026-11-03
 
 **Toolchain `6.6.2` → `6.6.20`, every dep moved to the release pinned against

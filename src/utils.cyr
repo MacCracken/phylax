@@ -70,7 +70,7 @@ fn phylax_file_size(path) {
     # stat(path, &statbuf) via stdlib wrapper (x86: direct SYS_STAT;
     # aarch64: newfstatat(AT_FDCWD, …)). STAT_BUFSZ / STAT_SIZE come
     # from `lib/syscalls.cyr`'s arch-correct enum.
-    var statbuf[144];  # STAT_BUFSZ literal (cyrius requires numeric literal in array-size context)
+    var statbuf[STAT_BUFSZ];  # per-target (cyrius 6.7.2+ accepts a const expression here)
     var rc = sys_stat(path, &statbuf);
     if (rc < 0) { return -1; }
     return load64(&statbuf + STAT_SIZE);
@@ -97,7 +97,7 @@ fn phylax_read_file(path) {
         # as "not a regular file" and the scanner, quarantine, rules/STIX/config
         # loaders and the MCP scan tool all silently skipped it. Present since
         # the 0.9 port. Regression-tested in tests/test_utils.tcyr.
-        var statbuf[144];  # STAT_BUFSZ literal (cyrius requires numeric literal in array-size context)
+        var statbuf[STAT_BUFSZ];  # per-target (cyrius 6.7.2+ accepts a const expression here)
         var frc = sys_fstat(fd, &statbuf);
         if (frc < 0) { sys_close(fd); return 0; }
         # load64 also picks up st_uid in the high half on x86_64; S_IFMT masks it off.
@@ -479,11 +479,17 @@ fn str_count(haystack, needle) {
 # Utility — f64 constants
 # ================================================================
 
+# ⚠ Every name below must be one NO stdlib module defines (ADR 0002). Until
+# 1.3.0 this block also had `F64_ONE` (the same name and value as
+# lib/math.cyr's) and `F64_255`, which cyrius 6.7.6's mabda fold declares as a
+# top-level `const` -- a hard "already declared as a top-level const" error in
+# any consumer that includes dist/phylax.cyr beside lib/mabda.cyr. Neither was
+# used by phylax; both were deleted (F64_ONE still comes from lib/math.cyr).
+# Checked at 1.3.0 by scanning all 535 phylax top-level names against every
+# file in the 6.7.9 stdlib snapshot: these were the only two collisions.
+
 # f64 zero: 0x0000000000000000
 var F64_ZERO = 0;
-
-# f64 one: 0x3FF0000000000000
-var F64_ONE = 4607182418800017408;
 
 # f64 8.0: 0x4020000000000000
 var F64_EIGHT = 4620693217682128896;
@@ -508,9 +514,6 @@ var F64_4096 = 4661225614328463360;
 
 # f64 15.0: 0x402E000000000000
 var F64_15 = 4624633867356078080;
-
-# f64 255.0: 0x406FE00000000000
-var F64_255 = 4643808755916185600;
 
 # f64 5.5: 0x4016000000000000
 var F64_5_5 = 4617878467915022336;

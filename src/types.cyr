@@ -9,42 +9,39 @@
 var VERSION = 0;
 
 fn _init_version() {
-    VERSION = str_from("1.2.8");
+    VERSION = str_from("1.3.0");
 }
 
 # ================================================================
-# Syscall constants (not in stdlib)
+# Syscall / flag constants: TAKE THE STDLIB'S, DEFINE NONE HERE
 # ================================================================
-
-var SYS_RENAME = 82;
-var SYS_UNLINK = 87;
-var SYS_SOCKET = 41;
-var SYS_BIND = 49;
-var SYS_LISTEN = 50;
-var SYS_ACCEPT = 43;
+#
+# ⚠ Until 1.3.0 this block defined SYS_RENAME / SYS_UNLINK / SYS_SOCKET /
+# SYS_BIND / SYS_LISTEN / SYS_ACCEPT / SYS_INOTIFY_* / SYS_FSTAT, O_RDONLY /
+# O_NOFOLLOW, SOCK_STREAM and the IN_* masks as globals holding the x86_64
+# numbers. The stdlib defines every one of them per target
+# (`lib/syscalls_x86_64_linux.cyr`, `lib/syscalls_aarch64_linux.cyr`), and a
+# global of the same name WINS PROGRAM-WIDE under last-definition-wins --
+# including inside the stdlib's own wrappers. On x86_64 the two sets agree, so
+# nothing showed; on aarch64, measured under qemu at 1.3.0:
+#   - sys_inotify_add_watch issued x86's 254, unassigned on aarch64 -> -ENOSYS,
+#     so `phylax watch` watched nothing;
+#   - phylax_read_file's mmap path opened with x86's O_NOFOLLOW (131072), which
+#     on aarch64 is O_LARGEFILE -> symlinks were FOLLOWED, not refused;
+#   - the daemon's raw socket/bind/listen/accept numbers only worked because
+#     the aarch64 backend's syscall translator happens to rewrite those four.
+# Use the stdlib's names (and its sys_* wrappers). tests/test_platform.tcyr
+# asserts this target's values live on both arches.
+#
+# AF_UNIX is the one exception: the stdlib does not define it, and it is 1 on
+# every Linux target.
 var AF_UNIX = 1;
-var SOCK_STREAM = 1;
-var SYS_INOTIFY_INIT = 253;
-var SYS_INOTIFY_ADD_WATCH = 254;
-var SYS_INOTIFY_RM_WATCH = 255;
 
-# inotify event masks -- the ONLY definitions; `phylax watch` (src/cli.cyr)
-# uses these. Until 1.2.8 cli.cyr re-declared all four and set WATCH_MASK to
-# 0x18A, so under last-definition-wins the binary watched IN_MOVED_TO (an
-# editor's write-to-temp-then-rename save) while the WATCH_MASK exported from
-# both dist bundles was 266 and did not. cyrius 6.6.20 is the first toolchain
-# to flag the conflicting redefinition. The value below is the one the binary
-# has always used.
-var IN_CREATE = 256;
-var IN_MODIFY = 2;
-var IN_CLOSE_WRITE = 8;
-var IN_MOVED_TO = 128;
+# phylax watch's inotify mask, built from the stdlib's per-target IN_* bits
+# (arch-independent values). Until 1.2.8 src/cli.cyr re-declared it as 0x18A on
+# top of a 266 here, so the binary watched IN_MOVED_TO (an editor's
+# write-to-temp-then-rename save) while both dist bundles exported 266.
 var WATCH_MASK = 394;  # 0x18A = IN_MODIFY | IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE
-
-# File open flags for hardened scanning
-var O_RDONLY = 0;
-var O_NOFOLLOW = 131072;  # 0x20000 — reject symlinks
-var SYS_FSTAT = 5;
 
 # Per-scan allocation tracking
 var G_SCAN_ALLOC_TOTAL = 0;

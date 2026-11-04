@@ -959,23 +959,24 @@ fn arg_collect_positional(start_idx) {
 # CLI — Daemon mode (Unix socket listener)
 # ================================================================
 
-fn cmd_daemon(socket_path, rules_path) {
-    str_println(str_cat(str_from("Phylax daemon v"), VERSION));
-    str_println(str_cat(str_from("Listening on: "), str_from(socket_path)));
-
-    # Remove existing socket file — sys_unlink composes through
-    # SYS_UNLINKAT on aarch64 (bare unlink was dropped on the
-    # generic-table arches).
+# Build the daemon's AF_UNIX listening socket at `socket_path` (a cstr).
+# Returns the listening fd, -1 when the socket cannot be created, -2 when it
+# cannot be bound, -3 when it cannot listen.
+#
+# Uses the stdlib's sys_socket / sys_bind / sys_listen, which take each
+# target's own syscall numbers. Until 1.3.0 these were raw `syscall(SYS_SOCKET,
+# …)` calls on x86_64 numbers defined in src/types.cyr; on aarch64 they worked
+# only because the backend's syscall translator happens to rewrite those four.
+# The listen result was also ignored. Tested in tests/test_cli.tcyr.
+fn daemon_listen(socket_path) {
+    # Remove any stale socket file (sys_unlink composes through unlinkat on
+    # the generic-table arches).
     sys_unlink(socket_path);
 
-    # Create socket
-    var fd = syscall(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) {
-        str_println(str_from("Error: cannot create socket"));
-        return 1;
-    }
+    var fd = sys_socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) { return 0 - 1; }
 
-    # Build sockaddr_un (110 bytes: family u16 + path 108 bytes)
+    # sockaddr_un: family u16 + path (108 bytes, NUL-terminated)
     var addr = alloc(112);
     store16(addr, AF_UNIX);
     var plen = strlen(socket_path);
@@ -983,23 +984,35 @@ fn cmd_daemon(socket_path, rules_path) {
     memcpy(addr + 2, socket_path, plen);
     store8(addr + 2 + plen, 0);
 
-    # Bind
-    var brc = syscall(SYS_BIND, fd, addr, 2 + plen + 1);
-    if (brc < 0) {
-        str_println(str_from("Error: cannot bind socket"));
-        sys_close(fd);
+    if (sys_bind(fd, addr, 2 + plen + 1) < 0) { sys_close(fd); return 0 - 2; }
+    if (sys_listen(fd, 5) < 0) { sys_close(fd); return 0 - 3; }
+    return fd;
+}
+
+fn cmd_daemon(socket_path, rules_path) {
+    str_println(str_cat(str_from("Phylax daemon v"), VERSION));
+    str_println(str_cat(str_from("Listening on: "), str_from(socket_path)));
+
+    var fd = daemon_listen(socket_path);
+    if (fd == 0 - 1) {
+        str_println(str_from("Error: cannot create socket"));
         return 1;
     }
-
-    # Listen
-    syscall(SYS_LISTEN, fd, 5);
+    if (fd == 0 - 2) {
+        str_println(str_from("Error: cannot bind socket"));
+        return 1;
+    }
+    if (fd < 0) {
+        str_println(str_from("Error: cannot listen on socket"));
+        return 1;
+    }
 
     str_println(str_from("Ready. Send file paths (one per connection) for scanning."));
 
     # Accept loop
     var running = 1;
     while (running == 1) {
-        var client = syscall(SYS_ACCEPT, fd, 0, 0);
+        var client = sys_accept4(fd, 0, 0, 0);
         if (client < 0) { running = 0; }
         else {
             # Read request (file path, max 4096 bytes)

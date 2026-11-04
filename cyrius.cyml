@@ -5,7 +5,7 @@ description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF par
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "6.6.20"
+cyrius = "6.7.9"
 
 [build]
 entry = "src/main.cyr"
@@ -125,8 +125,8 @@ stdlib = [
 #
 # Both modules used to be git-dep blocks in this manifest. The toolchain
 # snapshot now vendors them. 6.5.35 folded exactly the versions this repo
-# used to pin forward by hand (sakshi 2.4.11, sigil 3.12.9); the 6.6.20
-# snapshot this manifest pins folds sakshi 2.5.7 and sigil 3.13.10.
+# used to pin forward by hand (sakshi 2.4.11, sigil 3.12.9); the 6.7.9
+# snapshot this manifest pins folds sakshi 2.5.8 and sigil 3.13.11.
 #
 # WARNING: the declaration SHAPE is load-bearing, not just the version.
 # `cyrius distlib` classifies a git dep OUT of the stdlib leaves, so a folded
@@ -155,9 +155,14 @@ stdlib = [
 # local build vendored that tree, rewrote cyrius.lock with its hash, and
 # failed to compile, while the same manifest built clean from the 3.3.8 tag.
 # The 1.2.7 lock was also partly path-resolved (libro's transitive patra and
-# sigil-mldsa hashes did not match their tags). cyrius 6.7.6 makes a path a
-# dev override read only in local mode; until phylax pins that, the tag is
-# the only source. bote's own manifest follows the same rule.
+# sigil-mldsa hashes did not match their tags).
+#
+# From cyrius 6.7.6 (pinned here since 1.3.0) a path is a DEV OVERRIDE read
+# only in local mode (CYRIUS_LOCAL=1 / --local): it then resolves into
+# build/local-deps/lib/, leaves lib/ and cyrius.lock untouched, and prints the
+# sibling's commit and whether it is dirty. So a path line is no longer
+# dangerous -- but phylax still commits none, and the tag stays the only
+# source a default build sees. bote's own manifest follows the same rule.
 
 # majra pub/sub + counter. Historically load-bearing because bote's
 # hand-picked `events_majra.cyr` module (in the old src-module list)
@@ -165,14 +170,14 @@ stdlib = [
 # `dist/bote-core.cyr` — which excludes `events_majra.cyr` — nothing
 # in phylax's link closure references majra (phylax src calls no
 # `pubsub_*`/`counter_*`), so these modules now stage but DCE-prune.
-# Still true at bote 3.3.17. Kept + version-tracked for now, at 2.9.3
-# to match the majra that bote 3.3.17 itself pins, so the two never
+# Still true at bote 3.4.10. Kept + version-tracked for now, at 2.12.0
+# to match the majra that bote 3.4.10 itself pins, so the two never
 # diverge inside one link. A candidate for removal in a
 # dedicated dep-pruning pass (not folded into this pin sweep) — see
 # the note over `[deps.libro]` for what that pass would also reclaim.
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
-tag = "2.9.3"
+tag = "2.12.0"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
 # bote 3.x reorganized its module layout: `dispatch.cyr` now pulls
@@ -191,7 +196,7 @@ modules = ["src/pubsub.cyr", "src/counter.cyr"]
 # transport + audit stack in for three functions.)
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
-tag = "3.3.17"
+tag = "3.4.10"
 modules = ["dist/bote-core.cyr"]
 
 # Explicit libro pin — now a pure belt-and-suspenders alignment, not
@@ -204,8 +209,8 @@ modules = ["dist/bote-core.cyr"]
 # phylax's link closure references libro at all — phylax never called it
 # directly, and the core bundle no longer pulls it — so this module now
 # stages but DCE-prunes. Kept to (a) document the resolved version
-# explicitly at phylax's manifest and (b) stay aligned with bote 3.3.17's
-# own transitive libro pin (2.10.8), so the two never diverge. Like the
+# explicitly at phylax's manifest and (b) stay aligned with bote 3.4.10's
+# own transitive libro pin (2.11.0), so the two never diverge. Like the
 # majra block above, a candidate for a dedicated dep-pruning pass.
 #
 # WARNING, measured at 1.2.5: deleting this block does NOT reclaim
@@ -229,9 +234,10 @@ modules = ["dist/bote-core.cyr"]
 # lib/sigil_*.cyr and sigil-mldsa leaves are gone from cyrius.lock (67 -> 65
 # files), the 232 duplicate-fn build warnings they caused are gone, and the
 # DCE binary is 915,728 -> 866,640 B against the same tree on 6.6.2. libro
-# 2.10.8 still declares sigil (3.13.10, the version 6.6.20 folds) as a git
-# dep; that is now inert here.
+# 2.11.0 still declares sigil as a git dep -- at 3.13.12, one patch AHEAD of
+# the 3.13.11 the 6.7.9 snapshot folds -- and that is inert here too: the fold
+# is the package, so phylax links the folded 3.13.11.
 [deps.libro]
 git = "https://github.com/MacCracken/libro.git"
-tag = "2.10.8"
+tag = "2.11.0"
 modules = ["dist/libro.cyr"]
