@@ -159,6 +159,22 @@ fn test_path_has_extension() {
     assert_eq(path_has_extension(str_from("a.exe"), vec_get(exts, 1)), 1, "split entry matches");
 }
 
+# ----------------------------------------------------------------
+# watch: inotify mask. Until 1.2.8 cli.cyr re-declared WATCH_MASK as 0x18A on
+# top of types.cyr's 266, so the library and the binary disagreed (the binary
+# won, via last-definition-wins). This file compiles both, so it is where a
+# re-introduced second definition would change the value under test.
+# ----------------------------------------------------------------
+
+fn test_watch_mask() {
+    test_group("watch_mask");
+
+    assert_eq(WATCH_MASK, 0x18A, "WATCH_MASK is the value phylax watch has always used");
+    assert_eq(WATCH_MASK & IN_MOVED_TO, IN_MOVED_TO, "rename-into-place saves are watched");
+    assert_eq(WATCH_MASK & IN_CLOSE_WRITE, IN_CLOSE_WRITE, "close-after-write is watched");
+    assert_eq(WATCH_MASK, IN_MODIFY | IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE, "mask is exactly the four events");
+}
+
 fn main() {
     phylax_init();
     setup_fixtures();
@@ -168,6 +184,7 @@ fn main() {
     test_run_scan_target_is_str();
     test_run_scan_rules_path();
     test_path_has_extension();
+    test_watch_mask();
 
     return assert_summary();
 }

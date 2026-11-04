@@ -42,9 +42,9 @@ fn parse_triage_response(content, finding_id, model) {
     # already past the end) before probing a bogus entries array.
     var parsed = json_v_parse(content);
     if (json_v_is_obj(parsed) == 1) {
-        store64(result + 8, json_v_str(json_v_obj_get(parsed, "classification")));
-        store64(result + 16, json_v_int(json_v_obj_get(parsed, "confidence")));
-        store64(result + 24, json_v_str(json_v_obj_get(parsed, "explanation")));
+        store64(result + 8, json_v_str(bayan_json_v_obj_get_by_cstr(parsed, "classification")));
+        store64(result + 16, json_v_int(bayan_json_v_obj_get_by_cstr(parsed, "confidence")));
+        store64(result + 24, json_v_str(bayan_json_v_obj_get_by_cstr(parsed, "explanation")));
 
         # Validate classification — default to needs_review if unrecognized
         if (load64(result + 8) == 0) {
@@ -148,15 +148,15 @@ fn hoosh_triage_finding(base_url, model, finding) {
     }
 
     # Extract content from choices[0].message.content
-    var choices = json_v_obj_get(resp_obj, "choices");
+    var choices = bayan_json_v_obj_get_by_cstr(resp_obj, "choices");
     if (json_v_is_arr(choices) == 0) { return 0; }
     if (json_v_arr_len(choices) == 0) { return 0; }
 
     var choice = json_v_arr_get(choices, 0);
-    var message = json_v_obj_get(choice, "message");
+    var message = bayan_json_v_obj_get_by_cstr(choice, "message");
     if (message == 0) { return 0; }
 
-    var content = json_v_str(json_v_obj_get(message, "content"));
+    var content = json_v_str(bayan_json_v_obj_get_by_cstr(message, "content"));
     if (content == 0) { return 0; }
 
     var finding_id = str_cat(load64(finding + 24), str_from("-"));
@@ -222,7 +222,7 @@ fn daimon_register(base_url) {
         return 0;
     }
 
-    var agent_id = json_v_str(json_v_obj_get(resp_obj, "agent_id"));
+    var agent_id = json_v_str(bayan_json_v_obj_get_by_cstr(resp_obj, "agent_id"));
     if (agent_id == 0) {
         var msg = str_from("daimon: registration failed - no agent_id");
         sakshi_error(str_data(msg), str_len(msg));

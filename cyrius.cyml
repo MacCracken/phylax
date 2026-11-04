@@ -1,11 +1,11 @@
 [package]
 name = "phylax"
-version = "1.2.7"
+version = "${file:VERSION}"
 description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF parsing, binary classification"
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "6.6.2"
+cyrius = "6.6.20"
 
 [build]
 entry = "src/main.cyr"
@@ -98,36 +98,35 @@ stdlib = [
     # to be git-dep blocks. Full rationale below the closing bracket, under
     # THE FOLDED MODULES. Order matters here: ct/keccak/random precede sigil
     # and fnptr/atomic precede sakshi, because cyrius is single-pass.
-    # Keep double quotes and square brackets out of comments in this array --
-    # see that note for why both are parsed rather than skipped.
+    # Long rationale still goes below the closing bracket, by convention --
+    # see that note for the comment-parsing history.
     "sakshi",
     "sigil"
 ]
 
 # THE FOLDED MODULES -- sakshi and sigil
 #
-# WARNING: none of this note may be moved up into the stdlib array above.
-# The array walker DOES NOT SKIP COMMENTS, and it mis-parses two ways -- both
-# were hit while writing this manifest, and each is silent:
+# History, and why this note sits below the array rather than inside it:
+# through cyrius 6.6.16 the array walker DID NOT SKIP COMMENTS, and it
+# mis-parsed two ways -- both were hit while writing this manifest at 1.2.5:
 #
-#   1. An opening square bracket ENDS the array. The walk runs to the next
-#      one, so a comment naming a bracketed section truncates the list at that
-#      line. Cost: the entries below it vanished and the regenerated sidecars
-#      came out missing exactly sakshi and sigil -- no error, green build.
-#   2. A double-quoted phrase BECOMES AN ENTRY. A comment quoting a name is
-#      collected as a module, and resolution then fails on a path built from
-#      prose (`cannot read .../lib/THE FOLDED # MODULES.cyr`). This one at
-#      least fails loudly.
+#   1. A square bracket ENDED the array, so a comment naming a bracketed
+#      section truncated the list at that line. Cost: the entries below it
+#      vanished and the regenerated sidecars came out missing exactly sakshi
+#      and sigil -- no error, green build.
+#   2. A double-quoted phrase BECAME AN ENTRY, and resolution then failed on a
+#      path built from prose (`cannot read .../lib/THE FOLDED # MODULES.cyr`).
 #
-# The first is the same always-green shape the fold below exists to prevent,
-# so it is recorded here rather than fixed and forgotten. (Upstream anchored
-# the KEY scan in cyrius 6.5.28; the array walk still does neither of these.
-# majra's manifest is unaffected because its equivalent note already sits
-# outside the array.)
+# cyrius 6.6.17 (m6) fixed both: comments are skipped, and the array search
+# stops at the key's own line. Measured at 1.2.8 under 6.6.20: a comment
+# inside this array naming a bracketed section and quoting a phrase leaves
+# lib/ byte-for-byte the same file set. The guidance is now only convention,
+# but it costs nothing, so long notes stay down here.
 #
 # Both modules used to be git-dep blocks in this manifest. The toolchain
-# snapshot now vendors them, and 6.5.35 folds exactly the versions this repo
-# used to pin forward by hand: sakshi 2.4.11 and sigil 3.12.9.
+# snapshot now vendors them. 6.5.35 folded exactly the versions this repo
+# used to pin forward by hand (sakshi 2.4.11, sigil 3.12.9); the 6.6.20
+# snapshot this manifest pins folds sakshi 2.5.7 and sigil 3.13.10.
 #
 # WARNING: the declaration SHAPE is load-bearing, not just the version.
 # `cyrius distlib` classifies a git dep OUT of the stdlib leaves, so a folded
@@ -148,21 +147,32 @@ stdlib = [
 # folded module for every build. sigil and sakshi track the toolchain fold
 # now -- the `cyrius` pin is the only knob that moves them.
 
+# NO path LINES ON THE GIT DEPS BELOW -- deliberately, and do not add one.
+# Through cyrius 6.6.x a path beside git/tag WINS whenever the sibling
+# checkout resolves: the resolver vendors that checkout's WORKING TREE and
+# skips the commit-pin check, while CI (which has no siblings) vendors the
+# tag. Measured at 1.2.8: with ../bote checked out at an untagged 3.8.5 the
+# local build vendored that tree, rewrote cyrius.lock with its hash, and
+# failed to compile, while the same manifest built clean from the 3.3.8 tag.
+# The 1.2.7 lock was also partly path-resolved (libro's transitive patra and
+# sigil-mldsa hashes did not match their tags). cyrius 6.7.6 makes a path a
+# dev override read only in local mode; until phylax pins that, the tag is
+# the only source. bote's own manifest follows the same rule.
+
 # majra pub/sub + counter. Historically load-bearing because bote's
 # hand-picked `events_majra.cyr` module (in the old src-module list)
 # called `pubsub_publish`. As of the bote 3.1.4 switch to
 # `dist/bote-core.cyr` — which excludes `events_majra.cyr` — nothing
 # in phylax's link closure references majra (phylax src calls no
 # `pubsub_*`/`counter_*`), so these modules now stage but DCE-prune.
-# Still true at bote 3.3.7. Kept + version-tracked for now, and moved
-# to 2.7.0 to match the majra that bote 3.3.7 itself pins, so the two
-# never diverge inside one link. A candidate for removal in a
+# Still true at bote 3.3.17. Kept + version-tracked for now, at 2.9.3
+# to match the majra that bote 3.3.17 itself pins, so the two never
+# diverge inside one link. A candidate for removal in a
 # dedicated dep-pruning pass (not folded into this pin sweep) — see
 # the note over `[deps.libro]` for what that pass would also reclaim.
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
-path = "../majra"
-tag = "2.7.2"
+tag = "2.9.3"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
 # bote 3.x reorganized its module layout: `dispatch.cyr` now pulls
@@ -181,8 +191,7 @@ modules = ["src/pubsub.cyr", "src/counter.cyr"]
 # transport + audit stack in for three functions.)
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
-path = "../bote"
-tag = "3.3.8"
+tag = "3.3.17"
 modules = ["dist/bote-core.cyr"]
 
 # Explicit libro pin — now a pure belt-and-suspenders alignment, not
@@ -195,8 +204,8 @@ modules = ["dist/bote-core.cyr"]
 # phylax's link closure references libro at all — phylax never called it
 # directly, and the core bundle no longer pulls it — so this module now
 # stages but DCE-prunes. Kept to (a) document the resolved version
-# explicitly at phylax's manifest and (b) stay aligned with bote 3.3.7's
-# own transitive libro pin (2.8.12), so the two never diverge. Like the
+# explicitly at phylax's manifest and (b) stay aligned with bote 3.3.17's
+# own transitive libro pin (2.10.8), so the two never diverge. Like the
 # majra block above, a candidate for a dedicated dep-pruning pass.
 #
 # WARNING, measured at 1.2.5: deleting this block does NOT reclaim
@@ -211,11 +220,18 @@ modules = ["dist/bote-core.cyr"]
 # `lib/sigil.cyr` monolith. Both are 3.12.9, so the duplicate
 # `sha256_hex` / `sha512_hex` / `hex_decode_into` definitions are
 # behaviourally inert -- but they cost ~350 KB of DCE binary
-# (2,207,520 -> 2,562,016 B across the 1.2.5 sweep). Now that sigil is a
-# folded stdlib module, libro's git dep should follow sakshi's and be
-# dropped; file upstream rather than working around it here.
+# (2,207,520 -> 2,562,016 B across the 1.2.5 sweep).
+#
+# RESOLVED in the toolchain at cyrius 6.6.11 (S2): when `sigil` is a stdlib
+# leaf, `cyrius deps` no longer vendors a git dep's thin sigil files -- it
+# prints `note: [deps.sigil] ... not vendored -- 'sigil' is a stdlib leaf
+# here, and its fold lib/sigil.cyr is the package`. Measured at 1.2.8: the
+# lib/sigil_*.cyr and sigil-mldsa leaves are gone from cyrius.lock (67 -> 65
+# files), the 232 duplicate-fn build warnings they caused are gone, and the
+# DCE binary is 915,728 -> 866,640 B against the same tree on 6.6.2. libro
+# 2.10.8 still declares sigil (3.13.10, the version 6.6.20 folds) as a git
+# dep; that is now inert here.
 [deps.libro]
 git = "https://github.com/MacCracken/libro.git"
-path = "../libro"
-tag = "2.10.0"
+tag = "2.10.8"
 modules = ["dist/libro.cyr"]

@@ -1,7 +1,8 @@
 # Dependency Watch
 
-Status tracking for all dependencies. Current as of **phylax 1.2.1**
-(2026-06-17).
+Status tracking for all dependencies. Current as of **phylax 1.2.8**
+(2026-11-03, cyrius 6.6.20). The stdlib table below predates 1.2.5 in places;
+the External Dependencies table and the Toolchain section are current.
 
 ## Cyrius Stdlib Modules (31)
 
@@ -61,11 +62,11 @@ alone and must be explicitly `include`d. See `thread_local` below.
 
 | Dependency | Version | Purpose | Notes |
 |-----------|---------|---------|-------|
-| `sakshi` | 2.4.11 | Structured logging | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. Tracks the toolchain fold. |
-| `sigil` | 3.12.9 | Cryptographic primitives | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. SHA-256 (SHA-NI dispatch); only `sha256` consumed. 6.5.35 vendors exactly 3.12.9. |
-| `majra` | 2.7.0 | Pubsub/counter | **Vestigial** — bote-core dropped `events_majra`, so nothing references it; staged + DCE-pruned. Aligned to bote 3.3.7's transitive majra. |
-| `bote` | 3.3.7 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle; the 11 hand-picked `src/*.cyr` modules no longer link under bote 3.x (dispatch pulls new `prompts`/`resources`). 3.3.6 grew the core profile 11 → 12 modules (`content.cyr`). |
-| `libro` | 2.8.12 | Belt-and-suspenders pin | Aligned to bote 3.3.7's transitive libro; not referenced by phylax or bote-core (DCE-pruned). ⚠ Pulls sigil as a *git* dep, staging granular `lib/sigil_*.cyr` beside the folded monolith — see "Known dep-shape cost" below. |
+| `sakshi` | 2.5.7 | Structured logging | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. Tracks the toolchain fold (6.6.20 vendors 2.5.7). |
+| `sigil` | 3.13.10 | Cryptographic primitives | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. SHA-256 (SHA-NI dispatch); only `sha256` consumed. 6.6.20 vendors 3.13.10. |
+| `majra` | 2.9.3 | Pubsub/counter | **Vestigial** — bote-core dropped `events_majra`, so nothing references it; staged + DCE-pruned. Aligned to bote 3.3.17's own majra pin. |
+| `bote` | 3.3.17 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle (the 11 hand-picked `src/*.cyr` modules no longer link under bote 3.x). 3.3.17 is the newest tag pinned to cyrius 6.6.20. |
+| `libro` | 2.10.8 | Belt-and-suspenders pin | Aligned to bote 3.3.17's transitive libro; not referenced by phylax or bote-core (DCE-pruned). Declares sigil as a git dep, which is inert since cyrius 6.6.11 (see Known dep-shape cost). |
 
 ### Folded modules: why the declaration shape matters
 
@@ -81,24 +82,50 @@ alone and must be explicitly `include`d. See `thread_local` below.
 
 ⚠ Do not re-add git blocks for these two. The `cyrius` pin is the only knob that moves them.
 
-⚠ Comments inside the `stdlib` array are parsed, not skipped. A `[` inside one **ends the array**
-(entries below it silently vanish — this dropped `sakshi`/`sigil` from the sidecars on the first
-attempt, with no error and a green build), and a `"quoted phrase"` inside one is **collected as a
-module name**. Keep rationale below the closing `]`.
+Comments inside the `stdlib` array were parsed, not skipped, through cyrius 6.6.16: a `[` inside
+one ended the array (entries below it vanished — this dropped `sakshi`/`sigil` from the sidecars on
+the first 1.2.5 attempt, with no error and a green build), and a `"quoted phrase"` was collected as a
+module name. **cyrius 6.6.17 (m6) fixed both**; measured at 1.2.8, a comment naming a bracketed
+section and quoting a phrase inside the array leaves `lib/` unchanged. Rationale still goes below the
+closing `]` by convention.
 
-### Known dep-shape cost
+**From 6.6.18 the sidecars are compile-verified, not unioned.** `dist/phylax.deps` went 34 → 5 leaves
+and `dist/phylax-core.deps` 22 → 4 at 1.2.8; the folded leaves reach a consumer through phylax's git
+deps' own requires blocks. Verified with scratch consumers of both bundles (x86_64 + aarch64).
 
-libro 2.8.12 declares sigil as a git dep (`src/sha256.cyr`, `src/hex.cyr`, `src/sha_ni.cyr`,
-`dist/sigil-mldsa.cyr`), which stages those leaves as `lib/sigil_*.cyr` **alongside** the folded
-`lib/sigil.cyr`. Both are 3.12.9, so the duplicate `sha256_hex` / `sha512_hex` / `hex_decode_into`
-definitions are behaviourally inert, but they cost ~350 KB of DCE binary (2,207,520 → 2,562,016 B at
-the 1.2.5 sweep). Dropping phylax's own `[deps.majra]` / `[deps.libro]` blocks does **not** avoid it
-— measured, the pull survives transitively via bote 3.3.7, phylax loses version control, and a
-*larger* majra bundle is staged (locked files 65 → 79). The fix belongs upstream in libro.
+### ⚠ No `path =` lines on git deps
+
+Through cyrius 6.6.x a `path` beside `git`/`tag` **wins** whenever the sibling checkout exists: the
+resolver vendors the sibling's working tree, skips the commit-pin check, and an implicit resolve
+(`cyrius build`) rewrites `cyrius.lock`. CI has no siblings, so it builds the tag — local and CI
+silently diverge. Measured at 1.2.8 (`../bote` at an untagged 3.8.5 vendored, failed to compile, and
+rewrote the lock). The 1.2.7 lock was partly path-resolved. cyrius 6.7.6 makes `path` a
+local-mode-only override; until phylax pins that, don't commit one.
+
+### Known dep-shape cost — RESOLVED (cyrius 6.6.11)
+
+libro declares sigil as a git dep (`src/sha256.cyr`, `src/hex.cyr`, `src/sha_ni.cyr`,
+`dist/sigil-mldsa.cyr`). Through cyrius 6.6.10 that staged `lib/sigil_*.cyr` **alongside** the folded
+`lib/sigil.cyr` — inert duplicates, but ~350 KB of DCE binary at 1.2.5 and 232 duplicate-fn warnings
+per build at 1.2.7. 6.6.11 (S2) stops vendoring a git dep's thin sigil files when `sigil` is a stdlib
+leaf. At 1.2.8 the leaves are gone, the lock is 65 files (was 67), the warnings are 0, and the binary
+is 866,640 B (915,728 B for the same tree on 6.6.2). The vestigial `[deps.majra]` / `[deps.libro]`
+blocks remain a dep-pruning candidate on their own merits.
 
 ## Toolchain
 
-- **Cyrius**: 6.5.35 (pinned in `cyrius.cyml`)
+- **Cyrius**: 6.6.20 (pinned in `cyrius.cyml`)
+- **6.6.18 `distlib` compile-verifies on six targets** (incl. aarch64) and refuses — exit 1,
+  "sidecar NOT written" — after rewriting the bundle body. A leaf a bundled module needs only on
+  another target must be an explicit `include` in that module (`lib/math.cyr` in
+  `src/analyze.cyr`, for `f64_log2` on aarch64). CI gates on `cyrius distlib --check`; never
+  `distlib || true`.
+- **6.6.20 stamps a bundle's `# Version:` from the manifest**, so `cyrius.cyml` must keep
+  `version = "${file:VERSION}"` (CI refuses a literal).
+- **6.6.9 added `net_resolve_ipv4`** — `sock_connect` takes a packed IPv4, never a host string.
+- **6.6.9 changed how bench `min`/`max` are picked** (`avg` unchanged) — compare `avg` across it.
+- **Cyrius octal is `0o`-prefixed**; a C-style leading zero is decimal (`0100000` = 100000). This
+  hid a 64 KiB read bug from 0.9 to 1.2.8.
 - **6.5.28 `cyrius fmt` rewrites files IN PLACE** (breaking). stdout is now a
   one-line report, not the formatted source, so the old
   `diff <(cyrius fmt "$f") "$f"` CI idiom is broken two ways: the bare call

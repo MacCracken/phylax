@@ -16,22 +16,26 @@ echo "Bumping phylax to version ${NEW_VERSION}..."
 echo "$NEW_VERSION" > "$REPO_ROOT/VERSION"
 echo "  Updated VERSION"
 
-sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" "$REPO_ROOT/cyrius.cyml"
-echo "  Updated cyrius.cyml"
+# cyrius.cyml is NOT edited: its [package] version is "${file:VERSION}", so it
+# follows the VERSION file. Until 1.2.8 this script sed-replaced that line with
+# a literal, which is how 1.2.7 shipped `version = "1.2.7"` -- and from cyrius
+# 6.6.20 distlib stamps each dist bundle's `# Version:` from the manifest, so a
+# stale literal leaks into dist/. CI now refuses a literal (ci.yml, version job).
 
 sed -i "s/VERSION = str_from(\".*\");/VERSION = str_from(\"${NEW_VERSION}\");/" "$REPO_ROOT/src/types.cyr"
 echo "  Updated src/types.cyr"
 
 # Verify
 FILE_VERSION=$(cat "$REPO_ROOT/VERSION" | tr -d '[:space:]')
-CYML_VERSION=$(grep '^version = ' "$REPO_ROOT/cyrius.cyml" | head -1 | sed 's/version = "\(.*\)"/\1/')
+CYML_TEMPLATED=0
+grep -qF 'version = "${file:VERSION}"' "$REPO_ROOT/cyrius.cyml" && CYML_TEMPLATED=1
 SRC_VERSION=$(grep 'VERSION = str_from' "$REPO_ROOT/src/types.cyr" | sed 's/.*str_from("\(.*\)").*/\1/')
 
-if [ "$FILE_VERSION" != "$NEW_VERSION" ] || [ "$CYML_VERSION" != "$NEW_VERSION" ] || [ "$SRC_VERSION" != "$NEW_VERSION" ]; then
+if [ "$FILE_VERSION" != "$NEW_VERSION" ] || [ "$CYML_TEMPLATED" != 1 ] || [ "$SRC_VERSION" != "$NEW_VERSION" ]; then
     echo "ERROR: Version mismatch after bump"
-    echo "  VERSION:     $FILE_VERSION"
-    echo "  cyrius.cyml: $CYML_VERSION"
-    echo "  phylax.cyr:  $SRC_VERSION"
+    echo "  VERSION:       $FILE_VERSION"
+    echo "  cyrius.cyml:   version is \${file:VERSION}? $([ "$CYML_TEMPLATED" = 1 ] && echo yes || echo NO)"
+    echo "  src/types.cyr: $SRC_VERSION"
     exit 1
 fi
 
@@ -39,7 +43,9 @@ echo ""
 echo "Version bumped to ${NEW_VERSION}"
 echo ""
 echo "Next steps:"
-echo "  git add VERSION cyrius.cyml src/phylax.cyr"
+echo "  cyrius distlib --all          # dist/ bundles carry the version; CI gates on --check"
+echo "  add a CHANGELOG.md entry for ${NEW_VERSION}"
+echo "  git add VERSION src/types.cyr dist/ CHANGELOG.md"
 echo "  git commit -m \"bump to ${NEW_VERSION}\""
 echo "  git tag ${NEW_VERSION}"
 echo "  git push && git push --tags"

@@ -81,13 +81,13 @@ fn test_quarantine_roundtrip() {
     assert_eq(json_v_arr_len(parsed), 1, "index holds one record");
 
     var rec = json_v_arr_get(parsed, 0);
-    assert(str_eq(json_v_str(json_v_obj_get(rec, "original_path")), str_from(Q_SOURCE)),
+    assert(str_eq(json_v_str(bayan_json_v_obj_get_by_cstr(rec, "original_path")), str_from(Q_SOURCE)),
       "record.original_path round-trips");
-    assert(str_eq(json_v_str(json_v_obj_get(rec, "reason")), str_from("unit test")),
+    assert(str_eq(json_v_str(bayan_json_v_obj_get_by_cstr(rec, "reason")), str_from("unit test")),
       "record.reason round-trips");
-    assert(json_v_is_int(json_v_obj_get(rec, "size")) == 1, "record.size stays a JSON number");
-    assert_eq(json_v_int(json_v_obj_get(rec, "size")), 18, "record.size value");
-    assert(json_v_is_int(json_v_obj_get(rec, "timestamp")) == 1, "record.timestamp stays a JSON number");
+    assert(json_v_is_int(bayan_json_v_obj_get_by_cstr(rec, "size")) == 1, "record.size stays a JSON number");
+    assert_eq(json_v_int(bayan_json_v_obj_get_by_cstr(rec, "size")), 18, "record.size value");
+    assert(json_v_is_int(bayan_json_v_obj_get_by_cstr(rec, "timestamp")) == 1, "record.timestamp stays a JSON number");
 
     # A second manager over the same directory must rebuild the entry.
     var reloaded = quarantine_new(str_from(Q_STORE));

@@ -2,6 +2,217 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.2.8] - 2026-11-03
+
+**Toolchain `6.6.2` → `6.6.20`, every dep moved to the release pinned against
+6.6.20 — and three defects that predate the bump and that the bump's
+verification surfaced.** Since the 0.9 port, phylax could not read any file
+larger than 64 KiB, its outbound HTTP client could not reach any server, and the
+`WATCH_MASK` it exported was not the one it used. None of these came from the
+toolchain change; all three are fixed and regression-tested here. Separately,
+local builds had been vendoring the sibling repos' working trees in place of the
+pinned tags.
+
+### Breaking
+
+- **The `dist/*.deps` sidecars are now compile-verified and much smaller**
+  (cyrius 6.6.18). `dist/phylax.deps` goes from **34 → 5** leaves (`math http net
+  fs syscalls`) and `dist/phylax-core.deps` from **22 → 4** (`math http net
+  syscalls`). Before 6.6.18, `distlib` unioned this repo's whole `[deps] stdlib`
+  into each sidecar. Now it names only what the bundle needs to compile on six
+  targets, and the bundle carries a `# Requires (compile-verified …)` include
+  block, so `include "dist/phylax.cyr"` alone compiles.
+  **Migration:** a consumer that relied on phylax's sidecar to vendor a stdlib
+  leaf *it calls itself* must declare that leaf in its own `[deps] stdlib`. The
+  leaves phylax itself needs (sakshi, sigil, bayan, hashmap, ct, …) still arrive,
+  through phylax's git deps' own requires blocks (bote-core's names `hashmap bayan
+  sigil ct`). Verified with throwaway consumers of both bundles: `cyrius deps`
+  from the sidecar alone, then the `[lib.core]` smoke test, 11/11 on x86_64 and
+  11/11 on aarch64 under qemu. No repo in the tree declares a phylax dep today
+  (checked daimon, aegis, t-ron), so nothing breaks now; this is the contract for
+  the next one.
+- **`WATCH_MASK` in both dist bundles changes `266` → `394`** (`0x18A`, adding
+  `IN_MOVED_TO`), and `IN_MOVED_TO` is newly exported. See Fixed.
+- **`http_post` now actually connects.** Hoosh triage (`phylax scan --triage`)
+  and the `daimon_register` / `daimon_heartbeat` / `daimon_deregister` library
+  calls make real network connections where they previously failed silently. See
+  Fixed. The CLI makes an outbound connection only under `--triage`; nothing in
+  phylax calls the `daimon_*` functions.
+
+### Fixed
+
+- **No file larger than 64 KiB could be read — scanned, quarantined, or loaded
+  as rules/STIX/config** (`src/utils.cyr`, present since `d2b0a23`, the 0.9
+  port). Above `PHYLAX_MMAP_THRESHOLD`, `phylax_read_file` takes an mmap path that
+  checks `S_ISREG` with `(mode & 0170000) != 0100000`. **Cyrius octal is
+  `0o`-prefixed; a C-style leading zero is decimal.** So the test was
+  `(mode & 170000) != 100000`, which no file mode satisfies. Every regular file
+  over 64 KiB was refused as "not a regular file", the CLI printed `cannot read`
+  and moved on, and nothing else noticed: the same function backs quarantine,
+  the rules/STIX/config loaders and the MCP scan tool, and every test input was
+  under 64 KiB. Now `0o170000` / `0o100000`. Verified on a corpus of **370 real
+  files from 65 KB to 664 MB** (ELF executables, shared objects, PE/EFI images,
+  gzip/xz/tar/jar archives) scanned one at a time through the CLI: **0 abnormal
+  exits**, and the only refusal is the 664 MB file over the 100 MB limit. The
+  1.2.7 binary, run on a random 60 of those files, returned `cannot read` for
+  **60 of 60**. This is also the first time the parsers have seen large real
+  inputs through the CLI.
+- **`http_post` never reached a server** (`src/utils.cyr`, present since
+  `ce32de5`, the port). `sock_connect` takes a **packed** IPv4 address, which goes
+  straight into `sockaddr_in.sin_addr`. phylax handed it the URL's host **C
+  string**, i.e. a heap pointer truncated to 32 bits, so it connected (or hung
+  trying) to whatever address that happened to spell. The 1.2.7 fix made those
+  failures *report* correctly; this one makes the connection happen at all. cyrius
+  6.6.9 fixed the same defect in the stdlib's client and added `net_resolve_ipv4`
+  (dotted quad, `localhost`, `/etc/hosts`, then one DNS A query); `http_post` now
+  resolves through it and refuses an unresolvable host. Measured against a real
+  listener: before, no connection arrived; after, `200` by address and by name.
+- **`WATCH_MASK` was defined twice with different values** (`src/types.cyr` 266,
+  `src/cli.cyr` 0x18A). Under last-definition-wins the binary watched
+  `IN_MOVED_TO`, which is how editors save (write a temp file, then rename it into
+  place), but the constant both dist bundles exported was 266 and did not. cyrius
+  6.6.20 is the first toolchain to flag it ("redefined with conflicting value").
+  It is now one definition in `types.cyr` with the value the binary has always
+  used; the same-valued `IN_*` duplicates in `cli.cyr` are gone too.
+- **`distlib` refused to write either sidecar under 6.6.20.** The aarch64 verify
+  failed: `f64_log2` lowers to `_f64_log2_polyfill` (in `lib/math.cyr`) there,
+  and since nothing is a missing *symbol* on x86, the fixpoint could not discover
+  `math` on its own. The bundle bodies were still rewritten, so the output was
+  half-generated: version header moved, `.deps` stale, no requires block. And CI's
+  `cyrius distlib || true` would have passed it. `src/analyze.cyr` now includes
+  `lib/math.cyr` explicitly, which is the seed 6.6.18 reads.
+- **The manifest version had become a literal.** `scripts/version-bump.sh`
+  sed-replaced `version = "${file:VERSION}"` with the literal version, which is
+  how 1.2.7 shipped `version = "1.2.7"`. From 6.6.20, `distlib` stamps each
+  bundle's `# Version:` from the manifest, so the first 1.2.8 regeneration came
+  out labelled `v1.2.7`. The template is restored, the script no longer touches
+  `cyrius.cyml` (it verifies the template instead), and CI refuses a literal.
+- **Local resolves vendored the sibling repos' working trees in place of the
+  pinned tags.** Through cyrius 6.6.x, a `path = "../X"` beside `git`/`tag` wins
+  whenever the sibling checkout exists, and it skips the commit-pin check. With
+  `../bote` at an untagged 3.8.5, a local `cyrius build` vendored that tree,
+  rewrote `cyrius.lock` with its hash, and failed to compile, while CI (which has
+  no siblings) built the tag. The 1.2.7 lock was partly path-resolved too: libro's
+  transitive `patra` and `sigil-mldsa` hashes matched no tag. The three `path`
+  lines are gone, so the tag is now the only source. cyrius 6.7.6 makes `path` a
+  local-mode-only override; bote's own manifest already follows this rule.
+
+### Changed — dependency pins
+
+| dep | was | now | note |
+|---|---|---|---|
+| cyrius | 6.6.2 | **6.6.20** | |
+| majra | 2.7.2 | **2.9.3** | = bote 3.3.17's own pin; vestigial (DCE-pruned) |
+| bote | 3.3.8 | **3.3.17** | last tag pinned to 6.6.20; `dist/bote-core.cyr` |
+| libro | 2.10.0 | **2.10.8** | = bote 3.3.17's own pin; vestigial (DCE-pruned) |
+| sakshi (folded) | 2.5.1 | **2.5.7** | moves with the `cyrius` pin |
+| sigil (folded) | 3.12.16 | **3.13.10** | moves with the `cyrius` pin |
+| bayan (folded) | 1.5.5 | **1.5.12** | moves with the `cyrius` pin |
+
+Each git dep is the newest published tag whose own `cyrius` pin is 6.6.20; all
+three tags were confirmed on GitHub at the SHAs `cyrius.lock` commit-pins.
+`cyrius.lock` now carries those 5 commit pins (majra, bote, libro, and the
+transitive patra 1.15.2 and sigil 3.13.10) and **65** files, down from 67.
+
+### Changed
+
+- **libro's thin sigil leaves are no longer vendored** (cyrius 6.6.11 S2: "'sigil'
+  is a stdlib leaf here, and its fold lib/sigil.cyr is the package"). That clears
+  the 1.2.5-era double-stage the manifest and roadmap had been tracking:
+  `lib/sigil_*.cyr` and `lib/sigil-mldsa.cyr` are gone, and the **232
+  duplicate-fn build warnings go to 0**. A phylax build now emits **3** warnings
+  (the pre-existing `src/pe.cyr:437` typed-pointer note, and two from sigil and
+  static data), down from 236.
+- **`json_v_obj_get` → `bayan_json_v_obj_get_by_cstr`** at all 14 `src/` sites
+  (`integration.cyr`, `quarantine.cyr`) and in the tests. The old name is
+  `#deprecated` as of bayan 1.5.10 and is a one-line forward to the new one. Every
+  key at these sites is a literal, i.e. a cstr, so the behaviour is identical.
+  Since the bundles carry these calls, consumers would otherwise have seen the 14
+  warnings in their own builds.
+- **CI: the dist gate is `cyrius distlib --check`.** It verifies base plus every
+  profile against what is committed, writes nothing, and its exit status is
+  honoured. Checked three ways: clean exits 0, a stale bundle body exits 1, and
+  the aarch64 verify refusal exits 1. The version job also refuses a literal
+  manifest version.
+- **The stdlib-array comment warning in `cyrius.cyml` is now history.** cyrius
+  6.6.17 (m6) skips comments in arrays. Measured on 6.6.20: a comment naming a
+  bracketed section and quoting a phrase inside the array leaves `lib/` the same
+  file set.
+
+### Performance
+
+Neutral, with one fixed-cost row explained and one small row unexplained.
+Median of 3 runs per side; both sides measured on this box this session. 6.6.9
+changed how `min`/`max` are chosen (`avg` unchanged), so compare `avg` only.
+
+**Binary: 915,728 → 866,640 B (−5.4%)**, the same tree DCE-built on 6.6.2 from
+the tags versus 1.2.8 on 6.6.20. Most of that is the sigil double-stage going
+away.
+
+| bench | 1.2.7 (6.6.2) | 1.2.8 (6.6.20) | delta |
+|---|---|---|---|
+| entropy_1k | 14.077 us | 15.271 us | +8.5% (placement — below) |
+| entropy_1m | 4.029 ms | 4.035 ms | +0.1% |
+| chi_squared | 17.347 us | 17.311 us | −0.2% |
+| file_detection | 26 ns | 26 ns | 0 |
+| sha256_4k | 19.296 us | 19.392 us | +0.5% |
+| memmem_4k | 7.227 us | 7.249 us | +0.3% |
+| hex_encode_256 | 3.571 us | 3.668 us | **+2.7%** (unattributed) |
+| extract_ascii | 34.813 us | 34.647 us | −0.5% |
+| ssdeep_4k | 102.761 us | 101.296 us | −1.4% |
+| tlsh_1k | 380.443 us | 379.443 us | −0.3% |
+| queue_enqueue | 64.106 us | 64.182 us | +0.1% |
+| queue_dequeue | 9.477 ms | 9.564 ms | +0.9% |
+| report_json_100 | 744.601 us | 729.253 us | −2.1% |
+| report_sarif_100 | 953.540 us | 939.492 us | −1.5% |
+| report_markdown_100 | 129.890 us | 119.562 us | **−8.0%** |
+
+**`entropy_1k` is a lost lucky placement, not a regression.** The fixed ~1.1 us
+per call shows up in both profiles, and `entropy_1m` is flat, so the cost is per
+call rather than per byte. A/B'd piece by piece in a scratch bench under both
+toolchains: alloc, the 256-entry zeroing, the byte count, `f64_log2` and
+div/mul are each flat or faster on 6.6.20. Then the control: a **verbatim copy**
+of `shannon_entropy` compiled into the bench runs **13.69 us on 6.6.2 and on
+6.6.20 alike**. The library copy ran 12.60 us on 6.6.2 only because of where it
+happened to land; on 6.6.20 it runs at the copy's speed. This also reframes the
+1.2.6 "null guard costs 1.95 us" note: it is the same placement sensitivity (the
+1.2.6 note blamed a frame at the stack budget, but the frequency table comes from
+`alloc()`). The comment in `src/analyze.cyr` is corrected. `hex_encode_256`'s
+~100 ns is consistent (spread under 1%) but was not attributed.
+
+### Verification
+
+- **421 assertions across 18 files** (404 → 421: `watch_mask` +4,
+  `read_file_sizes` +6, `http_post_roundtrip` +7). Each new group was run against
+  the pre-fix code and fails there.
+- **aarch64: 421/421 under qemu-aarch64** (`cyrius test --aarch64`), including
+  the forked HTTP round-trip and the 1 MiB mmap read. Note that phylax's aarch64
+  build was not blocked on 6.6.2 either; CI's comment saying otherwise is stale
+  (see Known).
+- Both dist bundles consumed by scratch projects: x86_64 and aarch64, 11/11 each.
+- CLI A/B against the 6.6.2 binary: same exit codes for scan, all three report
+  formats, rules validate/list, status, and an unknown command.
+- `fmt --check` clean (no 6.6.20 drift), vet/deny clean, lint unchanged at 8
+  (indivisible literals), `deps --verify` 65/65, `distlib --check` 0.
+
+### Known / not fixed
+
+- **aarch64 is not yet a correct target, only a compiling one.** `src/types.cyr`
+  hardcodes x86_64 numbers that win over the stdlib's per-target ones under
+  last-definition-wins: `O_NOFOLLOW = 131072`, which is `O_LARGEFILE` on aarch64
+  (where `O_NOFOLLOW` is 32768), so the mmap path's symlink refusal is off there.
+  The `SYS_*` / `SYS_INOTIFY_*` constants are x86 numbers too. CI's aarch64 step
+  also checks for `cc5_aarch64`, which the toolchain no longer ships (it's
+  `cycc_aarch64` now), so the step always skips.
+- `http_post` ignores `sock_send`'s count (6.6.8 added `sock_send_all`), and its
+  `Host:` header omits `:port`.
+- The daemon's raw `sys_write` to a client can still raise SIGPIPE; 6.6.16's
+  CVE-74 fix covers the socket send path only.
+- CI runs `cyrius deps` before `cyrius deps --verify`. Since 6.6.9 `deps` writes
+  any lock rows that are missing, so a missing row cannot fail that gate.
+- `phylax scan`'s summary prints `Scan complete: N` and ` file(s), M finding(s)`
+  on separate lines.
+
 ## [1.2.7] - 2026-09-11
 
 **Toolchain `6.5.35` → `6.6.2` — and `http_post` has never reported a network

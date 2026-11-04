@@ -128,19 +128,27 @@ jobs:
       - name: dist/ bundles are up-to-date
         # `cyrius distlib` emits dist/phylax.cyr from [lib] modules and
         # `cyrius distlib core` emits dist/phylax-core.cyr from [lib.core].
-        # The unresolved-symbols warning is expected — consumers supply
-        # their own stdlib (same pattern as majra, sakshi, libro).
+        #
+        # ⚠ This step used to run `cyrius distlib || true` (and the same for
+        # core) and then `git diff dist/`. From cyrius 6.6.18 that shape hides a
+        # real failure: distlib compile-verifies each bundle on six targets and,
+        # when one refuses, exits 1 with "sidecar NOT written" — after already
+        # rewriting the bundle body. At the 1.2.8 bump exactly that happened
+        # (aarch64: f64_log2 needs lib/math.cyr there), so the headers moved,
+        # the .deps sidecars stayed stale, and `|| true` would have let it pass.
+        # `--check` regenerates base + every profile in scratch, compares them
+        # with what is committed, writes nothing, and its exit status is
+        # honoured: 0 when current, 1 when stale or when a verify refuses.
+        # (A "names still undefined" warning — sys_stat/sys_fstat on
+        # x86_64-windows, a target phylax does not build for — is a warning,
+        # not a failure.)
         run: |
-          cyrius distlib || true
-          cyrius distlib core || true
-          test -s dist/phylax.cyr      || { echo "FAIL: dist/phylax.cyr not produced"; exit 1; }
-          test -s dist/phylax-core.cyr || { echo "FAIL: dist/phylax-core.cyr not produced"; exit 1; }
+          cyrius distlib --check || {
+            echo "FAIL: dist/ bundles are stale or refused. Run 'cyrius distlib --all' and commit."
+            exit 1
+          }
           echo "dist/phylax.cyr:      $(wc -l < dist/phylax.cyr) lines, $(wc -c < dist/phylax.cyr) bytes"
           echo "dist/phylax-core.cyr: $(wc -l < dist/phylax-core.cyr) lines, $(wc -c < dist/phylax-core.cyr) bytes"
-          if ! git diff --exit-code dist/; then
-            echo "FAIL: committed dist/ bundles are stale. Run 'cyrius distlib && cyrius distlib core' and commit."
-            exit 1
-          fi
 
       - name: Test
         # Per-module test files under tests/test_*.tcyr (split 2026-05-11)
@@ -274,6 +282,13 @@ jobs:
           [ "$SRC_VERSION" = "$VERSION" ] || {
             echo "FAIL: src/types.cyr VERSION ($SRC_VERSION) != VERSION file ($VERSION)"
             echo "      this string is what --version prints and what reports stamp as scanner_version"
+            exit 1
+          }
+          # The 1.2.7 cut replaced the template with a literal "1.2.7", which
+          # nothing caught — and from cyrius 6.6.20 distlib stamps each bundle's
+          # `# Version:` from the MANIFEST, so the literal leaked into dist/.
+          grep -qF 'version = "${file:VERSION}"' cyrius.cyml || {
+            echo "FAIL: cyrius.cyml [package] version must be \"\${file:VERSION}\", not a literal"
             exit 1
           }
           echo "Version consistent (cyrius.cyml pulls VERSION via \${file:VERSION})"

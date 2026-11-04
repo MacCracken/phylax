@@ -89,12 +89,20 @@ fn phylax_read_file(path) {
         # mmap path with O_NOFOLLOW — reject symlinks, zero-copy
         var fd = sys_open(path, O_RDONLY | O_NOFOLLOW, 0);
         if (fd < 0) { return 0; }
-        # fstat to verify it's a regular file (mode & 0170000 == 0100000)
+        # fstat to verify it's a regular file: S_ISREG, (mode & S_IFMT) == S_IFREG.
+        # ⚠ Cyrius octal is `0o`-prefixed. A C-style leading zero is DECIMAL --
+        # `0100000` is one hundred thousand, not S_IFREG (32768) -- so until
+        # 1.2.8 this test read `(mode & 170000) != 100000`, which no file mode
+        # satisfies: every file over PHYLAX_MMAP_THRESHOLD (64 KiB) was refused
+        # as "not a regular file" and the scanner, quarantine, rules/STIX/config
+        # loaders and the MCP scan tool all silently skipped it. Present since
+        # the 0.9 port. Regression-tested in tests/test_utils.tcyr.
         var statbuf[144];  # STAT_BUFSZ literal (cyrius requires numeric literal in array-size context)
         var frc = sys_fstat(fd, &statbuf);
         if (frc < 0) { sys_close(fd); return 0; }
+        # load64 also picks up st_uid in the high half on x86_64; S_IFMT masks it off.
         var mode = load64(&statbuf + STAT_MODE);
-        if ((mode & 0170000) != 0100000) { sys_close(fd); return 0; }  # not regular file
+        if ((mode & 0o170000) != 0o100000) { sys_close(fd); return 0; }  # not regular file
         var addr = mmap_file_ro(fd, size);
         file_close(fd);
         if (addr == 0) { return 0; }
@@ -192,10 +200,24 @@ fn http_post(url, body, content_type) {
     # positive errno (`return Err(0 - r)` in lib/net.cyr). So a failed socket or
     # a refused connection fell straight through to send/recv on an unusable fd.
     # Test both halves explicitly.
+    #
+    # And until 1.2.8 the connect itself could never reach the target.
+    # `sock_connect` takes a PACKED network-byte-order IPv4 address (it goes
+    # straight into sockaddr_in.sin_addr), but `host` here is the URL's host
+    # C STRING -- so the call handed it a heap pointer, truncated to 32 bits,
+    # and connected (or hung trying) to whatever address that spelled. Every
+    # outbound call phylax makes -- hoosh triage and daimon
+    # register/heartbeat/deregister in src/integration.cyr -- failed this way
+    # since the port. cyrius 6.6.9 fixed the same defect in the stdlib client
+    # and added `net_resolve_ipv4`: a dotted quad, `localhost`, /etc/hosts,
+    # then one DNS A query. Regression-tested against a real listener in
+    # tests/test_integration.tcyr.
+    var ip = net_resolve_ipv4(host);
+    if (ip == 0 - 1) { return http_post_err(); }
     var fd_t, fd_v = tcp_socket();
     if (is_err_result(fd_t) == 1) { return http_post_err(); }
     var fd = fd_v;
-    var conn_t, conn_v = sock_connect(fd, host, port);
+    var conn_t, conn_v = sock_connect(fd, ip, port);
     if (is_err_result(conn_t) == 1) { sys_close(fd); return http_post_err(); }
 
     # Send headers

@@ -46,6 +46,19 @@
 - Suite 188 → **404 assertions across 18 files**; 0 over-reads across 6,306
   guard-page combinations; ADR 0002 records the contract
 
+### v1.2.8 — cyrius 6.6.20 + three pre-existing defects (2026-11-03)
+- cyrius 6.6.2 → **6.6.20**; majra 2.9.3 / bote 3.3.17 / libro 2.10.8 (newest tags
+  pinned to 6.6.20); folded sakshi 2.5.7 / sigil 3.13.10 / bayan 1.5.12
+- **Files > 64 KiB were never read** (C-style octal in the `S_ISREG` test is decimal
+  in Cyrius) — scan, quarantine, rules/STIX/config loaders, MCP scan tool. Since 0.9
+- **`http_post` never connected** (host C string passed as a packed IPv4) — fixed via
+  6.6.9's `net_resolve_ipv4`; tested against a forked real listener
+- `WATCH_MASK` collapsed to one definition (the dist had shipped 266, the CLI used 394)
+- `path =` overrides removed — local builds had been vendoring sibling working trees
+- Sidecars compile-verified (34 → 5 / 22 → 4); `lib/math.cyr` include seeds aarch64
+- Suite 404 → **421 across 18 files**, also 421/421 on aarch64 under qemu
+- Binary 915,728 → 866,640 B; 232 duplicate-fn warnings → 0
+
 ## Backlog
 
 ### v0.9.1 — TAR Support
@@ -83,19 +96,40 @@
 - Coverage: suite **188 → 342 assertions across 15 → 17 files**; JSON/SARIF output
   is parsed back rather than length-checked.
 
-### Dep pruning — the vestigial majra/libro blocks, and the sigil double-stage
+### Dep pruning — the vestigial majra/libro blocks
 - `[deps.majra]` and `[deps.libro]` are referenced by nothing in phylax's link
   closure (staged, DCE-pruned) and have been flagged for a dedicated pruning
   pass since 1.2.4.
 - ⚠ Measured at 1.2.5: **simply deleting the two blocks does not help.** The
-  pull survives transitively through bote 3.3.7, phylax loses control of the
+  pull survives transitively through bote, phylax loses control of the
   versions, and a *larger* majra bundle is staged (locked files 65 → 79).
-- The real cost is upstream: libro 2.8.12 declares sigil as a **git** dep, so
-  granular `lib/sigil_*.cyr` leaves stage alongside the folded `lib/sigil.cyr`
-  monolith. Both are 3.12.9, so the duplicate `sha256_hex` / `sha512_hex` /
-  `hex_decode_into` definitions are inert, but they cost ~350 KB of DCE binary
-  (2,207,520 → 2,562,016 B). File upstream against libro: now that sigil is a
-  folded stdlib module, its git dep should follow sakshi's and be dropped.
+  Re-measure before acting; that figure predates 6.6.20.
+- ~~The sigil double-stage~~ — **RESOLVED by cyrius 6.6.11** (S2): a git dep's
+  thin sigil files are no longer vendored when `sigil` is a stdlib leaf. At 1.2.8
+  the `lib/sigil_*.cyr` leaves are gone and the 232 duplicate-fn warnings with them.
+
+### aarch64 correctness (compiles and passes; not yet correct)
+- `src/types.cyr` hardcodes x86_64 values that override the stdlib's per-target
+  ones: `O_NOFOLLOW = 131072` is `O_LARGEFILE` on aarch64 (`O_NOFOLLOW` there is
+  32768), so `phylax_read_file`'s symlink refusal is off on aarch64; the `SYS_*` /
+  `SYS_INOTIFY_*` numbers are x86 numbers. Drop the local copies in favour of the
+  stdlib's (cyrius 6.6.3/6.6.4 name phylax for exactly this).
+- CI's aarch64 step checks for `cc5_aarch64`; the toolchain ships `cycc_aarch64`,
+  so the step always skips. Its comment (blocked on `f64_log2`) is also stale —
+  the build worked on 6.6.2 and the suite is 421/421 under qemu at 1.2.8.
+- `syscall_aarch64_linux.cyr`'s `sys_rename` duplicates the stdlib's (warning only).
+
+### Outbound HTTP and daemon hardening
+- `http_post`: use `sock_send_all` (6.6.8) instead of ignoring `sock_send`'s count;
+  send `Host: host:port` (6.6.11 fixed the stdlib client's equivalent).
+- Daemon: the raw `sys_write(client, …)` reply path can still raise SIGPIPE;
+  6.6.16's CVE-74 fix covers the socket send path only.
+
+### CI gate gaps
+- CI runs `cyrius deps` before `cyrius deps --verify`; since 6.6.9 `deps` writes
+  missing lock rows, so a missing row cannot fail the gate.
+- Nothing builds a *consumer* of `dist/phylax*.cyr`; 1.2.8 did it by hand in
+  scratch. A tiny consumer job would make the sidecar contract a gate.
 
 ## v1.0 Criteria
 
@@ -115,91 +149,21 @@
 - Kernel-level monitoring (userspace only)
 - WASM plugin system (reconsider post-v1)
 
-## Moving the cyrius pin to 6.6.6
+## ~~Moving the cyrius pin to 6.6.6~~ (DONE — superseded by the 6.6.20 bump at 1.2.8)
 
-**Current pin: `cyrius = "6.6.2"` (cyrius.cyml:8).** Nothing blocks the bump,
-but phylax has the most 6.6.6-adjacent findings of any repo in this sibling
-slice, and two of them are real bugs worth fixing in the same patch.
+All four findings of the 6.6.6 plan are closed:
 
-### Windows: phylax CAN build for PE, and it rewrites report files with `O_TRUNC`
-
-`src/cli.cyr:741` and `src/cli.cyr:850` both do
-`sys_open(path, 577, 420)  # O_WRONLY|O_CREAT|O_TRUNC, 0644` to write a report.
-Before 6.6.6 a PE build's `O_TRUNC` was **not decoded** — the open succeeded and
-the old tail of the previous, longer report stayed behind after the new content.
-That matters here because phylax is not Linux-pinned the way it looks:
-`src/syscall_x86_64_linux.cyr` is empty by design and its aarch64 peer only
-backfills `rename`, so `sys_open` resolves to the vendored stdlib, and that
-stdlib ships the Windows arms (`lib/syscalls_windows.cyr`, `lib/fs_win.cyr`,
-`lib/process_win.cyr`, `lib/thread_win.cyr`, `lib/alloc_windows.cyr`,
-`lib/sync_windows.cyr`, `lib/args_win.cyr`). Only the inotify watch path is
-Linux-only. **The fix is in the compiler (`_pe_open_flags`,
-`src/backend/x86/emit.cyr`), so the pin bump is the whole fix** — no source
-change. Also gained on PE: opens honour the access mode, and
-`file_exists`/`file_read_all` no longer ask for write access, so they now
-succeed on read-only files and volumes — directly useful for a scanner.
-
-### ⚠ `WATCH_MASK` is declared twice with DIFFERENT values, and the dist ships the wrong one
-
-- `src/types.cyr:35` — `var WATCH_MASK = 266;` (`IN_CREATE|IN_CLOSE_WRITE|IN_MODIFY`)
-- `src/cli.cyr:425` — `var WATCH_MASK = 0x0000018A;` = **394** (the same three
-  plus `IN_MOVED_TO`)
-
-6.6.6 makes "a global redeclared later wins everywhere from program start" true
-(the warning was previously false — verified with a probe: a top-level read
-before the second declaration returned **0** under 6.6.2/6.6.5 and returns the
-last value under 6.6.6). **For the binary, nothing changes**: both readers
-(`src/cli.cyr:476`, `:497`) sit *after* the second declaration, so they saw 394
-before and see 394 now, and `cyrius build` under 6.6.6 exits 0.
-
-**The live defect is the bundle.** `cli.cyr` is not in `[lib]` — `types.cyr` is.
-So `dist/phylax.cyr` hands daimon / aegis / t-ron `WATCH_MASK = 266`, without
-`IN_MOVED_TO`, while the CLI watches with 394. Collapse the two to one
-definition in `types.cyr` and delete the `cli.cyr` copy. (`IN_CREATE`,
-`IN_MODIFY` and `IN_CLOSE_WRITE` are duplicated too — `src/types.cyr:32-34` vs
-`src/cli.cyr:421-423` — but same-valued, so they are only noise.) None of the
-four differ in **type or size**, so none trips 6.6.6's new
-`global 'X' redeclared with a different type or size` compile error — confirmed
-by probe and by a clean build.
-
-### ⚠ A pair-return already drops its tag — the exact family 6.6.6 hardened
-
-```
-warning:src/types.cyr:297:21: `scan_result_highest_severity` returns a `: stack`
-  pair on another path but a SINGLE value here — the tag is dropped, so the
-  caller reads this error as its TAG. Did you mean `return Err(x);`?
-```
-
-This is **pre-existing** (present under 6.6.2 and 6.6.6 alike) and is still a
-*warning*, not one of 6.6.6's new hard errors — `cyrius build` exits 0 on both.
-But it is a real latent bug: the caller reads the error value as the tag.
-6.6.6's direction of travel is to make this class fatal; fix it now while it is
-still cheap (`return None();` at the `len == 0` path is the one that mismatches).
-
-### Everything else on the list is absent
-
-39 structs, **all** used as heap layouts (`alloc(...)` + generated accessors) —
-zero `: <StructName>` parameter/variable annotations, zero `StructName { … }`
-initializers, zero struct-to-struct copies, so the new struct-copy error and the
-by-value deep-copy change have nothing to act on. No `async` fns, no `operator`
-fns, no top-level `{ }` blocks, no `: cstring` parameters, no locally defined
-`vec_*` (with `assert` and `vec` both in `[deps] stdlib`, so assert.cyr's new
-transitive `include "lib/vec.cyr"` cannot collide). `lib/regression.cyr` is not
-vendored and no `regression_*` helper is called, so the new exec deadline is
-irrelevant. All of `src/`, `programs/` and `tests/` pass `cyrius fmt --check`
-under 6.6.6.
-
-**Measured:** `cyrius build` under 6.6.2 and under 6.6.6 both exit 0 with the
-**identical 236-line diagnostic set** (the bulk of which is the
-`lib/sigil*.cyr` duplicate-fn family, not phylax's).
-
-### Verify after bumping
-
-`cyrius deps` (re-vendor for 6.6.6's rewritten `lib/io.cyr`), then
-`cyrius build` + `cyrius test` + `cyrius lint` + `cyrius vet` +
-`cyrius fmt --check` + `cyrius distlib`, and confirm the diagnostic count is
-still 236 — a rise means something new fired. If the `WATCH_MASK` collapse
-lands in the same patch, re-cut `dist/phylax.cyr` and tell the three consumers.
+- **Windows `O_TRUNC` on report writes** (`src/cli.cyr` `sys_open(path, 577, 420)`)
+  — fixed in the compiler at 6.6.6; the pin bump was the whole fix.
+- **`WATCH_MASK` declared twice with different values** — collapsed to one
+  definition in `src/types.cyr` (394 = `0x18A`, the value the CLI always used) at
+  1.2.8; regression-tested in `tests/test_cli.tcyr`. 6.6.20 is the first
+  toolchain to flag it ("redefined with conflicting value").
+- **`scan_result_highest_severity` pair-return warning** — not emitted on 6.6.20
+  (6.6.9 removed the nullary-`None()` false positive), and the function has no
+  callers in phylax.
+- **"Confirm the diagnostic count is still 236"** — it is now **3**: 232 of the
+  236 were libro's duplicate sigil leaves, which 6.6.11 stopped vendoring.
 
 ## Adopting cmdit (CLI parsing)
 

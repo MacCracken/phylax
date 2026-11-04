@@ -122,18 +122,24 @@ File Path
 
 ## Dependencies
 
-Current as of **1.2.5** (cyrius 6.5.35). Canonical detail — including why the
+Current as of **1.2.8** (cyrius 6.6.20). Canonical detail — including why the
 declaration *shape* of the folded modules matters — lives in
 [`docs/development/dependency-watch.md`](../development/dependency-watch.md).
 
 | Dependency | Version | Kind | Purpose |
 |-----------|---------|------|---------|
-| Cyrius stdlib | 6.5.35 | toolchain | 34 declared modules (string, vec, hashmap, io, fs, net, bayan, ...) |
-| sakshi | 2.4.11 | folded stdlib | Structured logging |
-| sigil | 3.12.9 | folded stdlib | SHA-256 cryptographic hashing (SHA-NI dispatch) |
-| bote | 3.3.7 | git dep | MCP tool registry and JSON-RPC dispatch (`dist/bote-core.cyr`) |
-| majra | 2.7.0 | git dep | Pub/sub events — **vestigial**, staged + DCE-pruned |
-| libro | 2.8.12 | git dep | Audit chain — **vestigial**, staged + DCE-pruned |
+| Cyrius stdlib | 6.6.20 | toolchain | 34 declared modules (string, vec, hashmap, io, fs, net, bayan, ...) |
+| sakshi | 2.5.7 | folded stdlib | Structured logging |
+| sigil | 3.13.10 | folded stdlib | SHA-256 cryptographic hashing (SHA-NI dispatch) |
+| bayan | 1.5.12 | folded stdlib | JSON / TOML / CSV / base64 / bigint |
+| bote | 3.3.17 | git dep | MCP tool registry and JSON-RPC dispatch (`dist/bote-core.cyr`) |
+| majra | 2.9.3 | git dep | Pub/sub events — **vestigial**, staged + DCE-pruned |
+| libro | 2.10.8 | git dep | Audit chain — **vestigial**, staged + DCE-pruned |
+
+Consumer bundles (`dist/phylax.cyr`, `dist/phylax-core.cyr`) carry a
+compile-verified requires block; their `.deps` sidecars name only the leaves the
+bundle needs (`math http net fs syscalls` / `math http net syscalls`) — the rest
+arrive through phylax's git deps' own bundles. See CHANGELOG 1.2.8 → Breaking.
 
 `bayan` (cyrius 6.1.25 carve) supplies the former `json` / `toml` / `csv` /
 `base64` / `bigint` stdlib modules.

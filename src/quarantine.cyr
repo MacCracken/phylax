@@ -127,13 +127,13 @@ fn quarantine_new(dir) {
             for (var i = 0; i < count; i = i + 1) {
                 var item = json_v_arr_get(root, i);
                 var entry = alloc(56);
-                store64(entry, json_v_str(json_v_obj_get(item, "id")));
-                store64(entry + 8, json_v_str(json_v_obj_get(item, "original_path")));
-                store64(entry + 16, json_v_str(json_v_obj_get(item, "quarantine_path")));
-                store64(entry + 24, json_v_str(json_v_obj_get(item, "reason")));
-                store64(entry + 32, json_v_int(json_v_obj_get(item, "timestamp")));
-                store64(entry + 40, json_v_str(json_v_obj_get(item, "sha256")));
-                store64(entry + 48, json_v_int(json_v_obj_get(item, "size")));
+                store64(entry, json_v_str(bayan_json_v_obj_get_by_cstr(item, "id")));
+                store64(entry + 8, json_v_str(bayan_json_v_obj_get_by_cstr(item, "original_path")));
+                store64(entry + 16, json_v_str(bayan_json_v_obj_get_by_cstr(item, "quarantine_path")));
+                store64(entry + 24, json_v_str(bayan_json_v_obj_get_by_cstr(item, "reason")));
+                store64(entry + 32, json_v_int(bayan_json_v_obj_get_by_cstr(item, "timestamp")));
+                store64(entry + 40, json_v_str(bayan_json_v_obj_get_by_cstr(item, "sha256")));
+                store64(entry + 48, json_v_int(bayan_json_v_obj_get_by_cstr(item, "size")));
                 vec_push(load64(mgr + 8), entry);
             }
             store64(mgr + 24, count + 1);

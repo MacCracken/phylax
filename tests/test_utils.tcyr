@@ -100,6 +100,45 @@ fn test_hex_decode() {
     assert_eq(load64(out_len), 0, "empty hex decoded length = 0");
 }
 
+# ----------------------------------------------------------------
+# phylax_read_file across PHYLAX_MMAP_THRESHOLD (64 KiB). Files at or below it
+# take the heap path; above it, the mmap path, which fstat-checks S_ISREG.
+# Until 1.2.8 that check used C-style octal (`0100000`), which Cyrius reads as
+# DECIMAL, so it rejected every regular file and nothing over 64 KiB could be
+# read. Every case below the threshold passed the whole time, which is why no
+# test noticed.
+# ----------------------------------------------------------------
+
+var RF_DIR = "/tmp/phylax-test-utils";
+
+# Write `size` bytes of a position-dependent pattern to `path`, then read it
+# back through phylax_read_file and check length, first byte and last byte.
+fn read_file_roundtrip(path, size) {
+    var buf = alloc(size);
+    for (var i = 0; i < size; i = i + 1) { store8(buf + i, (i * 7 + 3) & 0xff); }
+    file_write_all(path, buf, size);
+    G_SCAN_ALLOC_TOTAL = 0;
+    var s = phylax_read_file(path);
+    if (s == 0) { return 0; }
+    if (str_len(s) != size) { return 0; }
+    if (load8(str_data(s)) != 3) { return 0; }
+    if (load8(str_data(s) + size - 1) != (((size - 1) * 7 + 3) & 0xff)) { return 0; }
+    return 1;
+}
+
+fn test_read_file_sizes() {
+    test_group("read_file_sizes");
+    sys_mkdir(RF_DIR, 448);
+
+    assert_eq(0o100000, 32768, "0o100000 is S_IFREG; a bare leading zero would be decimal");
+    assert_eq(read_file_roundtrip("/tmp/phylax-test-utils/small.bin", 4096), 1, "4 KiB file reads (heap path)");
+    assert_eq(read_file_roundtrip("/tmp/phylax-test-utils/at.bin", 65536), 1, "file at the 64 KiB threshold reads");
+    assert_eq(read_file_roundtrip("/tmp/phylax-test-utils/over.bin", 65537), 1, "1 B over threshold reads (mmap)");
+    assert_eq(read_file_roundtrip("/tmp/phylax-test-utils/big.bin", 1048576), 1, "1 MiB file reads (mmap path)");
+    G_SCAN_ALLOC_TOTAL = 0;
+    assert_eq(phylax_read_file("/tmp/phylax-test-utils/absent.bin"), 0, "missing file still returns 0");
+}
+
 fn main() {
     phylax_init();
 
@@ -107,6 +146,7 @@ fn main() {
     test_memmem_variants();
     test_hex();
     test_hex_decode();
+    test_read_file_sizes();
 
     return assert_summary();
 }

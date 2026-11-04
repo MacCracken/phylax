@@ -417,12 +417,7 @@ fn cmd_report(path, format, rules_path) {
 # CLI — Subcommand: watch (inotify-based directory watcher)
 # ================================================================
 
-# Inotify event mask constants
-var IN_MODIFY      = 0x00000002;
-var IN_CLOSE_WRITE = 0x00000008;
-var IN_CREATE      = 0x00000100;
-var IN_MOVED_TO    = 0x00000080;
-var WATCH_MASK     = 0x0000018A;  # IN_MODIFY | IN_CLOSE_WRITE | IN_CREATE | IN_MOVED_TO
+# Inotify event masks (IN_* and WATCH_MASK) are defined once, in src/types.cyr.
 
 # Suffix-match a filename Str against one --extensions entry. The entry may
 # be written with or without a leading dot ("txt" and ".txt" both match

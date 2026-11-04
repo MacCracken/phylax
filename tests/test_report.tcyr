@@ -31,9 +31,16 @@ fn mk_report(result) {
     return report_from_results(str_from("phylax-test"), results);
 }
 
+# obj[key] for a C-string/literal key (0 if absent or not an object). Every key
+# in this file is a literal, so this is bayan's cstr-keyed lookup -- the name the
+# deprecated `json_v_obj_get` alias forwarded to until bayan 1.5.10.
+fn jget(obj, key) {
+    return bayan_json_v_obj_get_by_cstr(obj, key);
+}
+
 # Fetch a nested JSON string value: obj[key] as a Str (0 if absent/wrong tag).
 fn jstr(obj, key) {
-    return json_v_str(json_v_obj_get(obj, key));
+    return json_v_str(jget(obj, key));
 }
 
 # ----------------------------------------------------------------
@@ -80,10 +87,10 @@ fn test_report_json_empty() {
     assert(str_eq(jstr(root, "session_id"), str_from("phylax-empty")), "session_id round-trips");
     assert(str_len(jstr(root, "generated_at")) == 19, "generated_at is a 19-char timestamp");
     assert(str_eq(jstr(root, "engine_version"), VERSION), "engine_version is VERSION");
-    assert(json_v_is_int(json_v_obj_get(root, "total_findings")) == 1, "total_findings is a JSON number");
-    assert_eq(json_v_int(json_v_obj_get(root, "total_findings")), 0, "total_findings = 0");
-    assert(json_v_is_arr(json_v_obj_get(root, "results")) == 1, "results is a JSON array");
-    assert_eq(json_v_arr_len(json_v_obj_get(root, "results")), 0, "results array is empty");
+    assert(json_v_is_int(jget(root, "total_findings")) == 1, "total_findings is a JSON number");
+    assert_eq(json_v_int(jget(root, "total_findings")), 0, "total_findings = 0");
+    assert(json_v_is_arr(jget(root, "results")) == 1, "results is a JSON array");
+    assert_eq(json_v_arr_len(jget(root, "results")), 0, "results array is empty");
 }
 
 fn test_report_json_findings() {
@@ -93,21 +100,21 @@ fn test_report_json_findings() {
         str_from("looks bad"), SEVERITY_HIGH));
     var root = json_v_parse(report_render_json(rep));
     assert(json_v_is_obj(root) == 1, "findings json parses back as an object");
-    assert_eq(json_v_int(json_v_obj_get(root, "total_findings")), 1, "total_findings = 1");
+    assert_eq(json_v_int(jget(root, "total_findings")), 1, "total_findings = 1");
 
     # Summary is a nested object, not a stringified blob.
-    var sm = json_v_obj_get(root, "summary");
+    var sm = jget(root, "summary");
     assert(json_v_is_obj(sm) == 1, "summary is a nested object");
-    assert_eq(json_v_int(json_v_obj_get(sm, "targets_scanned")), 1, "summary.targets_scanned = 1");
-    assert_eq(json_v_int(json_v_obj_get(sm, "high")), 1, "summary.high = 1");
-    assert_eq(json_v_int(json_v_obj_get(sm, "critical")), 0, "summary.critical = 0");
+    assert_eq(json_v_int(jget(sm, "targets_scanned")), 1, "summary.targets_scanned = 1");
+    assert_eq(json_v_int(jget(sm, "high")), 1, "summary.high = 1");
+    assert_eq(json_v_int(jget(sm, "critical")), 0, "summary.critical = 0");
 
-    var results = json_v_obj_get(root, "results");
+    var results = jget(root, "results");
     assert_eq(json_v_arr_len(results), 1, "one result");
     var r0 = json_v_arr_get(results, 0);
     assert(str_eq(jstr(r0, "target"), str_from("/tmp/evil.bin")), "result.target is the scanned path");
 
-    var findings = json_v_obj_get(r0, "findings");
+    var findings = jget(r0, "findings");
     assert(json_v_is_arr(findings) == 1, "findings is a nested array");
     assert_eq(json_v_arr_len(findings), 1, "one finding");
 
@@ -116,8 +123,8 @@ fn test_report_json_findings() {
     assert(str_eq(jstr(f0, "description"), str_from("looks bad")), "finding.description");
     assert(str_eq(jstr(f0, "severity"), str_from("HIGH")), "finding.severity is the name, not the enum");
     assert(str_eq(jstr(f0, "category"), str_from("Malware")), "finding.category is the name");
-    assert(json_v_is_int(json_v_obj_get(f0, "timestamp")) == 1, "finding.timestamp is a JSON number");
-    assert_eq(json_v_int(json_v_obj_get(f0, "timestamp")), 1767225600, "finding.timestamp value");
+    assert(json_v_is_int(jget(f0, "timestamp")) == 1, "finding.timestamp is a JSON number");
+    assert_eq(json_v_int(jget(f0, "timestamp")), 1767225600, "finding.timestamp value");
 }
 
 fn test_report_json_escaping() {
@@ -132,10 +139,10 @@ fn test_report_json_escaping() {
     var root = json_v_parse(out);
     assert(json_v_is_obj(root) == 1, "json with metacharacters still parses");
 
-    var f0 = json_v_arr_get(json_v_obj_get(json_v_arr_get(json_v_obj_get(root, "results"), 0), "findings"), 0);
+    var f0 = json_v_arr_get(jget(json_v_arr_get(jget(root, "results"), 0), "findings"), 0);
     assert(str_eq(jstr(f0, "rule_name"), str_from("say \"hi\"")), "quotes round-trip");
     assert(str_eq(jstr(f0, "description"), str_from("tab\there\nnewline")), "tab/newline round-trip");
-    var r0 = json_v_arr_get(json_v_obj_get(root, "results"), 0);
+    var r0 = json_v_arr_get(jget(root, "results"), 0);
     assert(str_eq(jstr(r0, "target"), str_from("C:\\tmp\\a.exe")), "backslashes round-trip");
 }
 
@@ -152,7 +159,7 @@ fn test_report_json_null_target() {
 
     var root = json_v_parse(report_render_json(rep));
     assert(json_v_is_obj(root) == 1, "memory-target json parses");
-    var r0 = json_v_arr_get(json_v_obj_get(root, "results"), 0);
+    var r0 = json_v_arr_get(jget(root, "results"), 0);
     assert_eq(str_len(jstr(r0, "target")), 0, "null target renders as empty string");
 }
 
@@ -172,13 +179,13 @@ fn test_report_sarif_empty() {
     assert(str_eq(jstr(root, "version"), str_from("2.1.0")), "sarif version is 2.1.0");
     assert(str_len(jstr(root, "$schema")) > 0, "sarif carries a $schema");
 
-    var runs = json_v_obj_get(root, "runs");
+    var runs = jget(root, "runs");
     assert(json_v_is_arr(runs) == 1, "runs is an array");
     assert_eq(json_v_arr_len(runs), 1, "exactly one run");
     var run = json_v_arr_get(runs, 0);
-    assert_eq(json_v_arr_len(json_v_obj_get(run, "results")), 0, "no results for an empty report");
+    assert_eq(json_v_arr_len(jget(run, "results")), 0, "no results for an empty report");
 
-    var driver = json_v_obj_get(json_v_obj_get(run, "tool"), "driver");
+    var driver = jget(jget(run, "tool"), "driver");
     assert(str_eq(jstr(driver, "name"), str_from("phylax")), "tool.driver.name = phylax");
     assert(str_eq(jstr(driver, "version"), VERSION), "tool.driver.version = VERSION");
 }
@@ -195,8 +202,8 @@ fn test_report_sarif_findings() {
 
     var root = json_v_parse(report_render_sarif(rep));
     assert(json_v_is_obj(root) == 1, "sarif with findings parses");
-    var run = json_v_arr_get(json_v_obj_get(root, "runs"), 0);
-    var sr = json_v_obj_get(run, "results");
+    var run = json_v_arr_get(jget(root, "runs"), 0);
+    var sr = jget(run, "results");
     assert_eq(json_v_arr_len(sr), 3, "three sarif results");
 
     # Severity -> SARIF level mapping
@@ -207,26 +214,26 @@ fn test_report_sarif_findings() {
     assert(str_eq(jstr(json_v_arr_get(sr, 2), "level"), str_from("note")), "INFO maps to level note");
 
     # message.text
-    assert(str_eq(jstr(json_v_obj_get(r0, "message"), "text"), str_from("very bad")),
+    assert(str_eq(jstr(jget(r0, "message"), "text"), str_from("very bad")),
       "message.text is the description");
 
     # locations[0].physicalLocation.artifactLocation.uri
-    var locs = json_v_obj_get(r0, "locations");
+    var locs = jget(r0, "locations");
     assert(json_v_is_arr(locs) == 1, "locations is an array");
     assert_eq(json_v_arr_len(locs), 1, "one location");
-    var art = json_v_obj_get(json_v_obj_get(json_v_arr_get(locs, 0), "physicalLocation"), "artifactLocation");
+    var art = jget(jget(json_v_arr_get(locs, 0), "physicalLocation"), "artifactLocation");
     assert(str_eq(jstr(art, "uri"), str_from("/tmp/crit.bin")), "artifactLocation.uri is the target path");
 
     # properties
-    var props = json_v_obj_get(r0, "properties");
+    var props = jget(r0, "properties");
     assert(str_eq(jstr(props, "severity"), str_from("CRITICAL")), "properties.severity");
     assert(str_eq(jstr(props, "category"), str_from("Malware")), "properties.category");
-    assert(json_v_is_int(json_v_obj_get(props, "timestamp")) == 1, "properties.timestamp is a number");
+    assert(json_v_is_int(jget(props, "timestamp")) == 1, "properties.timestamp is a number");
 
     # invocations
-    var inv = json_v_arr_get(json_v_obj_get(run, "invocations"), 0);
-    assert(json_v_is_bool(json_v_obj_get(inv, "executionSuccessful")) == 1, "executionSuccessful is a JSON bool");
-    assert_eq(json_v_bool(json_v_obj_get(inv, "executionSuccessful")), 1, "executionSuccessful = true");
+    var inv = json_v_arr_get(jget(run, "invocations"), 0);
+    assert(json_v_is_bool(jget(inv, "executionSuccessful")) == 1, "executionSuccessful is a JSON bool");
+    assert_eq(json_v_bool(jget(inv, "executionSuccessful")), 1, "executionSuccessful = true");
 }
 
 fn test_report_sarif_rfc3339() {
@@ -241,7 +248,7 @@ fn test_report_sarif_rfc3339() {
 
     var rep = report_from_results(str_from("phylax-test"), vec_new());
     var root = json_v_parse(report_render_sarif(rep));
-    var inv = json_v_arr_get(json_v_obj_get(json_v_arr_get(json_v_obj_get(root, "runs"), 0), "invocations"), 0);
+    var inv = json_v_arr_get(jget(json_v_arr_get(jget(root, "runs"), 0), "invocations"), 0);
     assert_eq(str_len(jstr(inv, "startTimeUtc")), 20, "sarif startTimeUtc is rfc3339");
 }
 

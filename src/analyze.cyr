@@ -2,23 +2,42 @@
 # Entropy analysis
 # ================================================================
 
+# f64_log2 (here and in src/hashing.cyr, which follows this module in both
+# profiles) is an x87 builtin on x86_64 but lowers to `_f64_log2_polyfill` on
+# aarch64, which lives in lib/math.cyr. From cyrius 6.6.18 `cyrius distlib`
+# derives the dist/*.deps sidecars ONLY from what the bundle needs to compile
+# on six targets, seeded by the lib/ includes the bundled modules keep -- and
+# because nothing is a missing SYMBOL on x86, the fixpoint cannot discover
+# `math` by itself: distlib refuses the aarch64-linux verify and writes no
+# sidecar at all. This include is that seed. Without it, a consumer that
+# provisions from the sidecar gets no lib/math.cyr and cannot build for
+# aarch64. (Pre-6.6.18 sidecars named `math` only because distlib unioned in
+# this repo's whole [deps] stdlib declaration.)
+include "lib/math.cyr"
+
 # Shannon entropy of a byte buffer (bits per byte, 0.0 .. 8.0)
 # data = address of bytes, len = byte count
 # Returns f64 as i64 bit pattern
-# ⚠ The `data == 0` test below is MEASURED at ~1.95 us per call — 12.95 us ->
-# 14.9 us on the 1 KiB benchmark (three runs each, A/B against this exact
-# line). That is absurd for one integer compare and is a code-layout artifact,
-# not real work: this function allocates a 2 KiB frequency table that already
-# sits at the per-function stack budget, and one more test in the frame changes
-# how it is placed. Hoisting the test into a thin wrapper was tried and did NOT
-# recover it, nor did reordering or merging the two tests into one `||`.
+# ⚠ This function's microbenchmark is PLACEMENT-SENSITIVE by about 1-2 us per
+# call, and that is code layout, not work. Measured at 1.2.8 with verbatim
+# copies of this body compiled into a scratch bench under both toolchains:
+#   - the copy runs 13.69 us on cyrius 6.6.2 AND on 6.6.20, while this library
+#     copy ran 12.60 us on 6.6.2 and 13.65 us on 6.6.20. The same source is
+#     1.1 us slower on 6.6.2 when it merely sits at a different address, so the
+#     1.2.8 entropy_1k "+8 %" is the loss of a lucky placement, not a regression;
+#   - dropping the `data == 0` test saves 2.1 us on 6.6.2 and 1.0 us on 6.6.20
+#     -- the 1.2.6 "+1.95 us for one compare" finding, which this reframes. (The
+#     1.2.6 note blamed a frame at the stack budget; the frequency table is an
+#     alloc() heap buffer, and the "oversized array local" compiler note that
+#     suggested it comes from lib/sigil.cyr.)
+# Hoisting the test into a thin wrapper, reordering it, or merging both tests
+# into one `||` did not recover it at 1.2.6.
 #
-# Kept anyway, deliberately. Without it a null buffer is dereferenced and the
-# process dies; phylax is a scanner whose whole job is surviving hostile input,
-# and the cost is a fixed per-call one that vanishes on real workloads
-# (entropy_1m, a 1 MiB buffer, moves +0.7% — inside noise). Revisit if the
-# toolchain's frame placement improves; do not drop the guard to win the
-# microbenchmark back.
+# The guard stays, deliberately. Without it a null buffer is dereferenced and
+# the process dies; phylax is a scanner whose whole job is surviving hostile
+# input, and the cost is a fixed per-call one that vanishes on real workloads
+# (entropy_1m, a 1 MiB buffer, is flat across both measurements). Do not drop
+# the guard to win the microbenchmark back.
 fn shannon_entropy(data, len) {
     if (data == 0 || len <= 0) { return F64_ZERO; }
 
