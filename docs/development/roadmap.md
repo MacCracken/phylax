@@ -72,6 +72,20 @@
 - `F64_255` / `F64_ONE` removed (mabda `const` collision for consumers)
 - ⚠ DCE binary 866 KB → 2.36 MB: compaction cap (fixed in cyrius 6.7.14)
 
+### v1.3.1 — cyrius 6.7.18 + deps latest; bayan key-type fixes (2026-11-04)
+- cyrius 6.7.9 → **6.7.18**; majra 2.13.0 / bote 3.8.6 / libro 2.11.3 (latest);
+  folded sakshi 2.5.10 / sigil 3.13.15 / bayan 1.11.1
+- **The MCP surface never worked:** bote refused all five tools (Str names, a
+  JSON string where a ToolSchema object belongs) and `phylax_scan` SIGSEGV'd on
+  bote's raw-JSON arguments — fixed; tested end to end through bote's dispatcher
+- **TOML YARA rules loaded no fields; the config file was never read** —
+  Str keys passed to bayan's cstr-keyed `toml_get` (exposed by bayan 1.11.1's
+  typed keys) — fixed with `_by_cstr` lookups
+- Binary 2.36 MB → **914 KB** (6.7.14 removed the DCE compaction cap); build
+  warnings 3 → 1; sidecars now name sigil/bayan/tagged themselves
+- `sakshi` seeded into the sidecars (it reached consumers only via vestigial libro)
+- Suite 441 → **479 / 19 files, on x86_64 and aarch64**
+
 ## Backlog
 
 ### v0.9.1 — TAR Support
@@ -127,12 +141,23 @@
   aarch64 step fixed (`cycc_aarch64`) and now runs the suite under qemu.
   `tests/test_platform.tcyr` keeps it honest. See CHANGELOG 1.3.0.
 
-### Binary size — the DCE compaction cap
-- On cyrius < 6.7.14, `CYRIUS_DCE=1` stops compacting past 4,096 dead-code runs.
-  phylax crossed it at 1.3.0 (bote-core 3.4.10: 4,048 → 4,105 dead fns), so the
-  binary keeps 1.5 MB of NOPed code (866 KB → 2.36 MB). Behaviour is unaffected.
-- Fix: pin cyrius ≥ 6.7.14 (IN-4 removes the cap). Pruning the vestigial
-  majra/libro blocks does NOT help (re-measured at 1.3.0).
+### ~~Binary size — the DCE compaction cap~~ (x86 RESOLVED at 1.3.1)
+- cyrius 6.7.14 removed the 4,096-run cap; at 1.3.1 on 6.7.18 the x86_64 binary
+  is 914 KB again (it was 2.36 MB at 1.3.0).
+- Remaining: **aarch64 does not compact at all** ("no compaction repair model
+  yet"), so the aarch64 binary is 3.29 MB and grows with every dep (bote-core
+  is 673 fns at 3.8.6; phylax calls 3). Toolchain-side.
+
+### Config file has no effect — the `CFG_*` globals have no readers
+- Since 1.3.1 `config_apply_toml` reads `[scan] rules_path` / `max_file_size`,
+  `[hoosh] url` and `[daimon] url` correctly, but nothing in `src/cli.cyr`
+  consumes `CFG_RULES_PATH` / `CFG_MAX_FILE_SIZE` / `CFG_HOOSH_URL` /
+  `CFG_DAIMON_URL`. Wire them in as defaults that flags override.
+
+### TOML rule pattern type `regex`
+- The TOML loader treats every pattern type other than `hex` as a literal
+  string, so a `type = "regex"` pattern is matched literally. Either map it to
+  the regex matcher the `.yar` path uses, or refuse it.
 
 ### Outbound HTTP and daemon hardening
 - `http_post`: use `sock_send_all` (6.6.8) instead of ignoring `sock_send`'s count;

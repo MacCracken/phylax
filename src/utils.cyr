@@ -2,6 +2,17 @@
 # Utility — stdlib shims (functions not in stdlib or named differently)
 # ================================================================
 
+# sakshi (structured logging) is called from this module on down (http_post's
+# refusals here, the YARA loader, quarantine, the CLI). This include is what
+# seeds `sakshi` into the dist/*.deps sidecars. cyrius distlib derives a
+# sidecar from what the bundle needs to compile, and until 1.3.1 sakshi
+# compiled only because phylax's VESTIGIAL libro dep pulls patra, whose bundle
+# is the one vendored file that includes lib/sakshi.cyr — so no sidecar named
+# it, and a consumer was one dep-pruning pass from `sakshi_*` undefined (the
+# exact shape cyrius.cyml's folded-modules note warns about). Same pattern as
+# the lib/math.cyr include in src/analyze.cyr.
+include "lib/sakshi.cyr"
+
 # Create Str from raw pointer + length (stdlib has str_from_buf)
 fn str_from_raw(ptr, len) {
     return str_from_buf(ptr, len);

@@ -5,7 +5,7 @@ description = "Threat detection — YARA rules, entropy, magic bytes, PE/ELF par
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/phylax"
 language = "cyrius"
-cyrius = "6.7.9"
+cyrius = "6.7.18"
 
 [build]
 entry = "src/main.cyr"
@@ -125,8 +125,8 @@ stdlib = [
 #
 # Both modules used to be git-dep blocks in this manifest. The toolchain
 # snapshot now vendors them. 6.5.35 folded exactly the versions this repo
-# used to pin forward by hand (sakshi 2.4.11, sigil 3.12.9); the 6.7.9
-# snapshot this manifest pins folds sakshi 2.5.8 and sigil 3.13.11.
+# used to pin forward by hand (sakshi 2.4.11, sigil 3.12.9); the 6.7.18
+# snapshot this manifest pins folds sakshi 2.5.10 and sigil 3.13.15.
 #
 # WARNING: the declaration SHAPE is load-bearing, not just the version.
 # `cyrius distlib` classifies a git dep OUT of the stdlib leaves, so a folded
@@ -170,14 +170,14 @@ stdlib = [
 # `dist/bote-core.cyr` — which excludes `events_majra.cyr` — nothing
 # in phylax's link closure references majra (phylax src calls no
 # `pubsub_*`/`counter_*`), so these modules now stage but DCE-prune.
-# Still true at bote 3.4.10. Kept + version-tracked for now, at 2.12.0
-# to match the majra that bote 3.4.10 itself pins, so the two never
+# Still true at bote 3.8.6. Kept + version-tracked for now, at 2.13.0
+# to match the majra that bote 3.8.6 itself pins, so the two never
 # diverge inside one link. A candidate for removal in a
 # dedicated dep-pruning pass (not folded into this pin sweep) — see
 # the note over `[deps.libro]` for what that pass would also reclaim.
 [deps.majra]
 git = "https://github.com/MacCracken/majra.git"
-tag = "2.12.0"
+tag = "2.13.0"
 modules = ["src/pubsub.cyr", "src/counter.cyr"]
 
 # bote 3.x reorganized its module layout: `dispatch.cyr` now pulls
@@ -194,9 +194,18 @@ modules = ["src/pubsub.cyr", "src/counter.cyr"]
 # needs no change. (The full `dist/bote.cyr`, 28 modules, is deliberately
 # NOT used — it references libro/majra symbols and drags the whole
 # transport + audit stack in for three functions.)
+#
+# At 3.8.x bote-core is 673 fns (306 at 3.4.10) and its own requires block
+# names only `hashmap sys`, so phylax's dist sidecars now derive sigil / bayan
+# / tagged themselves (1.3.1). phylax also uses `tool_registry_new`,
+# `dispatcher_new`, `tool_schema_from_json` (3.8.3+) and, in tests, bote's
+# codec. ⚠ bote's API is C-STRING throughout: tool names, descriptions and
+# handler keys are cstrs, an inputSchema is a ToolSchema object (not JSON
+# text), and a handler gets its arguments as raw JSON text and must return a
+# JSON cstr. Until 1.3.1 phylax passed Strs and registered nothing.
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
-tag = "3.4.10"
+tag = "3.8.6"
 modules = ["dist/bote-core.cyr"]
 
 # Explicit libro pin — now a pure belt-and-suspenders alignment, not
@@ -209,8 +218,8 @@ modules = ["dist/bote-core.cyr"]
 # phylax's link closure references libro at all — phylax never called it
 # directly, and the core bundle no longer pulls it — so this module now
 # stages but DCE-prunes. Kept to (a) document the resolved version
-# explicitly at phylax's manifest and (b) stay aligned with bote 3.4.10's
-# own transitive libro pin (2.11.0), so the two never diverge. Like the
+# explicitly at phylax's manifest and (b) stay aligned with bote 3.8.6's
+# own transitive libro pin (2.11.3), so the two never diverge. Like the
 # majra block above, a candidate for a dedicated dep-pruning pass.
 #
 # WARNING, measured at 1.2.5: deleting this block does NOT reclaim
@@ -234,10 +243,9 @@ modules = ["dist/bote-core.cyr"]
 # lib/sigil_*.cyr and sigil-mldsa leaves are gone from cyrius.lock (67 -> 65
 # files), the 232 duplicate-fn build warnings they caused are gone, and the
 # DCE binary is 915,728 -> 866,640 B against the same tree on 6.6.2. libro
-# 2.11.0 still declares sigil as a git dep -- at 3.13.12, one patch AHEAD of
-# the 3.13.11 the 6.7.9 snapshot folds -- and that is inert here too: the fold
-# is the package, so phylax links the folded 3.13.11.
+# 2.11.3 still declares sigil as a git dep (3.13.15 -- the same version the
+# 6.7.18 snapshot folds), and that is inert here too: the fold is the package.
 [deps.libro]
 git = "https://github.com/MacCracken/libro.git"
-tag = "2.11.0"
+tag = "2.11.3"
 modules = ["dist/libro.cyr"]

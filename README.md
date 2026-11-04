@@ -103,7 +103,7 @@ type = "hex"
 value = "7f454c46"
 ```
 
-Pattern types: `literal`, `hex`, `regex`. Conditions: `all`, `any`, `at_least_N`. Constraints: `min_file_size`, `max_file_size`, `at_offset`.
+Pattern types: `hex`, and `string` for a literal (in TOML rules every type other than `hex` is a literal — `regex` is not a regex there yet). Conditions: `all`, `any`, `at_least_N`. Constraints: `min_file_size`, `max_file_size`, `at_offset`.
 
 Native `.yar` syntax is also supported via `phylax rules validate`.
 
@@ -112,22 +112,22 @@ Native `.yar` syntax is also supported via `phylax rules validate`.
 Phylax is written in [Cyrius](https://github.com/MacCracken/cyrius) and compiles to a single static binary.
 
 ```bash
-CYRIUS_DCE=1 cyrius build src/main.cyr build/phylax   # static binary (~2.4 MB at 1.3.0 — see CHANGELOG)
-for t in tests/*.tcyr; do cyrius test "$t"; done      # 441 assertions across 19 files
+CYRIUS_DCE=1 cyrius build src/main.cyr build/phylax   # ~0.91 MB static binary (1.3.1)
+for t in tests/*.tcyr; do cyrius test "$t"; done      # 479 assertions across 19 files
 for t in tests/*.tcyr; do cyrius test --aarch64 "$t"; done   # the same suite on aarch64 (qemu)
 cyrius bench tests/phylax.bcyr                        # benchmark groups
 ```
 
 ### Dependencies
 
-- **Cyrius** 6.7.9 toolchain
+- **Cyrius** 6.7.18 toolchain
 - **stdlib** (34 modules): string, fmt, alloc, vec, str, syscalls, io, args, assert, hashmap, regex, fs, net, tagged, fnptr, atomic, sync, thread, bench, bounds, math, process, chrono, freelist, http, mmap, ct, keccak, random, slice, thread_local, bayan, sakshi, sigil — note `bayan` is the cyrius 6.1.25 carve that supplies the former `json`/`toml`/`csv`/`base64`/`bigint` stdlib modules
-- **sakshi** 2.5.8 — structured logging (folded stdlib module, not a git dep)
-- **sigil** 3.13.11 — SHA-256 (SHA-NI dispatch) (folded stdlib module, not a git dep)
-- **bayan** 1.5.13 — JSON/TOML (folded stdlib module, not a git dep)
-- **bote** 3.4.10 — MCP tool registry and dispatch (`dist/bote-core.cyr` transport-free bundle)
-- **majra** 2.12.0 — pubsub/counter (vestigial since bote-core dropped `events_majra`; staged, DCE-pruned)
-- **libro** 2.11.0 — belt-and-suspenders pin aligned to bote's transitive libro (DCE-pruned)
+- **sakshi** 2.5.10 — structured logging (folded stdlib module, not a git dep)
+- **sigil** 3.13.15 — SHA-256 (SHA-NI dispatch) (folded stdlib module, not a git dep)
+- **bayan** 1.11.1 — JSON/TOML (folded stdlib module, not a git dep)
+- **bote** 3.8.6 — MCP tool registry and dispatch (`dist/bote-core.cyr` transport-free bundle)
+- **majra** 2.13.0 — pubsub/counter (vestigial since bote-core dropped `events_majra`; staged, DCE-pruned)
+- **libro** 2.11.3 — belt-and-suspenders pin aligned to bote's transitive libro (DCE-pruned)
 
 Targets: x86_64 Linux and aarch64 Linux (the full suite runs on both; aarch64 under qemu in CI).
 

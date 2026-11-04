@@ -325,16 +325,36 @@ fn phylax_ai_capabilities() {
 # Bote MCP Tool Registration
 # ================================================================
 
-# Handler: phylax_scan — scan a file and return analysis JSON
+# Handler: phylax_scan — scan a file and return analysis JSON.
+#
+# `args` is what bote's dispatcher hands every tool handler: the tools/call
+# "arguments" object as RAW JSON TEXT, a NUL-terminated cstr (bote-core's
+# `_jx_raw_at_a`; "{}" when absent) — not parsed pairs.
+#
+# ⚠ Until 1.3.1 this read `json_get(args, "target")` and passed the result to
+# phylax_read_file, which was wrong three ways: json_get walks a Vec of parsed
+# pairs, so handed bote's cstr it read the JSON text's bytes as a Vec header
+# and the process died with SIGSEGV on the first phylax_scan call (measured on
+# 1.3.0: exit 139); it compares a Str key, and was given the literal "target";
+# and a found value is a Str while phylax_read_file takes a cstr path. Present
+# since the port. Now: parse the text into a json_v tree, look the key up by
+# cstr, take the Str value, convert it to a path. Like every bote handler it
+# RETURNS a C string of JSON (bote checks `jsonx_valid(result,
+# strlen(result))`); it used to return a Str. Tested in
+# tests/test_integration.tcyr.
 fn phylax_scan_handler(args, claims) {
-    var target = json_get(args, "target");
+    if (args == 0) {
+        return "{\"error\":\"missing target parameter\"}";
+    }
+    var root = bayan_json_v_parse_buf(args, strlen(args));
+    var target = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(root, "target"));
     if (target == 0) {
-        return str_from("{\"error\":\"missing target parameter\"}");
+        return "{\"error\":\"missing target parameter\"}";
     }
 
-    var data_str = phylax_read_file(target);
+    var data_str = phylax_read_file(str_to_cstr(target));
     if (data_str == 0) {
-        return str_from("{\"error\":\"failed to read file\"}");
+        return "{\"error\":\"failed to read file\"}";
     }
 
     var data = str_data(data_str);
@@ -354,7 +374,7 @@ fn phylax_scan_handler(args, claims) {
     if (suspicious) { result = str_cat(result, str_from("true")); }
     else { result = str_cat(result, str_from("false")); }
     result = str_cat(result, str_from("}"));
-    return result;
+    return str_to_cstr(result);
 }
 
 # Handler: phylax_status — return engine status JSON
@@ -362,7 +382,7 @@ fn phylax_status_handler(args, claims) {
     var result = str_from("{\"status\":\"ready\",\"version\":\"");
     result = str_cat(result, VERSION);
     result = str_cat(result, str_from("\",\"analyzers\":[\"entropy\",\"magic_bytes\",\"yara\",\"polyglot\",\"pe\",\"elf\",\"strings\",\"ssdeep\",\"tlsh\",\"script\"]}"));
-    return result;
+    return str_to_cstr(result);
 }
 
 # Build a tool schema JSON string for MCP tool definitions.
@@ -376,26 +396,40 @@ fn phylax_schema_object(props_json, required_json) {
 }
 
 # Register all phylax MCP tools with a bote registry + dispatcher.
+#
+# ⚠ bote takes every one of these as a C STRING: the tool name (validated
+# byte-by-byte to the NUL, 1-128 of [A-Za-z0-9_.-]), the description, the
+# inputSchema (JSON text) and the dispatcher's handler key (a cstr-keyed map).
+# Until 1.3.1 phylax passed each as a Str, so bote read a Str header's pointer
+# bytes as the name and REFUSED all five tools (registry_len 0, measured on
+# bote 3.4.10 and 3.8.5), and no tools/call could reach a handler. And the
+# inputSchema is not JSON text at all: it is a bote ToolSchema object
+# (schema_type / schema_properties / schema_required / tool_schema_json) — fed a
+# string, bote reads its characters as struct fields and faults as soon as a
+# valid name gets the tool past the name check. Names and descriptions are now
+# literals; schemas are built as JSON (a Str), converted to a cstr, and turned
+# into a ToolSchema by bote's own tool_schema_from_json (bote 3.8.3+). Tested end
+# to end through bote's codec and dispatcher in tests/test_integration.tcyr.
 fn phylax_register_tools(registry, dispatcher) {
     # phylax_scan — scan a file for threats
     var scan_schema = phylax_schema_object(
       str_from("{\"target\":{\"type\":\"string\",\"description\":\"Path to file to scan\"},\"target_type\":{\"type\":\"string\",\"enum\":[\"file\",\"agent\",\"package\",\"memory\"]},\"enable_yara\":{\"type\":\"boolean\"},\"enable_entropy\":{\"type\":\"boolean\"}}"),
       str_from("[\"target\",\"target_type\"]")
       );
-    var scan_def = tool_def_new(str_from("phylax_scan"),
-      str_from("Scan a file for threats using YARA rules, entropy analysis, and magic bytes detection"),
-      scan_schema);
+    var scan_def = tool_def_new("phylax_scan",
+      "Scan a file for threats using YARA rules, entropy analysis, and magic bytes detection",
+      tool_schema_from_json(str_to_cstr(scan_schema)));
     registry_register(registry, scan_def);
-    dispatcher_handle(dispatcher, str_from("phylax_scan"), &phylax_scan_handler);
+    dispatcher_handle(dispatcher, "phylax_scan", &phylax_scan_handler);
 
     # phylax_rules — list/search/inspect YARA rules
     var rules_schema = phylax_schema_object(
       str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"list\",\"search\",\"inspect\"]},\"query\":{\"type\":\"string\",\"description\":\"Search query or rule name\"}}"),
       str_from("[\"action\"]")
       );
-    var rules_def = tool_def_new(str_from("phylax_rules"),
-      str_from("List, search, or inspect loaded YARA rules"),
-      rules_schema);
+    var rules_def = tool_def_new("phylax_rules",
+      "List, search, or inspect loaded YARA rules",
+      tool_schema_from_json(str_to_cstr(rules_schema)));
     registry_register(registry, rules_def);
 
     # phylax_status — engine status
@@ -403,20 +437,20 @@ fn phylax_register_tools(registry, dispatcher) {
       str_from("{\"verbose\":{\"type\":\"boolean\",\"description\":\"Include detailed statistics\"}}"),
       str_from("[]")
       );
-    var status_def = tool_def_new(str_from("phylax_status"),
-      str_from("Get the current status of the Phylax threat detection engine"),
-      status_schema);
+    var status_def = tool_def_new("phylax_status",
+      "Get the current status of the Phylax threat detection engine",
+      tool_schema_from_json(str_to_cstr(status_schema)));
     registry_register(registry, status_def);
-    dispatcher_handle(dispatcher, str_from("phylax_status"), &phylax_status_handler);
+    dispatcher_handle(dispatcher, "phylax_status", &phylax_status_handler);
 
     # phylax_quarantine — quarantine/release/list
     var quar_schema = phylax_schema_object(
       str_from("{\"action\":{\"type\":\"string\",\"enum\":[\"quarantine\",\"release\",\"list\"]},\"target\":{\"type\":\"string\",\"description\":\"Path or quarantine ID\"},\"reason\":{\"type\":\"string\",\"description\":\"Reason for action\"}}"),
       str_from("[\"action\"]")
       );
-    var quar_def = tool_def_new(str_from("phylax_quarantine"),
-      str_from("Quarantine or release a file flagged as a threat"),
-      quar_schema);
+    var quar_def = tool_def_new("phylax_quarantine",
+      "Quarantine or release a file flagged as a threat",
+      tool_schema_from_json(str_to_cstr(quar_schema)));
     registry_register(registry, quar_def);
 
     # phylax_report — generate threat report
@@ -424,9 +458,9 @@ fn phylax_register_tools(registry, dispatcher) {
       str_from("{\"target\":{\"type\":\"string\",\"description\":\"Specific target to report on\"},\"format\":{\"type\":\"string\",\"enum\":[\"json\",\"markdown\"]}}"),
       str_from("[]")
       );
-    var report_def = tool_def_new(str_from("phylax_report"),
-      str_from("Generate a threat report for recent scans"),
-      report_schema);
+    var report_def = tool_def_new("phylax_report",
+      "Generate a threat report for recent scans",
+      tool_schema_from_json(str_to_cstr(report_schema)));
     registry_register(registry, report_def);
 
     return registry;

@@ -175,6 +175,98 @@ fn test_http_post_roundtrip() {
     assert_eq(load64(r3), 0, "an unresolvable host returns the zeroed error response");
 }
 
+# ----------------------------------------------------------------
+# MCP phylax_scan handler. bote hands a handler its "arguments" object as raw
+# JSON text (a cstr). Until 1.3.1 the handler walked that text as parsed pairs
+# and SIGSEGV'd the process on the first call (measured on 1.3.0: exit 139),
+# and would have passed a Str where a path cstr is needed. Each call below is
+# exactly what bote's dispatcher passes.
+# ----------------------------------------------------------------
+
+fn test_mcp_scan_handler() {
+    test_group("mcp_scan_handler");
+    file_write_all("/tmp/phylax-test-mcp.txt", "hello world", 11);
+
+    # A handler returns a C string of JSON — the contract bote's dispatcher checks
+    # (`jsonx_valid(result, strlen(result))`).
+    var r = phylax_scan_handler("{\"target\":\"/tmp/phylax-test-mcp.txt\"}", 0);
+    assert(r != 0, "handler returns a response");
+    var root = 0;
+    if (r != 0) { root = bayan_json_v_parse_buf(r, strlen(r)); }
+    assert(root != 0, "the response is a JSON cstr");
+    var sz = bayan_json_v_obj_get_by_cstr(root, "size");
+    assert_eq(bayan_json_v_int(sz), 11, "it read the 11-byte target");
+    var h = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(root, "sha256"));
+    assert(h != 0, "it carries a sha256");
+    if (h != 0) { assert_eq(str_len(h), 64, "the sha256 is 64 hex chars"); }
+
+    var e1 = phylax_scan_handler("{}", 0);
+    assert(cstr_has(e1, "missing target"), "no target -> missing-target error");
+    var e2 = phylax_scan_handler("{\"target\":42}", 0);
+    assert(cstr_has(e2, "missing target"), "a non-string target -> missing-target error");
+    var e3 = phylax_scan_handler("not json at all", 0);
+    assert(cstr_has(e3, "missing target"), "unparseable arguments -> error, not a crash");
+    var e4 = phylax_scan_handler(0, 0);
+    assert(cstr_has(e4, "missing target"), "null arguments -> error, not a crash");
+    var e5 = phylax_scan_handler("{\"target\":\"/tmp/phylax-no-such-file\"}", 0);
+    assert(cstr_has(e5, "failed to read"), "a missing file -> read error");
+    return 0;
+}
+
+# ----------------------------------------------------------------
+# MCP end to end through bote: phylax_register_tools into a real bote registry
+# + dispatcher, then genuine JSON-RPC lines through bote's own codec. Until
+# 1.3.1 phylax passed every tool name, description and schema as a Str, which
+# bote reads as a cstr: it refused all five tools (registry_len 0), the
+# handler table was keyed by Str headers, and handlers returned Str where bote
+# requires a JSON cstr. So the MCP surface could never answer a call.
+# ----------------------------------------------------------------
+
+# Send one JSON-RPC line through bote and return the serialized reply (cstr).
+fn mcp_roundtrip(disp, line) {
+    var req = codec_parse_request(line);
+    if (req == 0) { return 0; }
+    var resp = dispatcher_dispatch(disp, req, 0);
+    if (resp == 0) { return 0; }
+    return codec_serialize_response(resp);
+}
+
+fn test_mcp_bote_e2e() {
+    test_group("mcp_bote_e2e");
+    file_write_all("/tmp/phylax-test-mcp.txt", "hello world", 11);
+    var reg = tool_registry_new();
+    var disp = dispatcher_new(reg);
+    phylax_register_tools(reg, disp);
+
+    assert_eq(registry_len(reg), 5, "bote accepts all five phylax tools (was 0)");
+    assert_eq(registry_contains(reg, "phylax_scan"), 1, "phylax_scan is registered by name");
+
+    var list = mcp_roundtrip(disp, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
+    assert(cstr_has(list, "\"phylax_scan\""), "tools/list names phylax_scan");
+    assert(cstr_has(list, "\"phylax_quarantine\""), "tools/list names phylax_quarantine");
+
+    var call = str_from("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",");
+    call = str_cat(call, str_from("\"params\":{\"name\":\"phylax_scan\",\"arguments\":"));
+    call = str_cat(call, str_from("{\"target\":\"/tmp/phylax-test-mcp.txt\",\"target_type\":\"file\"}}}"));
+    call = str_to_cstr(call);
+    var out = mcp_roundtrip(disp, call);
+    assert(out != 0, "tools/call phylax_scan gets a reply");
+    assert(cstr_has(out, "sha256"), "the reply carries the scan result");
+    assert_eq(cstr_has(out, "\"isError\":true"), 0, "the reply is not a tool error");
+
+    var sreq = str_from("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",");
+    sreq = str_cat(sreq, str_from("\"params\":{\"name\":\"phylax_status\",\"arguments\":{}}}"));
+    var st = mcp_roundtrip(disp, str_to_cstr(sreq));
+    assert(cstr_has(st, "ready"), "tools/call phylax_status reports ready");
+    return 0;
+}
+
+# 1 if cstr `s` contains cstr `needle`, else 0 (0 for a null `s`).
+fn cstr_has(s, needle) {
+    if (s == 0) { return 0; }
+    return phylax_str_contains(str_from(s), str_from(needle));
+}
+
 fn main() {
     phylax_init();
 
@@ -184,6 +276,8 @@ fn main() {
     test_config();
     test_scan_pipeline();
     test_http_post_roundtrip();
+    test_mcp_scan_handler();
+    test_mcp_bote_e2e();
 
     return assert_summary();
 }

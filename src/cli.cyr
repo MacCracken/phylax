@@ -1133,39 +1133,55 @@ fn load_config() {
     }
     if (cfg_data == 0) { return 0; }
 
-    # Parse TOML
+    return config_apply_toml(cfg_data);
+}
+
+# Apply a phylax.toml body (a Str) to the CFG_* globals. Returns 1 if it
+# parsed, else 0. Split out of load_config at 1.3.1 so it is testable without
+# touching the working directory or $HOME.
+#
+# ⚠ Until 1.3.1 every lookup below passed a Str key (`str_from("scan")`) to
+# bayan's toml_get / toml_get_sections, which compare a C-string key, so none
+# ever matched: phylax.toml and ~/.config/phylax/config.toml were parsed and
+# then silently ignored (measured on 1.3.0). Values are stored as fresh
+# NUL-terminated copies (str_to_cstr): a TOML value Str is not guaranteed to
+# end at a NUL, and the CFG_* globals are declared as cstrs.
+# ⚠ Known: nothing in phylax READS the CFG_* globals yet, so the config file
+# still has no effect on a scan (roadmap). Tested in tests/test_cli.tcyr.
+fn config_apply_toml(cfg_data) {
+    if (cfg_data == 0) { return 0; }
     var sections = toml_parse(cfg_data);
     if (sections == 0) { return 0; }
 
     # Look for [scan] section
-    var scan_secs = toml_get_sections(sections, str_from("scan"));
+    var scan_secs = bayan_toml_get_sections_by_cstr(sections, "scan");
     if (scan_secs != 0) {
         if (vec_len(scan_secs) > 0) {
             var pairs = toml_section_pairs(vec_get(scan_secs, 0));
-            var rules = toml_get(pairs, str_from("rules_path"));
-            if (rules != 0) { CFG_RULES_PATH = str_data(rules); }
-            var max_size = toml_get(pairs, str_from("max_file_size"));
+            var rules = bayan_toml_get_by_cstr(pairs, "rules_path");
+            if (rules != 0) { CFG_RULES_PATH = str_to_cstr(rules); }
+            var max_size = bayan_toml_get_by_cstr(pairs, "max_file_size");
             if (max_size != 0) { CFG_MAX_FILE_SIZE = phylax_str_to_int(max_size); }
         }
     }
 
     # Look for [hoosh] section
-    var hoosh_secs = toml_get_sections(sections, str_from("hoosh"));
+    var hoosh_secs = bayan_toml_get_sections_by_cstr(sections, "hoosh");
     if (hoosh_secs != 0) {
         if (vec_len(hoosh_secs) > 0) {
             var pairs = toml_section_pairs(vec_get(hoosh_secs, 0));
-            var url = toml_get(pairs, str_from("url"));
-            if (url != 0) { CFG_HOOSH_URL = str_data(url); }
+            var url = bayan_toml_get_by_cstr(pairs, "url");
+            if (url != 0) { CFG_HOOSH_URL = str_to_cstr(url); }
         }
     }
 
     # Look for [daimon] section
-    var daimon_secs = toml_get_sections(sections, str_from("daimon"));
+    var daimon_secs = bayan_toml_get_sections_by_cstr(sections, "daimon");
     if (daimon_secs != 0) {
         if (vec_len(daimon_secs) > 0) {
             var pairs = toml_section_pairs(vec_get(daimon_secs, 0));
-            var url = toml_get(pairs, str_from("url"));
-            if (url != 0) { CFG_DAIMON_URL = str_data(url); }
+            var url = bayan_toml_get_by_cstr(pairs, "url");
+            if (url != 0) { CFG_DAIMON_URL = str_to_cstr(url); }
         }
     }
 

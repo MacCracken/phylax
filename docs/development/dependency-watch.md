@@ -1,7 +1,7 @@
 # Dependency Watch
 
-Status tracking for all dependencies. Current as of **phylax 1.3.0**
-(2026-11-04, cyrius 6.7.9). The stdlib table below predates 1.2.5 in places;
+Status tracking for all dependencies. Current as of **phylax 1.3.1**
+(2026-11-04, cyrius 6.7.18). The stdlib table below predates 1.2.5 in places;
 the External Dependencies table and the Toolchain section are current.
 
 ## Cyrius Stdlib Modules (31)
@@ -62,11 +62,11 @@ alone and must be explicitly `include`d. See `thread_local` below.
 
 | Dependency | Version | Purpose | Notes |
 |-----------|---------|---------|-------|
-| `sakshi` | 2.5.8 | Structured logging | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. Tracks the toolchain fold (6.7.9 vendors 2.5.8). |
-| `sigil` | 3.13.11 | Cryptographic primitives | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. SHA-256 (SHA-NI dispatch); only `sha256` consumed. 6.7.9 vendors 3.13.11 (libro 2.11.0 asks for 3.13.12 as a git dep; the fold wins). |
-| `majra` | 2.12.0 | Pubsub/counter | **Vestigial** — bote-core dropped `events_majra`, so nothing references it; staged + DCE-pruned. Aligned to bote 3.4.10's own majra pin. |
-| `bote` | 3.4.10 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle. 3.4.10 is the newest tag pinned to cyrius 6.7.9. ⚠ Its bote-core grew 249 → 306 fns (phylax calls 3), which pushes phylax past the DCE compaction cap on cyrius < 6.7.14 (see Toolchain). |
-| `libro` | 2.11.0 | Belt-and-suspenders pin | Aligned to bote 3.4.10's transitive libro; not referenced by phylax or bote-core (DCE-pruned). Pulls patra 1.16.0. Declares sigil as a git dep — inert since cyrius 6.6.11. |
+| `sakshi` | 2.5.10 | Structured logging | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. Tracks the toolchain fold (6.7.18 vendors 2.5.10). |
+| `sigil` | 3.13.15 | Cryptographic primitives | **Folded stdlib module** as of 1.2.5. SHA-256 (SHA-NI dispatch); only `sha256` consumed. 6.7.18 vendors 3.13.15 — the same version libro 2.11.3 pins as a git dep. |
+| `majra` | 2.13.0 | Pubsub/counter | **Vestigial** — staged + DCE-pruned. Latest release; = bote 3.8.6's own majra pin. |
+| `bote` | 3.8.6 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle; latest release (3.8.6 refuses duplicate JSON keys). bote-core is 673 fns (306 at 3.4.10; phylax calls a handful) — harmless on x86 since cyrius 6.7.14 removed the compaction cap, but it grows the uncompacted aarch64 binary. ⚠ **C-string API:** tool names/descriptions/handler keys are cstrs, an inputSchema is a ToolSchema object (`tool_schema_from_json`), a handler gets raw JSON text and returns a JSON cstr; its requires block names only `hashmap sys` since 3.8.x. |
+| `libro` | 2.11.3 | Belt-and-suspenders pin | Latest release; = bote 3.8.6's transitive libro. Not referenced by phylax (DCE-pruned). Pulls patra 1.16.6. |
 
 ### Folded modules: why the declaration shape matters
 
@@ -123,8 +123,14 @@ blocks remain a dep-pruning candidate on their own merits.
 
 ## Toolchain
 
-- **Cyrius**: 6.7.9 (pinned in `cyrius.cyml`)
-- **⚠ DCE compaction cap, cyrius < 6.7.14.** `CYRIUS_DCE=1` declines to compact past 4,096
+- **Cyrius**: 6.7.18 (pinned in `cyrius.cyml`)
+- **bayan 1.11.1 (folded at 6.7.18) types its keys** (`: cstring` / `: Str`) and the compiler
+  now flags a Str passed where a cstring is declared. That exposed phylax's Str-keyed `toml_get`
+  calls, which had never matched. Use the `_by_cstr` / `_by_str` forms; the legacy aliases are
+  `#deprecated`. bayan 1.11.1 also includes the stdlib `unicode` family (+7 lock files).
+- **aarch64 has no DCE compaction** ("no compaction repair model yet"): the aarch64 binary carries
+  every dep's dead code (3.29 MB at 1.3.1 vs 0.91 MB x86).
+- **⚠ DCE compaction cap, cyrius < 6.7.14 (historical since 1.3.1).** `CYRIUS_DCE=1` declines to compact past 4,096
   dead-code runs ("compaction declined … the repair registry cap") and leaves the NOPed bytes in
   the binary. phylax crossed it at 1.3.0 via bote-core 3.4.10 (4,048 → 4,105 dead fns; 866 KB →
   2.36 MB). Fixed upstream in 6.7.14 (IN-4). Watch for the note on every dep bump.

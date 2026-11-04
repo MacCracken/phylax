@@ -1,7 +1,7 @@
 # ADR 0001 — String and JSON representation boundaries
 
 - **Status**: Accepted
-- **Date**: 2026-08-23
+- **Date**: 2026-08-23 (amended 2026-11-04, 1.3.1 — lookup keys, third-party payloads)
 - **Context**: the 1.2.5 crash-fix pass (four SIGSEGV'ing CLI paths, plus the
   same defect latent in `quarantine.cyr` and `integration.cyr`)
 
@@ -78,6 +78,37 @@ walks; `json_parse` returns a flat pair `Vec` that must never be handed to
 parse their own output back with `json_v_parse` and check the tag of each
 value, so "the count came out as a string" and "the nesting collapsed" are
 failures rather than green.
+
+### Amendment (1.3.1) — lookup KEYS have a representation too
+
+The boundary above covered values and paths. It also applies to the key a
+lookup compares against, and there the failure is silent rather than a crash.
+bayan's bare legacy lookups disagree with each other: `toml_get` /
+`toml_get_sections` compare a **cstr** key (`str_eq_cstr`), while `json_get`
+compares a **Str** key (`str_eq`). Each answers the other's type with "not
+found". bayan 1.11.1 (its ADR 0014) adds typed `_by_cstr` / `_by_str` variants
+and `#deprecated` the bare names, and cyrius 6.7.18 then flags a Str passed
+where a cstring is declared. That surfaced three phylax defects that predate it:
+every `toml_get(pairs, str_from("…"))` in the YARA TOML loader and in
+`load_config` had never matched, and `phylax_scan_handler` crashed (see below).
+
+**Decision:** phylax calls the typed lookups only:
+`bayan_toml_get_by_cstr` / `bayan_toml_get_sections_by_cstr` /
+`bayan_json_get_by_cstr` / `bayan_json_v_obj_get_by_cstr` with a literal key,
+or the `_by_str` form with a Str. It never calls the bare aliases.
+
+**Third-party payloads are a boundary as well.** bote's dispatcher hands an MCP
+tool handler the tools/call `arguments` as raw JSON **text** (a cstr), not
+parsed pairs. `phylax_scan_handler` passed that text to `json_get`, which read
+it as a Vec header and killed the process on the first call (SIGSEGV, measured
+on 1.3.0). A handler parses its arguments itself (`bayan_json_v_parse_buf`) and
+returns a JSON **cstr**. The registration side had the same mismatch:
+`phylax_register_tools` passed Str names, descriptions and schemas, so bote
+refused every tool (`registry_len` 0), and an inputSchema turned out to be a
+bote ToolSchema object rather than JSON text (`tool_schema_from_json`).
+Each case is pinned by a test that fails on the old code: `yara_toml_rules`,
+`config_toml`, `mcp_scan_handler` and `mcp_bote_e2e`, which sends real JSON-RPC
+through bote's codec and dispatcher.
 
 ## Alternatives considered
 

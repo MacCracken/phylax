@@ -2,6 +2,189 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.3.1] - 2026-11-04
+
+**Toolchain `6.7.9` → `6.7.18` (the latest release) and every dep moved to its
+latest release.** The binary is back to its compacted size, and the new
+toolchain's type checks exposed a representation bug class in phylax's bayan
+calls: **YARA TOML rules never loaded a single field, the config file was never
+read, and phylax's MCP tools could never be called.** bote refused all five at
+registration, and the `phylax_scan` handler crashed the process on its first
+call. All of these predate this release; 6.7.18, bayan 1.11.1 and the
+dependency audit just brought them to the surface. All are fixed, each with a
+test that fails on the old code.
+
+### Fixed
+
+- **phylax's MCP tools never worked: bote registered none of them, and the one
+  that could be reached crashed** (`src/integration.cyr`, present since the
+  port). bote's API is C strings throughout, and phylax spoke Str to it:
+  - **Registration.** `phylax_register_tools` passed every tool name,
+    description and schema as a **Str**. bote validates a name byte by byte up
+    to the NUL, read a Str header's pointer bytes instead, and **refused all
+    five tools** ("the tool name must be 1-128 characters …"; `registry_len` 0,
+    measured on bote 3.4.10 and 3.8.5). The handler table is a cstr-keyed map,
+    so the Str handler keys could never be found either. And an inputSchema is
+    not JSON text at all but a bote **ToolSchema object**; fed a string, bote
+    reads its characters as struct fields and faults as soon as a valid name
+    gets the tool past the name check. Names and descriptions are now literals,
+    and schemas go through bote's own `tool_schema_from_json` (bote 3.8.3+).
+  - **Handler results.** bote requires a handler to return a C string of valid
+    JSON (`jsonx_valid(result, strlen(result))`); phylax's returned Strs. They
+    now return JSON cstrs.
+  - **`phylax_scan`'s arguments**, below.
+- **The MCP `phylax_scan` handler killed the process on any call**
+  (present since the port, `b56f919`). bote's dispatcher
+  hands a handler its `arguments` object as **raw JSON text**, a cstr, not
+  parsed pairs. The handler passed that text to `json_get`, which walks a Vec of
+  pairs, so it read the JSON's bytes as a Vec header and died: **SIGSEGV, exit
+  139, measured on 1.3.0.** It was also wrong two more ways: `json_get` compares
+  a **Str** key and was given the literal `"target"`, and a found value is a Str
+  while `phylax_read_file` takes a cstr path. The handler now parses the text
+  (`bayan_json_v_parse_buf`), looks the key up by cstr, takes the Str value, and
+  converts it to a path. Missing, non-string or unparseable arguments return the
+  existing error JSON instead of crashing.
+- **TOML YARA rules loaded with no fields** (`src/yara.cyr`,
+  `yara_engine_load_rules_toml`). Every lookup was
+  `toml_get(pairs, str_from("name"))`. bayan's `toml_get` compares its key as a
+  **C string**, and always has (`str_eq_cstr` in 1.5.13 as well), so a Str key
+  never matched. A rule loaded as `"unnamed"`, with no description, severity,
+  condition or patterns, and **matched nothing** (measured on 1.3.0). bayan's
+  own docs now say it outright (its ADR 0014): "bare `bayan_json_get` took a Str
+  without saying so, and `bayan_toml_get` a C string, and each answered the
+  other's key type with a silent 'not found'." All 13 lookups now call
+  `bayan_toml_get_by_cstr` with a literal key. The function's doc comment also
+  showed `[[rules]]` / `[[rules.patterns]]`; the loader, like the README,
+  matches `[[rule]]` / `[[rule.patterns]]`, so a file written from that comment
+  loaded nothing.
+- **`phylax.toml` / `~/.config/phylax/config.toml` were parsed and then
+  ignored** (`src/cli.cyr`, `load_config`). These are the same seven Str-keyed
+  `toml_get` / `toml_get_sections` calls. They now use the `_by_cstr` forms, and
+  the values are stored as NUL-terminated copies (`str_to_cstr`) rather than
+  `str_data` of a TOML value Str. The parsing half is split out as
+  `config_apply_toml(body)` so it can be tested without touching the working
+  directory or `$HOME`. ⚠ Nothing in phylax *reads* the `CFG_*` globals yet, so
+  the config file still has no effect on a scan (Known).
+
+### Changed — dependency pins
+
+| dep | was | now | note |
+|---|---|---|---|
+| cyrius | 6.7.9 | **6.7.18** | latest release |
+| majra | 2.12.0 | **2.13.0** | latest; = bote 3.8.6's own pin; vestigial |
+| bote | 3.4.10 | **3.8.6** | latest (published mid-sweep; 3.8.5 → 3.8.6 is a security release: duplicate JSON keys refused); `dist/bote-core.cyr` (306 → 673 fns) |
+| libro | 2.11.0 | **2.11.3** | latest; = bote 3.8.6's own pin; vestigial |
+| sakshi (folded) | 2.5.8 | **2.5.10** | moves with the `cyrius` pin |
+| sigil (folded) | 3.13.11 | **3.13.15** | = libro 2.11.3's git pin, so no skew this time |
+| bayan (folded) | 1.5.13 | **1.11.1** | typed `: cstring` / `: Str` keys (above) |
+| patra (via libro) | 1.16.0 | **1.16.6** | = the 6.7.18 fold |
+
+Each dep is its newest published GitHub tag, re-checked at the end of the
+sweep (bote 3.8.6 appeared during it), and each pins cyrius 6.7.18 itself; the
+SHAs match what `cyrius.lock` commit-pins. The lock was re-cut from
+scratch: **72 files** (was 65). The 7 new ones are the stdlib `unicode` family
+(`lib/unicode/*`), which bayan 1.11.1 now includes. 5 commit pins, as before.
+`cyrius deps --locked` against the 1.3.0 lock reported 56 differences and exited
+1, which is the gate working as designed.
+
+### Changed — dist bundles
+
+- **The sidecars now name `sakshi`, `sigil`, `bayan` and `tagged`.**
+  `dist/phylax.deps` goes 5 → 9 leaves and `dist/phylax-core.deps` 4 → 8.
+  - `sigil`, `bayan` and `tagged` came from bote. Up to 3.4.10, bote-core's own
+    requires block named `hashmap bayan sigil ct`, so phylax's bundles leaned on
+    it (noted at 1.2.8). 3.8.x names only `hashmap sys`, so distlib now derives
+    them for phylax.
+  - `sakshi` needed a source change. phylax's core modules call `sakshi_*`, but
+    sakshi compiled only because the **vestigial** libro dep pulls patra, the
+    one vendored bundle that includes `lib/sakshi.cyr`. So no sidecar named it,
+    and a consumer was one dep-pruning pass away from `sakshi_*` undefined: the
+    shape `cyrius.cyml`'s folded-modules note warns about. `src/utils.cyr` now
+    includes `lib/sakshi.cyr`, which seeds it, the same way `lib/math.cyr`
+    seeds `math` (1.2.8).
+  - Checked with scratch consumers of both bundles: 11/11 on x86_64 and on
+    aarch64, with sakshi vendored.
+
+### Performance
+
+**Binary: 2,362,240 → 914,384 B (−61%).** cyrius 6.7.14 removed the DCE
+compaction cap that 1.3.0 tripped: 4,835 dead functions now compact. The figure is above 1.2.8's 866,640 B because
+bote-core more than doubled (306 → 673 functions; phylax still calls 3).
+⚠ aarch64 does not compact at all ("aarch64 has no compaction repair model yet"),
+so the aarch64 binary grows 2,730,568 → 3,285,672 B with bote-core.
+
+Build warnings: 3 → **1** (the long-standing `src/pe.cyr:437` typed-pointer
+note). The sigil static-array and large-static-data notes are gone, as are all
+41 bayan deprecation/type warnings, which the fixes above removed.
+
+Runtime is neutral: an interleaved A/B, 1.3.0 on 6.7.9 and 1.3.1 on 6.7.18 run
+alternately for 3 rounds.
+
+| bench | 1.3.0 (6.7.9) | 1.3.1 (6.7.18) | delta |
+|---|---|---|---|
+| entropy_1k | 14.449 us | 13.983 us | −3.2% (placement, see 1.2.8) |
+| entropy_1m | 4.044 ms | 4.041 ms | −0.1% |
+| chi_squared | 17.395 us | 17.470 us | +0.4% |
+| file_detection | 26 ns | 27 ns | +1 ns |
+| sha256_4k | 19.465 us | 19.715 us | +1.3% |
+| memmem_4k | 7.278 us | 7.297 us | +0.3% |
+| hex_encode_256 | 3.680 us | 3.695 us | +0.4% |
+| extract_ascii | 34.839 us | 34.782 us | −0.2% |
+| ssdeep_4k | 102.221 us | 102.115 us | −0.1% |
+| tlsh_1k | 379.677 us | 379.536 us | 0.0% |
+| queue_enqueue | 64.187 us | 64.021 us | −0.3% |
+| queue_dequeue | 9.556 ms | 9.681 ms | +1.3% |
+| report_json_100 | 732.025 us | 741.636 us | +1.3% |
+| report_sarif_100 | 938.503 us | 951.359 us | +1.4% |
+| report_markdown_100 | 120.864 us | 119.343 us | −1.3% |
+
+Every row is within ±1.4%. JSON and SARIF rendering came out +1.1–1.4% in both
+interleaved runs this release; markdown flipped sign between them. Those
+renderers build through bayan, which moved 1.5.13 → 1.11.1, but this was not
+attributed.
+
+### Changed — behaviour from the toolchain
+
+- **`phylax rules fetch` has deadlines now.** cyrius 6.7.18 gives the stdlib's
+  `http_get` a 5 s idle and 30 s total deadline (CYRIUS-2026-0049; "a deadline
+  is a failure, never a partial response"), so a stalled server now fails the
+  fetch (`HTTP status -1`) instead of hanging it. A status line that isn't
+  digits reads as 0. phylax's own `http_post` has no deadlines (still open).
+- **bayan 1.11.1's JSON parser is stricter:** it refuses duplicate keys, leading
+  zeros and malformed numbers. This reaches hoosh triage responses, MCP tool
+  arguments and the quarantine index load; only malformed or hostile input
+  behaves differently (the triage path falls back as it does for any bad
+  reply).
+
+### Verification
+
+- **479 assertions across 19 files, on x86_64 and on aarch64 (qemu)**: 441, plus
+  `yara_toml_rules` (+11, using the README's own rule example verbatim),
+  `config_toml` (+9), `mcp_scan_handler` (+10) and `mcp_bote_e2e` (+8). The last
+  registers phylax's tools into a real bote registry and sends genuine JSON-RPC
+  `tools/list` / `tools/call` lines through bote's codec and dispatcher. Each
+  group was run with only its fix reverted: 6 failures, 4 failures, a
+  **SIGSEGV**, and 6 failures (`registry_len` 0).
+- CLI A/B against the 1.3.0 binary on a fixed corpus: `scan`, all three
+  `report` formats and `status` are byte-identical after normalizing timestamps,
+  IDs and the version, with the same exit codes. `phylax daemon` gives the same
+  replies on x86_64 and aarch64; `phylax watch` on aarch64 registers, receives
+  events and scans (`qemu-aarch64 -strace`).
+- `fmt --check`, vet and deny clean; lint unchanged at 8; `deps --locked` clean;
+  `distlib --check` 0; CI's security scan 0.
+
+### Known / not fixed
+
+- The `CFG_*` config globals have no readers, so `phylax.toml` sets values
+  nothing consumes. Wiring them into the CLI is feature work.
+- The README lists TOML pattern types `literal`, `hex`, `regex`, but the TOML
+  loader treats every type other than `hex` as a literal string, so `regex`
+  patterns are not regexes there.
+- No aarch64 DCE compaction yet (toolchain).
+- Still open: the `http_post` `sock_send_all` / `Host:` port fix, the daemon's
+  SIGPIPE, the consumer and name-collision CI gates (roadmap), and the zugot
+  recipe (waits for a tag).
+
 ## [1.3.0] - 2026-11-04
 
 **Toolchain `6.6.20` → `6.7.9`, every dep moved to the release pinned against

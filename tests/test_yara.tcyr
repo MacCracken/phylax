@@ -53,11 +53,58 @@ fn test_yara_engine() {
     assert_eq(vec_len(findings), 0, "clean data has 0 findings");
 }
 
+# ----------------------------------------------------------------
+# TOML rule loading. Until 1.3.1 every field lookup in
+# yara_engine_load_rules_toml passed a Str key to bayan's cstr-keyed toml_get,
+# so nothing matched: a rule loaded as "unnamed" with no patterns and matched
+# nothing (measured on 1.3.0). The first rule below is the README's own
+# "YARA Rules Format" example, verbatim.
+# ----------------------------------------------------------------
+
+fn test_yara_toml_rules() {
+    test_group("yara_toml_rules");
+    var toml = "[[rule]]\nname = \"detect_elf\"\ndescription = \"Detects ELF binaries\"\nseverity = \"medium\"\n";
+    toml = str_cat(str_from(toml), str_from("tags = [\"elf\", \"linux\"]\ncondition = \"any\"\nmin_file_size = 4\n\n"));
+    toml = str_cat(toml, str_from("[[rule.patterns]]\nid = \"$magic\"\ntype = \"hex\"\nvalue = \"7f454c46\"\n\n"));
+    toml = str_cat(toml, str_from("[[rule]]\nname = \"says_hello\"\nseverity = \"high\"\ncondition = \"any\"\n\n"));
+    toml = str_cat(toml, str_from("[[rule.patterns]]\nid = \"$h\"\ntype = \"string\"\nvalue = \"hello\"\n"));
+
+    var eng = yara_engine_new();
+    var t, v = yara_engine_load_rules_toml(eng, toml);
+    assert_eq(is_err_result(t), 0, "TOML rules parse");
+    assert_eq(yara_engine_rule_count(eng), 2, "two rules loaded");
+    if (yara_engine_rule_count(eng) != 2) { return 0; }
+
+    var r0 = vec_get(load64(eng), 0);
+    assert(str_eq(load64(r0), str_from("detect_elf")), "rule name read from TOML (was 'unnamed')");
+    assert(str_eq(load64(r0 + 8), str_from("Detects ELF binaries")), "description read");
+    assert_eq(load64(r0 + 16), SEVERITY_MEDIUM, "severity read");
+    assert_eq(vec_len(load64(r0 + 32)), 1, "the hex pattern read");
+    var r1 = vec_get(load64(eng), 1);
+    assert_eq(load64(r1 + 16), SEVERITY_HIGH, "second rule's severity read");
+
+    var elf = alloc(8);
+    store8(elf, 0x7f); store8(elf + 1, 0x45); store8(elf + 2, 0x4c); store8(elf + 3, 0x46);
+    store8(elf + 4, 2); store8(elf + 5, 1); store8(elf + 6, 1); store8(elf + 7, 0);
+    var f1 = yara_engine_scan(eng, elf, 8);
+    assert_eq(vec_len(f1), 1, "an ELF header matches the README rule only");
+    if (vec_len(f1) == 1) {
+        assert(str_eq(load64(vec_get(f1, 0)), str_from("detect_elf")), "finding names detect_elf");
+    }
+
+    var hi = "well hello there";
+    assert_eq(vec_len(yara_engine_scan(eng, hi, strlen(hi))), 1, "the string pattern matches");
+    var miss = "nothing to see";
+    assert_eq(vec_len(yara_engine_scan(eng, miss, strlen(miss))), 0, "non-matching data has no finding");
+    return 0;
+}
+
 fn main() {
     phylax_init();
 
     test_yara();
     test_yara_engine();
+    test_yara_toml_rules();
 
     return assert_summary();
 }

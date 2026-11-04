@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — phylax
 
-> **Last refresh**: 2026-11-04 (**1.3.0** — VERSION 1.2.8 → 1.3.0; cyrius 6.6.20 → 6.7.9 and deps to the 6.7.9-pinned tags. aarch64 correctness sweep: phylax's x86 `SYS_*` / `O_NOFOLLOW` globals overrode the stdlib's per-target values (watch `-ENOSYS`, symlinks followed on aarch64) — removed, with `tests/test_platform.tcyr` and the suite running 441/441 on aarch64 under qemu (CI too). `F64_255` mabda collision removed; CI checks the lock with `deps --locked`; release ships aarch64. ⚠ Binary 866 KB → 2.36 MB from the DCE compaction cap (cyrius < 6.7.14). Prior refresh 2026-11-03 at 1.2.8.) | **Refresh cadence**: when docs are touched, update the affected row. No release attachment.
+> **Last refresh**: 2026-11-04 (**1.3.1** — VERSION 1.3.0 → 1.3.1; cyrius 6.7.9 → 6.7.18 and every dep to its latest release. bayan 1.11.1's typed keys exposed three pre-existing bugs, all fixed with failing-first tests: MCP `phylax_scan` SIGSEGV on bote's raw-JSON arguments, TOML YARA rules loading no fields, the config file never read. Binary 2.36 MB → 914 KB (6.7.14 removed the DCE compaction cap); build warnings 3 → 1. Suite 441 → **479**, on x86_64 and aarch64. MCP registration fixed (bote refused all 5 tools); sakshi seeded into the sidecars. Prior refresh earlier on {D} at 1.3.0.) | **Refresh cadence**: when docs are touched, update the affected row. No release attachment.
 > **Pending refresh**: the 1.2.5 crash-fix pass (report renderers + CLI argv paths) added `docs/adr/` — previously "no ADRs yet" — with [`adr/0001-string-and-json-representation-boundaries.md`](adr/0001-string-and-json-representation-boundaries.md), and rewrote `docs/guides/testing.md` (was listing the removed `tests/phylax.tcyr` and a 16-group table; now per-module with the two new files) plus the `CLAUDE.md` test-count block. `CHANGELOG.md` carries an `[Unreleased]` stanza. The buckets below have not been re-tallied for these.
 > **Scope**: This repo only (`phylax`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree, plus the two top-level `bench-latest.md` / `benchmarks-rust-v-cyrius.md` snapshots. Cross-repo dep / pin drift lives in [`development/dependency-watch.md`](development/dependency-watch.md), not here.
 
@@ -55,16 +55,16 @@ Pattern lifted from the libro + majra ledgers ([`libro/docs/doc-health.md`](http
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `adr/0001-string-and-json-representation-boundaries.md` | 2026-08-23 | ✅ Fresh | The cstr-vs-`Str` and `json_build`-vs-`json_v_*` contracts, written from the 1.2.5 crash-fix pass. |
+| `adr/0001-string-and-json-representation-boundaries.md` | 2026-11-04 | ✅ Fresh | Amended at 1.3.1: lookup keys carry a representation too (bayan `toml_get` cstr vs `json_get` Str, a silent not-found either way); phylax uses only typed `_by_cstr`/`_by_str` lookups; MCP handler arguments are raw JSON text. Pinned by three tests. |
 | `adr/0002-untrusted-input-contract.md` | 2026-11-04 | ✅ Fresh | Rule 3 amended at 1.3.0: the no-shadowing rule covers globals/constants, and its cost can be per-target (x86 `SYS_*`/`O_NOFOLLOW` broke aarch64; `F64_255` vs mabda `const`). Adds: take per-target constants from the stdlib; scan names mechanically at each pin bump. |
 
 ## Tier 1 — Root files
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `README.md` | 2026-11-04 | ✅ Fresh | Pins block at 1.3.0 (cyrius 6.7.9; sakshi 2.5.8 / sigil 3.13.11 / bayan 1.5.13 folded; bote 3.4.10 / majra 2.12.0 / libro 2.11.0) plus a Targets line (x86_64 + aarch64 Linux). Build block: ~2.4 MB binary (DCE compaction cap — see CHANGELOG), 441 assertions / 19 files, and the `--aarch64` suite command. Build-stats further down still date from the 1.2.0 cut. |
-| `CHANGELOG.md` | 2026-11-04 | ✅ Fresh | Source of truth. `[1.3.0] - 2026-11-04`: Breaking (19 names leave the bundles — migration given; releases ship aarch64), Fixed — aarch64 (inotify ENOSYS, O_NOFOLLOW=O_LARGEFILE, daemon raw syscalls, sys_rename dup, x86 guard macro), Fixed — dist (`F64_255` mabda const), pins table, CI (`deps --locked`, aarch64 under qemu), Known (2.7× binary: DCE compaction cap, root-caused to bote-core 3.4.10), interleaved-A/B Performance. |
-| `CLAUDE.md` | 2026-11-04 | ✅ Fresh | Language 6.7.9. Build block gained the `--aarch64` suite/build and `deps --locked`. Two new Key Principles: never define `SYS_*`/`O_*`/`STAT_*`/`IN_*` (take the stdlib's; arch macro is `CYRIUS_ARCH_X86`), and define no bare name the stdlib defines. Deps section at 1.3.0 pins; `path` note updated for 6.7.6 local mode; DCE compaction-cap warning. Tests 441 / 18 + core. |
+| `README.md` | 2026-11-04 | ✅ Fresh | Pins at 1.3.1 (cyrius 6.7.18; sakshi 2.5.10 / sigil 3.13.15 / bayan 1.11.1 folded; bote 3.8.6 / majra 2.13.0 / libro 2.11.3). Build block: ~0.91 MB binary, 479 assertions / 19 files, `--aarch64` suite. Rules-format note corrected: TOML pattern types are `hex` and literal; `regex` is not a regex in TOML yet. Build-stats further down still date from the 1.2.0 cut. |
+| `CHANGELOG.md` | 2026-11-04 | ✅ Fresh | Source of truth. `[1.3.1] - 2026-11-04`: Fixed (the MCP surface: bote refused all 5 tools and `phylax_scan` SIGSEGV'd; TOML YARA rules loaded no fields; config never read — Str/cstr mismatches), pins table (all latest, bote 3.8.6), sidecars now name sakshi/sigil/bayan/tagged, toolchain behaviour changes (`http_get` deadlines, stricter JSON), Performance (binary 2.36 MB → 914 KB, warnings 3 → 1, interleaved A/B neutral), Known (CFG_* unread, TOML regex, no aarch64 compaction). |
+| `CLAUDE.md` | 2026-11-04 | ✅ Fresh | Language 6.7.18; tests 479; `cyrius check` needs `--with-deps`. New Key Principles: bayan lookups must state the key type (`_by_cstr` / `_by_str`); bote is C-string throughout (names, ToolSchema via `tool_schema_from_json`, raw-JSON args, JSON-cstr results). Deps at 1.3.1; tag-picking rule covers "pinned" vs "latest"; DCE note updated (cap gone on x86 since 6.7.14; aarch64 never compacts). |
 | `CONTRIBUTING.md` | 2026-04-30 | 🔵 Evergreen | Generic contributor workflow. No version-tied claims. |
 | `SECURITY.md` | 2026-04-30 | 🔵 Evergreen | Reporting policy + scope. No version-tied claims. |
 | `CODE_OF_CONDUCT.md` | 2026-04-30 | 🔵 Evergreen | Standard. |
@@ -77,7 +77,7 @@ Pattern lifted from the libro + majra ledgers ([`libro/docs/doc-health.md`](http
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `overview.md` | 2026-11-04 | 🟠 Read-through | Dependency table at 1.3.0 (cyrius 6.7.9) with a note that per-target constants come from the stdlib only. The rest of the doc was not re-read this pass. |
+| `overview.md` | 2026-11-04 | 🟠 Read-through | Dependency table at 1.3.1 (cyrius 6.7.18) and the new 9 / 8-leaf sidecars (sakshi now named). The rest of the doc was not re-read this pass. |
 
 ---
 
@@ -85,8 +85,8 @@ Pattern lifted from the libro + majra ledgers ([`libro/docs/doc-health.md`](http
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `roadmap.md` | 2026-11-04 | ✅ Fresh | **v1.3.0** completed entry. aarch64 correctness struck (done). New: Binary size — the DCE compaction cap (fix = cyrius ≥ 6.7.14). CI gate gaps: lock-row gap struck (`deps --locked`), name-collision scan added as a wanted gate. CVE-74 → CYRIUS-2026-0025. |
-| `dependency-watch.md` | 2026-11-04 | ✅ Fresh | Pin matrix at 1.3.0 (cyrius 6.7.9). `path` section rewritten for 6.7.6 local mode; new `deps --locked` section; Toolchain notes for the DCE compaction cap, per-target constants (ESYSXLAT, `CYRIUS_ARCH_X86`), 6.7.2 const array sizes, mabda's `const F64_255`. Stdlib module table still partly predates 1.2.5. |
+| `roadmap.md` | 2026-11-04 | ✅ Fresh | **v1.3.1** completed entry. DCE compaction-cap item resolved for x86 (aarch64 compaction remains, toolchain-side). New backlog: config `CFG_*` globals have no readers; TOML `regex` pattern type is matched literally. |
+| `dependency-watch.md` | 2026-11-04 | ✅ Fresh | Pin matrix at 1.3.1 (cyrius 6.7.18, all deps latest). Toolchain notes: bayan 1.11.1 typed keys (and the unicode family it pulls in), no aarch64 compaction, compaction cap now historical. bote row notes MCP handlers get raw JSON text. Stdlib module table still partly predates 1.2.5. |
 | `threat-model.md` | 2026-04-30 | 🟠 Read-through | Trust-boundary claims need a no-op confirmation against sigil 3.x — phylax consumes only `sha256_hex` (a stable surface that exists unchanged from sigil 2.x → 3.x), so no model drift is expected. Read-through to verify and re-stamp. |
 | `2026-04-28-aarch64-handoff.md` | 2026-04-30 | 📦 Frozen + read-through | Aarch64 handoff snapshot — content is point-in-time. Read through once to confirm whether the listed handoff items are now resolved (sigil-side moved past 2.9.5 to 3.1.1; some aarch64-chain items may have closed transitively). If still open, leave as frozen and link the live status from `roadmap.md`. |
 
