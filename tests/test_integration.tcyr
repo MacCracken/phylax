@@ -245,11 +245,7 @@ fn test_mcp_bote_e2e() {
     assert(cstr_has(list, "\"phylax_scan\""), "tools/list names phylax_scan");
     assert(cstr_has(list, "\"phylax_quarantine\""), "tools/list names phylax_quarantine");
 
-    var call = str_from("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",");
-    call = str_cat(call, str_from("\"params\":{\"name\":\"phylax_scan\",\"arguments\":"));
-    call = str_cat(call, str_from("{\"target\":\"/tmp/phylax-test-mcp.txt\",\"target_type\":\"file\"}}}"));
-    call = str_to_cstr(call);
-    var out = mcp_roundtrip(disp, call);
+    var out = mcp_roundtrip(disp, mcp_scan_call("\"target\":\"/tmp/phylax-test-mcp.txt\",\"target_type\":\"file\""));
     assert(out != 0, "tools/call phylax_scan gets a reply");
     assert(cstr_has(out, "sha256"), "the reply carries the scan result");
     assert_eq(cstr_has(out, "\"isError\":true"), 0, "the reply is not a tool error");
@@ -258,7 +254,29 @@ fn test_mcp_bote_e2e() {
     sreq = str_cat(sreq, str_from("\"params\":{\"name\":\"phylax_status\",\"arguments\":{}}}"));
     var st = mcp_roundtrip(disp, str_to_cstr(sreq));
     assert(cstr_has(st, "ready"), "tools/call phylax_status reports ready");
+
+    # bote judges phylax's inputSchema before a handler runs, so a handler may
+    # trust the shape of its arguments. Pinned at 1.3.2 (bote 3.8.11; the same
+    # answers on 3.8.6) because bote's schema enforcement moves every release.
+    var bad = mcp_roundtrip(disp, mcp_scan_call("\"target\":\"/tmp/phylax-test-mcp.txt\",\"target_type\":\"bogus\""));
+    assert(cstr_has(bad, "not in enum"), "a target_type outside the enum is refused before the handler");
+    var nreq = mcp_roundtrip(disp, mcp_scan_call("\"target\":\"/tmp/phylax-test-mcp.txt\""));
+    assert(cstr_has(nreq, "missing required field: target_type"), "a missing required argument is refused");
+    var wty = mcp_roundtrip(disp, mcp_scan_call("\"target\":42,\"target_type\":\"file\""));
+    assert(cstr_has(wty, "target: expected string"), "a wrongly-typed argument is refused");
+    var dup_args = "\"target\":\"/tmp/x\",\"target\":\"/tmp/y\",\"target_type\":\"file\"";
+    var dup = mcp_roundtrip(disp, mcp_scan_call(dup_args));
+    assert(cstr_has(dup, "-32600"), "an argument named twice is an invalid request (bote 3.8.6+)");
     return 0;
+}
+
+# A tools/call line for phylax_scan whose arguments object holds `members` (cstr).
+fn mcp_scan_call(members) {
+    var s = str_from("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",");
+    s = str_cat(s, str_from("\"params\":{\"name\":\"phylax_scan\",\"arguments\":{"));
+    s = str_cat(s, str_from(members));
+    s = str_cat(s, str_from("}}}"));
+    return str_to_cstr(s);
 }
 
 # 1 if cstr `s` contains cstr `needle`, else 0 (0 for a null `s`).

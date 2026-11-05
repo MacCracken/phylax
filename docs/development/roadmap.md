@@ -86,6 +86,13 @@
 - `sakshi` seeded into the sidecars (it reached consumers only via vestigial libro)
 - Suite 441 → **479 / 19 files, on x86_64 and aarch64**
 
+### v1.3.2 — bote 3.8.11 (2026-11-04)
+- bote 3.8.6 → **3.8.11** (libro/majra already at its pins; cyrius unchanged).
+  No source change: the 11 bote fns phylax calls are unchanged.
+- `mcp_bote_e2e` now pins bote's argument checking for phylax's tools (enum,
+  required, type, duplicate keys) — bote's schema enforcement moves each release
+- Suite 479 → **483**, on x86_64 and aarch64; binary 914 KB → 918 KB
+
 ## Backlog
 
 ### v0.9.1 — TAR Support
@@ -146,7 +153,7 @@
   is 914 KB again (it was 2.36 MB at 1.3.0).
 - Remaining: **aarch64 does not compact at all** ("no compaction repair model
   yet"), so the aarch64 binary is 3.29 MB and grows with every dep (bote-core
-  is 673 fns at 3.8.6; phylax calls 3). Toolchain-side.
+  is 824 fns at 3.8.11; phylax calls a handful). Toolchain-side.
 
 ### Config file has no effect — the `CFG_*` globals have no readers
 - Since 1.3.1 `config_apply_toml` reads `[scan] rules_path` / `max_file_size`,

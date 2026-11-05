@@ -170,8 +170,8 @@ stdlib = [
 # `dist/bote-core.cyr` — which excludes `events_majra.cyr` — nothing
 # in phylax's link closure references majra (phylax src calls no
 # `pubsub_*`/`counter_*`), so these modules now stage but DCE-prune.
-# Still true at bote 3.8.6. Kept + version-tracked for now, at 2.13.0
-# to match the majra that bote 3.8.6 itself pins, so the two never
+# Still true at bote 3.8.11. Kept + version-tracked for now, at 2.13.0
+# to match the majra that bote 3.8.11 itself pins, so the two never
 # diverge inside one link. A candidate for removal in a
 # dedicated dep-pruning pass (not folded into this pin sweep) — see
 # the note over `[deps.libro]` for what that pass would also reclaim.
@@ -195,7 +195,7 @@ modules = ["src/pubsub.cyr", "src/counter.cyr"]
 # NOT used — it references libro/majra symbols and drags the whole
 # transport + audit stack in for three functions.)
 #
-# At 3.8.x bote-core is 673 fns (306 at 3.4.10) and its own requires block
+# At 3.8.x bote-core is 824 fns at 3.8.11 (673 at 3.8.6, 306 at 3.4.10) and its own requires block
 # names only `hashmap sys`, so phylax's dist sidecars now derive sigil / bayan
 # / tagged themselves (1.3.1). phylax also uses `tool_registry_new`,
 # `dispatcher_new`, `tool_schema_from_json` (3.8.3+) and, in tests, bote's
@@ -205,7 +205,7 @@ modules = ["src/pubsub.cyr", "src/counter.cyr"]
 # JSON cstr. Until 1.3.1 phylax passed Strs and registered nothing.
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
-tag = "3.8.6"
+tag = "3.8.11"
 modules = ["dist/bote-core.cyr"]
 
 # Explicit libro pin — now a pure belt-and-suspenders alignment, not
@@ -218,7 +218,7 @@ modules = ["dist/bote-core.cyr"]
 # phylax's link closure references libro at all — phylax never called it
 # directly, and the core bundle no longer pulls it — so this module now
 # stages but DCE-prunes. Kept to (a) document the resolved version
-# explicitly at phylax's manifest and (b) stay aligned with bote 3.8.6's
+# explicitly at phylax's manifest and (b) stay aligned with bote 3.8.11's
 # own transitive libro pin (2.11.3), so the two never diverge. Like the
 # majra block above, a candidate for a dedicated dep-pruning pass.
 #

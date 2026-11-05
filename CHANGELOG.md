@@ -2,6 +2,98 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.3.2] - 2026-11-04
+
+**bote `3.8.6` → `3.8.11`.** Nothing else moves. cyrius stays 6.7.18. libro
+2.11.3 and majra 2.13.0 are exactly what bote 3.8.11 pins itself, and neither
+has a newer release. No phylax source change was needed: all 11 bote functions
+phylax calls keep their signatures, and its tools register and answer as
+before.
+
+### Changed — dependency pins
+
+| dep | was | now | note |
+|---|---|---|---|
+| bote | 3.8.6 | **3.8.11** | published; pins cyrius 6.7.18, libro 2.11.3, majra 2.13.0 |
+
+bote 3.8.7–3.8.11 extend the JSON Schema enforcement applied to a tool's
+arguments before its handler runs:
+- `const` and `enum` for every value type, `uniqueItems`, type arrays (3.8.7);
+- `prefixItems`, `contains`, `propertyNames`, `dependentRequired` and
+  `dependentSchemas` (3.8.8);
+- `allOf` / `anyOf` / `oneOf` / `not` / `if`-`then`-`else`, with a judgement
+  budget (3.8.9);
+- `$ref` within the document, with a depth limit (3.8.10);
+- `pattern`, by a non-backtracking engine, and `multipleOf` (3.8.11);
+- each with fixes from a review of the release before it.
+
+phylax's schemas use only `type`, string `enum` and `required`, so none of this
+changes what they accept. Measured on 3.8.6 and on 3.8.11: neither logs a
+registration warning, and out-of-schema calls get the same answers. The lock
+moves in exactly two places, bote's commit pin and `lib/bote-core.cyr`'s hash;
+the 72-file set is unchanged. `cyrius deps --locked` against the 1.3.1 lock
+reported those two differences and exited 1.
+
+### Added
+
+- **`mcp_bote_e2e` pins bote's argument checking for phylax's tools** (+4).
+  Handlers rely on it, and bote's enforcement now moves every release. The test
+  asserts that a `target_type` outside the enum, a missing required argument
+  and a wrongly typed argument are each refused as a tool error before the
+  handler runs, and that an argument named twice is a `-32600` invalid request.
+  A `mcp_scan_call(members)` helper builds the requests.
+
+### Performance
+
+**Binary: 914,384 → 918,272 B (+0.4%).** bote-core grew from 673 to 824
+functions, and phylax still calls a handful, so 4,978 dead functions now
+compact (4,835 at 1.3.1). The aarch64 binary, which is not compacted, grows
+3,285,672 → 3,355,104 B. Build warnings stay at 1 (`src/pe.cyr:437`).
+
+Runtime is neutral. Measured with an interleaved A/B of 1.3.1 and 1.3.2, while
+another session's continuous compile-and-test loop held the machine at a load
+average of about 5. To keep that fair, the prebuilt bench binaries were run
+alternately, **pinned to one core** (`taskset -c 15`), for 5 rounds each. A
+first, unpinned run showed spreads up to 63% and is discarded.
+
+| bench | 1.3.1 | 1.3.2 | delta |
+|---|---|---|---|
+| entropy_1k | 14.533 us | 15.954 us | +9.8% (placement, below) |
+| entropy_1m | 4.213 ms | 4.233 ms | +0.5% |
+| chi_squared | 18.168 us | 18.148 us | −0.1% |
+| file_detection | 27 ns | 27 ns | 0 |
+| sha256_4k | 20.554 us | 20.360 us | −0.9% |
+| memmem_4k | 7.552 us | 7.585 us | +0.4% |
+| hex_encode_256 | 3.864 us | 3.842 us | −0.6% |
+| extract_ascii | 36.696 us | 36.869 us | +0.5% |
+| ssdeep_4k | 107.045 us | 105.665 us | −1.3% |
+| tlsh_1k | 400.030 us | 400.956 us | +0.2% |
+| queue_enqueue | 66.535 us | 67.029 us | +0.7% |
+| queue_dequeue | 10.063 ms | 10.137 ms | +0.7% |
+| report_json_100 | 779.484 us | 783.292 us | +0.5% |
+| report_sarif_100 | 1.003 ms | 998.822 us | −0.4% |
+| report_markdown_100 | 126.141 us | 124.377 us | −1.4% |
+
+Absolute numbers are 3–5% above 1.3.1's own table because of the load; only the
+deltas are comparable. `entropy_1k` is the documented placement effect: git-dep
+modules are compiled into every build, and bench builds are not DCE'd, so
+bote-core's growth moves code layout even in the core-profile bench, which
+calls no bote. That binary grew 2,746,712 → 2,848,912 B, and its `entropy_1k`
+moved +6.3% with nothing in its call path changed.
+
+### Verification
+
+- **483 assertions across 19 files, on x86_64 and on aarch64 (qemu)**, including
+  `mcp_bote_e2e`'s real JSON-RPC through bote 3.8.11's codec and dispatcher.
+- CLI A/B against the 1.3.1 binary on a fixed corpus: `scan`, all three
+  `report` formats and `status` are byte-identical after normalizing
+  timestamps, IDs and the version, with the same exit codes.
+- Both dist bundles consumed by scratch projects: 11/11 on x86_64 and aarch64,
+  with bote 3.8.11 arriving transitively. The sidecars are unchanged (9 / 8
+  leaves); only the version stamps moved in `dist/`.
+- `fmt --check`, vet and deny clean; lint unchanged at 8; `check --with-deps`
+  ok; `deps --locked` clean; `distlib --check` 0; CI's security scan 0.
+
 ## [1.3.1] - 2026-11-04
 
 **Toolchain `6.7.9` → `6.7.18` (the latest release) and every dep moved to its

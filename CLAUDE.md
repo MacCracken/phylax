@@ -43,7 +43,7 @@ an explicit `include "lib/X.cyr"` in that module (see the `lib/math.cyr` include
 at the top of `src/analyze.cyr`), or distlib refuses and writes no sidecar.
 
 The test suite is split per-module under `tests/test_*.tcyr` (18 files, plus
-`tests/phylax-core.tcyr`; 479 assertions total as of 1.3.1, on x86_64 AND aarch64) so a
+`tests/phylax-core.tcyr`; 483 assertions total as of 1.3.2, on x86_64 AND aarch64) so a
 crash in one module doesn't poison the rest of the run. Add a new module's tests as
 `tests/test_<module>.tcyr`; CI picks up `tests/*.tcyr` automatically.
 
@@ -123,7 +123,7 @@ src/lib_core.cyr      — detection-only include list, matches [lib.core] profil
 src/<module>.cyr      — 17 modules (types, utils, analyze, strings, script, hashing,
                         pe, elf, archive, yara, queue, quarantine, report,
                         integration, cli)
-tests/test_*.tcyr     — per-module test files (18 files + phylax-core, 479 assertions)
+tests/test_*.tcyr     — per-module test files (18 files + phylax-core, 483 assertions)
 tests/phylax-core.tcyr — [lib.core] smoke test (proves core compiles standalone)
 tests/phylax.bcyr     — full benchmarks
 tests/phylax-core.bcyr — [lib.core] benchmarks
@@ -189,8 +189,8 @@ the API; ssh is unavailable in the sandbox).
 dep's size. Watch the build's "compaction declined" note on any bump.
 
 - **majra** 2.13.0 — pubsub/counter; **vestigial** since bote-core dropped `events_majra` (phylax calls it directly nowhere) — staged, DCE-pruned, kept at bote's own majra pin pending a dep-pruning pass
-- **bote** 3.8.6 — MCP tool registry and dispatch, consumed via the transport-free **`dist/bote-core.cyr`** bundle (the old 11 hand-picked `src/*.cyr` modules no longer link under bote 3.x)
-- **libro** 2.11.3 — **vestigial** belt-and-suspenders pin aligned to bote 3.8.6's transitive libro; not referenced by phylax or bote-core (DCE-pruned). It still declares sigil as a *git* dep, but since cyrius 6.6.11 that is inert: `cyrius deps` no longer vendors a git dep's thin sigil files when `sigil` is a stdlib leaf (the ~350 KB / 232-warning double-stage of 1.2.5–1.2.7 is gone).
+- **bote** 3.8.11 — MCP tool registry and dispatch, consumed via the transport-free **`dist/bote-core.cyr`** bundle (the old 11 hand-picked `src/*.cyr` modules no longer link under bote 3.x)
+- **libro** 2.11.3 — **vestigial** belt-and-suspenders pin aligned to bote 3.8.11's transitive libro; not referenced by phylax or bote-core (DCE-pruned). It still declares sigil as a *git* dep, but since cyrius 6.6.11 that is inert: `cyrius deps` no longer vendors a git dep's thin sigil files when `sigil` is a stdlib leaf (the ~350 KB / 232-warning double-stage of 1.2.5–1.2.7 is gone).
 
 ## Documentation Structure
 

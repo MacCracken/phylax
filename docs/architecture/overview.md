@@ -122,7 +122,7 @@ File Path
 
 ## Dependencies
 
-Current as of **1.3.1** (cyrius 6.7.18). Canonical detail — including why the
+Current as of **1.3.2** (cyrius 6.7.18). Canonical detail — including why the
 declaration *shape* of the folded modules matters — lives in
 [`docs/development/dependency-watch.md`](../development/dependency-watch.md).
 
@@ -132,7 +132,7 @@ declaration *shape* of the folded modules matters — lives in
 | sakshi | 2.5.10 | folded stdlib | Structured logging |
 | sigil | 3.13.15 | folded stdlib | SHA-256 cryptographic hashing (SHA-NI dispatch) |
 | bayan | 1.11.1 | folded stdlib | JSON / TOML / CSV / base64 / bigint |
-| bote | 3.8.6 | git dep | MCP tool registry and JSON-RPC dispatch (`dist/bote-core.cyr`) |
+| bote | 3.8.11 | git dep | MCP tool registry and JSON-RPC dispatch (`dist/bote-core.cyr`) |
 | majra | 2.13.0 | git dep | Pub/sub events — **vestigial**, staged + DCE-pruned |
 | libro | 2.11.3 | git dep | Audit chain — **vestigial**, staged + DCE-pruned |
 

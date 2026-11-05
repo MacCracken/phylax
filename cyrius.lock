@@ -1,4 +1,4 @@
-commit	a71cc417a50ebe2072c1608c857f8adbb55cf8d4	bote	https://github.com/MacCracken/bote.git	3.8.6
+commit	96e1886a86224c6074f9151999716449f0c87c8d	bote	https://github.com/MacCracken/bote.git	3.8.11
 commit	f4a31a450a112587d6fcc46a946e1b6061878e6f	libro	https://github.com/MacCracken/libro.git	2.11.3
 commit	40b827f275c452f592e0735b19b0cb47448c2794	majra	https://github.com/MacCracken/majra.git	2.13.0
 commit	efa2e34aefcb1dc65a01e734b2b19bfe18b10c7f	patra	https://github.com/MacCracken/patra.git	1.16.6
@@ -16,7 +16,7 @@ commit	3c47656154ecd4b07abee1f8b174b2389bb83a8b	sigil	https://github.com/MacCrac
 23516d97b8eb5ba1c7a1b6e34a89b3b0653f68d858edca8521a7ccce5a06bce5  lib/atomic.cyr
 233e7263692ab65ca4dab7bb98aae0ddc0fa3cc937c87ca8ff96326d3f0ae20e  lib/bayan.cyr
 cd9321d9400401cd8895d1f488d969ea391a1194b327f7a1fa60b99912b73cf2  lib/bench.cyr
-65c6dd8314e37161b16ff79359dac380fb53cb86f99456edc07bc5061a4b7e4c  lib/bote-core.cyr
+676fa643ee085c8355ab6b85c7cc4c97bf04617e89dce17e3861ed5a7415de36  lib/bote-core.cyr
 d3106568aba674ffa99ad15542ba2accd648707e4c3172d4e5ca3bf8f49b765b  lib/bounds.cyr
 b99081e633d572569ee63c6a915fe4aa39b3ac4ff5665c08cc4c9416ed2f6928  lib/boxed.cyr
 2e2e802085112d781225c517fca853b4adbf29850a96b21b6ff32469f0736516  lib/chrono.cyr

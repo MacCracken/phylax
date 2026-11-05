@@ -1,6 +1,6 @@
 # Dependency Watch
 
-Status tracking for all dependencies. Current as of **phylax 1.3.1**
+Status tracking for all dependencies. Current as of **phylax 1.3.2**
 (2026-11-04, cyrius 6.7.18). The stdlib table below predates 1.2.5 in places;
 the External Dependencies table and the Toolchain section are current.
 
@@ -64,9 +64,9 @@ alone and must be explicitly `include`d. See `thread_local` below.
 |-----------|---------|---------|-------|
 | `sakshi` | 2.5.10 | Structured logging | **Folded stdlib module** as of 1.2.5 — declared in `[deps] stdlib`, not a git dep. Tracks the toolchain fold (6.7.18 vendors 2.5.10). |
 | `sigil` | 3.13.15 | Cryptographic primitives | **Folded stdlib module** as of 1.2.5. SHA-256 (SHA-NI dispatch); only `sha256` consumed. 6.7.18 vendors 3.13.15 — the same version libro 2.11.3 pins as a git dep. |
-| `majra` | 2.13.0 | Pubsub/counter | **Vestigial** — staged + DCE-pruned. Latest release; = bote 3.8.6's own majra pin. |
-| `bote` | 3.8.6 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle; latest release (3.8.6 refuses duplicate JSON keys). bote-core is 673 fns (306 at 3.4.10; phylax calls a handful) — harmless on x86 since cyrius 6.7.14 removed the compaction cap, but it grows the uncompacted aarch64 binary. ⚠ **C-string API:** tool names/descriptions/handler keys are cstrs, an inputSchema is a ToolSchema object (`tool_schema_from_json`), a handler gets raw JSON text and returns a JSON cstr; its requires block names only `hashmap sys` since 3.8.x. |
-| `libro` | 2.11.3 | Belt-and-suspenders pin | Latest release; = bote 3.8.6's transitive libro. Not referenced by phylax (DCE-pruned). Pulls patra 1.16.6. |
+| `majra` | 2.13.0 | Pubsub/counter | **Vestigial** — staged + DCE-pruned. Latest release; = bote 3.8.11's own majra pin. |
+| `bote` | 3.8.11 | MCP tool registry/dispatch | **`dist/bote-core.cyr`** transport-free bundle; latest release. 3.8.6 refuses duplicate JSON keys; 3.8.7–3.8.11 widen inputSchema enforcement (`const`/`enum` for all types, composition, `$ref`, `pattern`, `multipleOf`) — phylax's schemas (`type`, string `enum`, `required`) are judged the same, pinned by `mcp_bote_e2e`. bote-core is 824 fns (673 at 3.8.6, 306 at 3.4.10) — compacts on x86, grows the uncompacted aarch64 binary. ⚠ **C-string API:** tool names/descriptions/handler keys are cstrs, an inputSchema is a ToolSchema object (`tool_schema_from_json`), a handler gets raw JSON text and returns a JSON cstr; its requires block names only `hashmap sys`. |
+| `libro` | 2.11.3 | Belt-and-suspenders pin | Latest release; = bote 3.8.11's transitive libro. Not referenced by phylax (DCE-pruned). Pulls patra 1.16.6. |
 
 ### Folded modules: why the declaration shape matters
 

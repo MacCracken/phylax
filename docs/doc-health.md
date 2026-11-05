@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — phylax
 
-> **Last refresh**: 2026-11-04 (**1.3.1** — VERSION 1.3.0 → 1.3.1; cyrius 6.7.9 → 6.7.18 and every dep to its latest release. bayan 1.11.1's typed keys exposed three pre-existing bugs, all fixed with failing-first tests: MCP `phylax_scan` SIGSEGV on bote's raw-JSON arguments, TOML YARA rules loading no fields, the config file never read. Binary 2.36 MB → 914 KB (6.7.14 removed the DCE compaction cap); build warnings 3 → 1. Suite 441 → **479**, on x86_64 and aarch64. MCP registration fixed (bote refused all 5 tools); sakshi seeded into the sidecars. Prior refresh earlier on {D} at 1.3.0.) | **Refresh cadence**: when docs are touched, update the affected row. No release attachment.
+> **Last refresh**: 2026-11-04 (**1.3.2** — VERSION 1.3.1 → 1.3.2; bote 3.8.6 → 3.8.11, nothing else moves. No source change; `mcp_bote_e2e` gained 4 assertions pinning bote's argument checking for phylax's tools. Suite 479 → **483**, on x86_64 and aarch64. Prior refresh earlier on {D} at 1.3.1.) | **Refresh cadence**: when docs are touched, update the affected row. No release attachment.
 > **Pending refresh**: the 1.2.5 crash-fix pass (report renderers + CLI argv paths) added `docs/adr/` — previously "no ADRs yet" — with [`adr/0001-string-and-json-representation-boundaries.md`](adr/0001-string-and-json-representation-boundaries.md), and rewrote `docs/guides/testing.md` (was listing the removed `tests/phylax.tcyr` and a 16-group table; now per-module with the two new files) plus the `CLAUDE.md` test-count block. `CHANGELOG.md` carries an `[Unreleased]` stanza. The buckets below have not been re-tallied for these.
 > **Scope**: This repo only (`phylax`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree, plus the two top-level `bench-latest.md` / `benchmarks-rust-v-cyrius.md` snapshots. Cross-repo dep / pin drift lives in [`development/dependency-watch.md`](development/dependency-watch.md), not here.
 
@@ -62,9 +62,9 @@ Pattern lifted from the libro + majra ledgers ([`libro/docs/doc-health.md`](http
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `README.md` | 2026-11-04 | ✅ Fresh | Pins at 1.3.1 (cyrius 6.7.18; sakshi 2.5.10 / sigil 3.13.15 / bayan 1.11.1 folded; bote 3.8.6 / majra 2.13.0 / libro 2.11.3). Build block: ~0.91 MB binary, 479 assertions / 19 files, `--aarch64` suite. Rules-format note corrected: TOML pattern types are `hex` and literal; `regex` is not a regex in TOML yet. Build-stats further down still date from the 1.2.0 cut. |
-| `CHANGELOG.md` | 2026-11-04 | ✅ Fresh | Source of truth. `[1.3.1] - 2026-11-04`: Fixed (the MCP surface: bote refused all 5 tools and `phylax_scan` SIGSEGV'd; TOML YARA rules loaded no fields; config never read — Str/cstr mismatches), pins table (all latest, bote 3.8.6), sidecars now name sakshi/sigil/bayan/tagged, toolchain behaviour changes (`http_get` deadlines, stricter JSON), Performance (binary 2.36 MB → 914 KB, warnings 3 → 1, interleaved A/B neutral), Known (CFG_* unread, TOML regex, no aarch64 compaction). |
-| `CLAUDE.md` | 2026-11-04 | ✅ Fresh | Language 6.7.18; tests 479; `cyrius check` needs `--with-deps`. New Key Principles: bayan lookups must state the key type (`_by_cstr` / `_by_str`); bote is C-string throughout (names, ToolSchema via `tool_schema_from_json`, raw-JSON args, JSON-cstr results). Deps at 1.3.1; tag-picking rule covers "pinned" vs "latest"; DCE note updated (cap gone on x86 since 6.7.14; aarch64 never compacts). |
+| `README.md` | 2026-11-04 | ✅ Fresh | Pins at 1.3.2 (cyrius 6.7.18; sakshi 2.5.10 / sigil 3.13.15 / bayan 1.11.1 folded; bote 3.8.11 / majra 2.13.0 / libro 2.11.3). Build block: ~0.92 MB binary, 483 assertions / 19 files, `--aarch64` suite. Rules-format note corrected: TOML pattern types are `hex` and literal; `regex` is not a regex in TOML yet. Build-stats further down still date from the 1.2.0 cut. |
+| `CHANGELOG.md` | 2026-11-04 | ✅ Fresh | Source of truth. `[1.3.2] - 2026-11-04`: bote 3.8.11 pin (what 3.8.7–3.8.11 enforce, and that phylax's schemas are judged the same), +4 MCP assertions, binary +0.4%, a pinned interleaved A/B taken under external load (method stated). `[1.3.1]` below it holds the bayan/bote Str-vs-cstr fixes. |
+| `CLAUDE.md` | 2026-11-04 | ✅ Fresh | Language 6.7.18; tests 483; `cyrius check` needs `--with-deps`. New Key Principles: bayan lookups must state the key type (`_by_cstr` / `_by_str`); bote is C-string throughout (names, ToolSchema via `tool_schema_from_json`, raw-JSON args, JSON-cstr results). Deps at 1.3.1; tag-picking rule covers "pinned" vs "latest"; DCE note updated (cap gone on x86 since 6.7.14; aarch64 never compacts). |
 | `CONTRIBUTING.md` | 2026-04-30 | 🔵 Evergreen | Generic contributor workflow. No version-tied claims. |
 | `SECURITY.md` | 2026-04-30 | 🔵 Evergreen | Reporting policy + scope. No version-tied claims. |
 | `CODE_OF_CONDUCT.md` | 2026-04-30 | 🔵 Evergreen | Standard. |
@@ -77,7 +77,7 @@ Pattern lifted from the libro + majra ledgers ([`libro/docs/doc-health.md`](http
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `overview.md` | 2026-11-04 | 🟠 Read-through | Dependency table at 1.3.1 (cyrius 6.7.18) and the new 9 / 8-leaf sidecars (sakshi now named). The rest of the doc was not re-read this pass. |
+| `overview.md` | 2026-11-04 | 🟠 Read-through | Dependency table at 1.3.2 (cyrius 6.7.18) and the new 9 / 8-leaf sidecars (sakshi now named). The rest of the doc was not re-read this pass. |
 
 ---
 
@@ -85,8 +85,8 @@ Pattern lifted from the libro + majra ledgers ([`libro/docs/doc-health.md`](http
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `roadmap.md` | 2026-11-04 | ✅ Fresh | **v1.3.1** completed entry. DCE compaction-cap item resolved for x86 (aarch64 compaction remains, toolchain-side). New backlog: config `CFG_*` globals have no readers; TOML `regex` pattern type is matched literally. |
-| `dependency-watch.md` | 2026-11-04 | ✅ Fresh | Pin matrix at 1.3.1 (cyrius 6.7.18, all deps latest). Toolchain notes: bayan 1.11.1 typed keys (and the unicode family it pulls in), no aarch64 compaction, compaction cap now historical. bote row notes MCP handlers get raw JSON text. Stdlib module table still partly predates 1.2.5. |
+| `roadmap.md` | 2026-11-04 | ✅ Fresh | **v1.3.2** and **v1.3.1** completed entries. DCE compaction-cap item resolved for x86 (aarch64 compaction remains, toolchain-side). Backlog: config `CFG_*` globals have no readers; TOML `regex` pattern type is matched literally. |
+| `dependency-watch.md` | 2026-11-04 | ✅ Fresh | Pin matrix at 1.3.2 (bote 3.8.11) (cyrius 6.7.18, all deps latest). Toolchain notes: bayan 1.11.1 typed keys (and the unicode family it pulls in), no aarch64 compaction, compaction cap now historical. bote row notes MCP handlers get raw JSON text. Stdlib module table still partly predates 1.2.5. |
 | `threat-model.md` | 2026-04-30 | 🟠 Read-through | Trust-boundary claims need a no-op confirmation against sigil 3.x — phylax consumes only `sha256_hex` (a stable surface that exists unchanged from sigil 2.x → 3.x), so no model drift is expected. Read-through to verify and re-stamp. |
 | `2026-04-28-aarch64-handoff.md` | 2026-04-30 | 📦 Frozen + read-through | Aarch64 handoff snapshot — content is point-in-time. Read through once to confirm whether the listed handoff items are now resolved (sigil-side moved past 2.9.5 to 3.1.1; some aarch64-chain items may have closed transitively). If still open, leave as frozen and link the live status from `roadmap.md`. |
 
