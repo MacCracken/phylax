@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — phylax
 
-> **Last refresh**: 2026-11-04 (**1.3.2** — VERSION 1.3.1 → 1.3.2; bote 3.8.6 → 3.8.11, nothing else moves. No source change; `mcp_bote_e2e` gained 4 assertions pinning bote's argument checking for phylax's tools. Suite 479 → **483**, on x86_64 and aarch64. Prior refresh earlier on {D} at 1.3.1.) | **Refresh cadence**: when docs are touched, update the affected row. No release attachment.
+> **Last refresh**: 2026-11-04 (**1.3.3** — VERSION 1.3.2 → 1.3.3; no dep changes. Config values now take effect (flag > config > default; `phylax status` shows them). Found while wiring it: no `.yar` rule had ever loaded (lexer passed lengths to `str_substr`, which takes an end index), `$name` lookups used a cstr-keyed map, `--rules` was re-added per file; the same `str_substr` bug in ssdeep/TLSH compare. Suite 483 → **523**, on x86_64 and aarch64. The 1.3.1/1.3.2 CLI A/B claims were re-checked with a corrected (bash) harness and hold. Prior refresh earlier on {D} at 1.3.2.) | **Refresh cadence**: when docs are touched, update the affected row. No release attachment.
 > **Pending refresh**: the 1.2.5 crash-fix pass (report renderers + CLI argv paths) added `docs/adr/` — previously "no ADRs yet" — with [`adr/0001-string-and-json-representation-boundaries.md`](adr/0001-string-and-json-representation-boundaries.md), and rewrote `docs/guides/testing.md` (was listing the removed `tests/phylax.tcyr` and a 16-group table; now per-module with the two new files) plus the `CLAUDE.md` test-count block. `CHANGELOG.md` carries an `[Unreleased]` stanza. The buckets below have not been re-tallied for these.
 > **Scope**: This repo only (`phylax`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree, plus the two top-level `bench-latest.md` / `benchmarks-rust-v-cyrius.md` snapshots. Cross-repo dep / pin drift lives in [`development/dependency-watch.md`](development/dependency-watch.md), not here.
 
@@ -55,16 +55,16 @@ Pattern lifted from the libro + majra ledgers ([`libro/docs/doc-health.md`](http
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `adr/0001-string-and-json-representation-boundaries.md` | 2026-11-04 | ✅ Fresh | Amended at 1.3.1: lookup keys carry a representation too (bayan `toml_get` cstr vs `json_get` Str, a silent not-found either way); phylax uses only typed `_by_cstr`/`_by_str` lookups; MCP handler arguments are raw JSON text. Pinned by three tests. |
+| `adr/0001-string-and-json-representation-boundaries.md` | 2026-11-04 | ✅ Fresh | Amended at 1.3.1: lookup keys carry a representation too (bayan `toml_get` cstr vs `json_get` Str, a silent not-found either way); phylax uses only typed `_by_cstr`/`_by_str` lookups; MCP handler arguments are raw JSON text. Pinned by three tests. | 1.3.3: map-key amendment (`map_new` cstr vs `map_new_str` Str).
 | `adr/0002-untrusted-input-contract.md` | 2026-11-04 | ✅ Fresh | Rule 3 amended at 1.3.0: the no-shadowing rule covers globals/constants, and its cost can be per-target (x86 `SYS_*`/`O_NOFOLLOW` broke aarch64; `F64_255` vs mabda `const`). Adds: take per-target constants from the stdlib; scan names mechanically at each pin bump. |
 
 ## Tier 1 — Root files
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `README.md` | 2026-11-04 | ✅ Fresh | Pins at 1.3.2 (cyrius 6.7.18; sakshi 2.5.10 / sigil 3.13.15 / bayan 1.11.1 folded; bote 3.8.11 / majra 2.13.0 / libro 2.11.3). Build block: ~0.92 MB binary, 483 assertions / 19 files, `--aarch64` suite. Rules-format note corrected: TOML pattern types are `hex` and literal; `regex` is not a regex in TOML yet. Build-stats further down still date from the 1.2.0 cut. |
-| `CHANGELOG.md` | 2026-11-04 | ✅ Fresh | Source of truth. `[1.3.2] - 2026-11-04`: bote 3.8.11 pin (what 3.8.7–3.8.11 enforce, and that phylax's schemas are judged the same), +4 MCP assertions, binary +0.4%, a pinned interleaved A/B taken under external load (method stated). `[1.3.1]` below it holds the bayan/bote Str-vs-cstr fixes. |
-| `CLAUDE.md` | 2026-11-04 | ✅ Fresh | Language 6.7.18; tests 483; `cyrius check` needs `--with-deps`. New Key Principles: bayan lookups must state the key type (`_by_cstr` / `_by_str`); bote is C-string throughout (names, ToolSchema via `tool_schema_from_json`, raw-JSON args, JSON-cstr results). Deps at 1.3.1; tag-picking rule covers "pinned" vs "latest"; DCE note updated (cap gone on x86 since 6.7.14; aarch64 never compacts). |
+| `README.md` | 2026-11-04 | ✅ Fresh | Pins at 1.3.2 (unchanged at 1.3.3) (cyrius 6.7.18; sakshi 2.5.10 / sigil 3.13.15 / bayan 1.11.1 folded; bote 3.8.11 / majra 2.13.0 / libro 2.11.3). Build block: ~0.92 MB binary, 523 assertions / 19 files, `--aarch64` suite. Rules-format note corrected: TOML pattern types are `hex` and literal; `regex` is not a regex in TOML yet. Build-stats further down still date from the 1.2.0 cut. | New at 1.3.3: a Configuration section pointing at the CLI reference.
+| `CHANGELOG.md` | 2026-11-04 | ✅ Fresh | Source of truth. `[1.3.3] - 2026-11-04`: config applied (precedence table, validation, `status`), `.yar` lexer + `$name` map + per-file re-add fixed, ssdeep/TLSH `str_substr` fixes, metadata map key type, `$HOME` overflow; new benches for the changed paths; a correction re-checking the 1.3.1/1.3.2 CLI A/B claims. |
+| `CLAUDE.md` | 2026-11-04 | ✅ Fresh | Language 6.7.18; tests 523; `cyrius check` needs `--with-deps`. New Key Principles: bayan lookups must state the key type (`_by_cstr` / `_by_str`); bote is C-string throughout (names, ToolSchema via `tool_schema_from_json`, raw-JSON args, JSON-cstr results). Deps at 1.3.1; tag-picking rule covers "pinned" vs "latest"; DCE note updated (cap gone on x86 since 6.7.14; aarch64 never compacts). | 1.3.3: Key Principles for `str_substr(s, start, END)`, map constructor by key type, and config precedence helpers.
 | `CONTRIBUTING.md` | 2026-04-30 | 🔵 Evergreen | Generic contributor workflow. No version-tied claims. |
 | `SECURITY.md` | 2026-04-30 | 🔵 Evergreen | Reporting policy + scope. No version-tied claims. |
 | `CODE_OF_CONDUCT.md` | 2026-04-30 | 🔵 Evergreen | Standard. |
@@ -85,7 +85,7 @@ Pattern lifted from the libro + majra ledgers ([`libro/docs/doc-health.md`](http
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `roadmap.md` | 2026-11-04 | ✅ Fresh | **v1.3.2** and **v1.3.1** completed entries. DCE compaction-cap item resolved for x86 (aarch64 compaction remains, toolchain-side). Backlog: config `CFG_*` globals have no readers; TOML `regex` pattern type is matched literally. |
+| `roadmap.md` | 2026-11-04 | ✅ Fresh | **v1.3.3** completed entry; "Config file has no effect" struck. New backlog: CLI rules files beyond `.yar`; `[ok]` printed for size-skipped files. Still: TOML `regex` matched literally; aarch64 compaction (toolchain). |
 | `dependency-watch.md` | 2026-11-04 | ✅ Fresh | Pin matrix at 1.3.2 (bote 3.8.11) (cyrius 6.7.18, all deps latest). Toolchain notes: bayan 1.11.1 typed keys (and the unicode family it pulls in), no aarch64 compaction, compaction cap now historical. bote row notes MCP handlers get raw JSON text. Stdlib module table still partly predates 1.2.5. |
 | `threat-model.md` | 2026-04-30 | 🟠 Read-through | Trust-boundary claims need a no-op confirmation against sigil 3.x — phylax consumes only `sha256_hex` (a stable surface that exists unchanged from sigil 2.x → 3.x), so no model drift is expected. Read-through to verify and re-stamp. |
 | `2026-04-28-aarch64-handoff.md` | 2026-04-30 | 📦 Frozen + read-through | Aarch64 handoff snapshot — content is point-in-time. Read through once to confirm whether the listed handoff items are now resolved (sigil-side moved past 2.9.5 to 3.1.1; some aarch64-chain items may have closed transitively). If still open, leave as frozen and link the live status from `roadmap.md`. |
@@ -105,7 +105,7 @@ Pattern lifted from the libro + majra ledgers ([`libro/docs/doc-health.md`](http
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `cli-reference.md` | 2026-04-30 | ✅ Fresh (as written) | CLI subcommand surface. No version-tied claims that drift between minor releases; refresh when subcommands are added/retired. |
+| `cli-reference.md` | 2026-11-04 | ✅ Fresh | Configuration section rewritten at 1.3.3 to match the code: precedence table, `max_file_size` validation and clamp, empty values, parse-failure reporting, `phylax status` output. `--rules` rows say `.yar` only (TOML rules are library-only). |
 | `integration.md` | 2026-04-30 | ✅ Fresh (as written) | Consumer integration patterns (daimon, aegis, t-ron). Refresh when the `[lib]` / `[lib.core]` profile boundaries change or when a new consumer onboards. |
 | `testing.md` | 2026-04-30 | ✅ Fresh (as written) | Test categories + assertion counts (178 across the full suite, 11 across the core smoke test). Refresh on assertion-count drift only when it crosses ~10%. |
 

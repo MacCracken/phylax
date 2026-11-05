@@ -62,6 +62,39 @@ fn collect_files_recurse(files, path, max_size) {
 # CLI — Full scan pipeline
 # ================================================================
 
+# Rules files already added to the singleton YARA engine (cstr paths).
+var G_LOADED_RULES = 0;
+
+# Add the .yar rules in `rules_path` (a cstr, or 0) to `engine` once per
+# process. Returns the number of rules added this call (0 when already loaded).
+#
+# ⚠ Until 1.3.3 run_scan read and added the file on EVERY call, and the engine
+# is a process-wide singleton, so in a directory scan file k carried k copies
+# of each custom finding (and the daemon grew the engine per request). That was
+# invisible only because no .yar rule ever parsed (the lexer bug fixed in
+# src/yara.cyr); with the config's rules_path applied by default it would have
+# hit every scan. Tested in tests/test_cli.tcyr.
+fn load_custom_rules_once(engine, rules_path) {
+    if (rules_path == 0) { return 0; }
+    if (strlen(rules_path) == 0) { return 0; }
+    if (G_LOADED_RULES == 0) { G_LOADED_RULES = vec_new(); }
+    var nl = vec_len(G_LOADED_RULES);
+    for (var i = 0; i < nl; i = i + 1) {
+        if (streq(vec_get(G_LOADED_RULES, i), rules_path) == 1) { return 0; }
+    }
+    vec_push(G_LOADED_RULES, rules_path);
+    # phylax_read_file returns 0 (not an empty Str) when the file is
+    # missing, oversized, or over the per-scan alloc budget.
+    var rules_data = phylax_read_file(rules_path);
+    if (rules_data == 0 || str_len(rules_data) == 0) { return 0; }
+    var custom_rules = yara_parse_rules(rules_data);
+    var ncr = vec_len(custom_rules);
+    for (var j = 0; j < ncr; j = j + 1) {
+        yara_engine_add_rule(engine, vec_get(custom_rules, j));
+    }
+    return ncr;
+}
+
 # Run the complete scan pipeline on a single file:
 # 1. Read file data
 # 2. Binary analysis (entropy, magic bytes, etc.)
@@ -94,7 +127,7 @@ fn run_scan(path, rules_path) {
     }
 
     # Skip oversized files
-    if (data_len > MAX_SCAN_FILE_SIZE) {
+    if (data_len > config_scan_limit()) {
         var msg = str_cat(str_from("scan: skipping oversized file "), path);
         sakshi_warn(str_data(msg), str_len(msg));
         store64(result + 16, 0);
@@ -113,21 +146,8 @@ fn run_scan(path, rules_path) {
     # Step 2: YARA engine scan (reuse global engine)
     var engine = get_yara_engine();
 
-    # Load custom rules file if specified
-    if (rules_path != 0) {
-        if (strlen(rules_path) > 0) {
-            # phylax_read_file returns 0 (not an empty Str) when the file is
-            # missing, oversized, or over the per-scan alloc budget.
-            var rules_data = phylax_read_file(rules_path);
-            if (rules_data != 0 && str_len(rules_data) > 0) {
-                var custom_rules = yara_parse_rules(rules_data);
-                var ncr = vec_len(custom_rules);
-                for (var i = 0; i < ncr; i = i + 1) {
-                    yara_engine_add_rule(engine, vec_get(custom_rules, i));
-                }
-            }
-        }
-    }
+    # Load custom rules file if specified (once per process — see below)
+    load_custom_rules_once(engine, rules_path);
 
     var yara_findings = yara_engine_scan(engine, data_ptr, data_len);
     var nyf = vec_len(yara_findings);
@@ -283,7 +303,7 @@ fn cmd_scan(paths, rules_path, block_size, do_triage, hoosh_url) {
     sakshi_info(str_data(msg), str_len(msg));
 
     # Collect all target files
-    var files = collect_files(paths, MAX_SCAN_FILE_SIZE);
+    var files = collect_files(paths, config_scan_limit());
     var nfiles = vec_len(files);
 
     if (nfiles == 0) {
@@ -382,7 +402,7 @@ fn cmd_report(path, format, rules_path) {
     # Scan the target and generate a report
     var paths = vec_new();
     vec_push(paths, path);
-    var files = collect_files(paths, MAX_SCAN_FILE_SIZE);
+    var files = collect_files(paths, config_scan_limit());
 
     var results = vec_new();
     var nfiles = vec_len(files);
@@ -873,6 +893,29 @@ fn cmd_status() {
     var nrules = vec_len(load64(engine));
     str_println(str_cat(str_from("Default rules loaded: "), str_from_int(nrules)));
 
+    # Config (1.3.3): which file applied, and the values that take effect when
+    # no flag overrides them.
+    str_println(str_from(""));
+    if (CFG_SOURCE != 0) {
+        str_println(str_cat(str_from("Config: "), str_from(CFG_SOURCE)));
+    } else {
+        str_println(str_from("Config: none (built-in defaults)"));
+    }
+    var crules = config_rules_path(0);
+    if (crules != 0) {
+        str_println(str_cat(str_from("  rules_path:    "), str_from(crules)));
+    } else {
+        str_println(str_from("  rules_path:    (built-in rules only)"));
+    }
+    var climit = str_cat(str_from("  max_file_size: "), str_from_int(config_scan_limit()));
+    str_println(str_cat(climit, str_from(" bytes")));
+    str_println(str_cat(str_from("  hoosh url:     "), config_hoosh_url(0)));
+    if (CFG_DAIMON_URL != 0) {
+        var dl = str_cat(str_from("  daimon url:    "), str_from(CFG_DAIMON_URL));
+        str_println(str_cat(dl, str_from(" (no CLI command contacts daimon)")));
+    }
+    str_println(str_from(""));
+
     # Show capabilities
     var caps = phylax_ai_capabilities();
     var ncaps = vec_len(caps);
@@ -1068,23 +1111,23 @@ fn print_usage() {
     str_println(str_from("  help      Show this help message"));
     str_println(str_from(""));
     str_println(str_from("SCAN OPTIONS:"));
-    str_println(str_from("  --rules <file>       Load custom YARA rules from file"));
+    str_println(str_from("  --rules <file>       Load custom YARA rules from file (default: [scan] rules_path)"));
     str_println(str_from("  --triage             Enable LLM-assisted triage via Hoosh"));
-    str_println(str_from("  --hoosh-url <url>    Hoosh endpoint (default: http://localhost:8080)"));
+    str_println(str_from("  --hoosh-url <url>    Hoosh endpoint (default: [hoosh] url, else http://localhost:8080)"));
     str_println(str_from("  --block-size <n>     Block size for entropy analysis"));
     str_println(str_from(""));
     str_println(str_from("REPORT OPTIONS:"));
     str_println(str_from("  --format <fmt>       Output format: json, markdown, sarif (default: markdown)"));
-    str_println(str_from("  --rules <file>       Load custom YARA rules from file"));
+    str_println(str_from("  --rules <file>       Load custom YARA rules from file (default: [scan] rules_path)"));
     str_println(str_from(""));
     str_println(str_from("WATCH OPTIONS:"));
     str_println(str_from("  --recursive          Watch directories recursively"));
     str_println(str_from("  --extensions <exts>  Comma-separated file extensions to watch"));
-    str_println(str_from("  --rules <file>       Load custom YARA rules from file"));
+    str_println(str_from("  --rules <file>       Load custom YARA rules from file (default: [scan] rules_path)"));
     str_println(str_from(""));
     str_println(str_from("DAEMON OPTIONS:"));
     str_println(str_from("  --socket <path>      Unix socket path (default: /tmp/phylax.sock)"));
-    str_println(str_from("  --rules <file>       Load custom YARA rules from file"));
+    str_println(str_from("  --rules <file>       Load custom YARA rules from file (default: [scan] rules_path)"));
     str_println(str_from(""));
     str_println(str_from("RULES SUBCOMMANDS:"));
     str_println(str_from("  rules list [file]     List loaded rules"));
@@ -1109,31 +1152,134 @@ fn print_usage() {
 # Config file support
 # ================================================================
 
-# Global config defaults (overridden by config file, then CLI flags)
-var CFG_RULES_PATH = 0;      # default rules file path (cstr)
-var CFG_HOOSH_URL = 0;       # hoosh endpoint (cstr)
-var CFG_DAIMON_URL = 0;      # daimon endpoint (cstr)
-var CFG_MAX_FILE_SIZE = 1048576;  # 1 MB default
+# Config values, as read from the config file. 0 = not set. Read them through
+# config_rules_path / config_hoosh_url / config_scan_limit, which apply the
+# precedence docs/guides/cli-reference.md documents: a CLI flag wins, then the
+# config file, then the built-in default.
+#
+# ⚠ Until 1.3.3 these were written and never read, so the config file had no
+# effect; and CFG_MAX_FILE_SIZE defaulted to 1 MB, which would have cut every
+# scan's 50 MB limit to 1 MB the moment anything read it. 0 now means "not
+# set". Tested in tests/test_cli.tcyr (config_precedence) and end to end.
+var CFG_SOURCE = 0;          # path of the config file applied (cstr), or 0
+var CFG_RULES_PATH = 0;      # [scan] rules_path (cstr)
+var CFG_HOOSH_URL = 0;       # [hoosh] url (cstr)
+var CFG_DAIMON_URL = 0;      # [daimon] url (cstr) — read and shown; no CLI command contacts daimon
+var CFG_MAX_FILE_SIZE = 0;   # [scan] max_file_size in bytes; 0 = use MAX_SCAN_FILE_SIZE
+
+var DEFAULT_HOOSH_URL = "http://localhost:8080";
+
+# Forget any applied config (tests, and before re-reading).
+fn config_reset() {
+    CFG_SOURCE = 0;
+    CFG_RULES_PATH = 0;
+    CFG_HOOSH_URL = 0;
+    CFG_DAIMON_URL = 0;
+    CFG_MAX_FILE_SIZE = 0;
+    return 0;
+}
+
+# The rules file to load: `flag` (a --rules cstr) if given, else the config's
+# [scan] rules_path, else 0 (built-in rules only).
+fn config_rules_path(flag) {
+    if (flag != 0) { return flag; }
+    return CFG_RULES_PATH;
+}
+
+# The hoosh endpoint as a Str: `flag` (a --hoosh-url cstr) if given, else the
+# config's [hoosh] url, else DEFAULT_HOOSH_URL.
+fn config_hoosh_url(flag) {
+    if (flag != 0) { return str_from(flag); }
+    if (CFG_HOOSH_URL != 0) { return str_from(CFG_HOOSH_URL); }
+    return str_from(DEFAULT_HOOSH_URL);
+}
+
+# The per-file size limit for scans: the config's [scan] max_file_size if set,
+# else MAX_SCAN_FILE_SIZE. config_parse_size already bounded it.
+fn config_scan_limit() {
+    if (CFG_MAX_FILE_SIZE > 0) { return CFG_MAX_FILE_SIZE; }
+    return MAX_SCAN_FILE_SIZE;
+}
+
+# A config warning (cstr message) to the structured log.
+fn config_warn(msg) {
+    sakshi_warn(msg, strlen(msg));
+    return 0;
+}
+
+# Parse a [scan] max_file_size value (a Str of the TOML value). Returns the
+# byte count, or 0 to ignore it. Whole-string digits only: phylax_str_to_int
+# stops at the first non-digit, so on its own it would read "1MB" as 1 byte.
+# A value past PHYLAX_MAX_FILE_SIZE (what phylax_read_file can read at all) is
+# clamped to it.
+fn config_parse_size(v) {
+    if (v == 0) { return 0; }
+    var n = str_len(v);
+    if (n == 0) { return 0; }
+    var d = str_data(v);
+    var val = 0;
+    var over = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        var c = load8(d + i);
+        if (c < 48 || c > 57) {
+            config_warn("config: max_file_size is not a whole number of bytes, ignored");
+            return 0;
+        }
+        # Stop accumulating once past the cap, so a long value cannot overflow.
+        if (over == 0) {
+            val = val * 10 + (c - 48);
+            if (val > PHYLAX_MAX_FILE_SIZE) { over = 1; }
+        }
+    }
+    if (over == 1) {
+        config_warn("config: max_file_size past the 100 MB read cap, clamped");
+        return PHYLAX_MAX_FILE_SIZE;
+    }
+    if (val <= 0) {
+        config_warn("config: max_file_size must be positive, ignored");
+        return 0;
+    }
+    return val;
+}
 
 # Load config from phylax.toml if it exists.
-# Checks: ./phylax.toml, then $HOME/.config/phylax/config.toml
+# Checks: ./phylax.toml, then $HOME/.config/phylax/config.toml. The first file
+# found is applied; they are not merged.
 fn load_config() {
-    # Try local config first
-    var cfg_data = phylax_read_file("phylax.toml");
+    var path = "phylax.toml";
+    var cfg_data = phylax_read_file(path);
     if (cfg_data == 0) {
         var home = getenv("HOME");
         if (home != 0) {
-            var config_path = alloc(256);
+            # Sized from $HOME. This used to be a fixed alloc(256) filled
+            # with an unbounded memcpy of $HOME — a heap overflow for a HOME
+            # longer than 228 bytes.
             var hlen = strlen(home);
+            var config_path = alloc(hlen + 28);
             memcpy(config_path, home, hlen);
             memcpy(config_path + hlen, "/.config/phylax/config.toml", 27);
             store8(config_path + hlen + 27, 0);
+            path = config_path;
             cfg_data = phylax_read_file(config_path);
         }
     }
     if (cfg_data == 0) { return 0; }
 
-    return config_apply_toml(cfg_data);
+    if (config_apply_toml(cfg_data) == 0) {
+        var m = str_cat(str_from("config: could not parse "), str_from(path));
+        sakshi_warn(str_data(m), str_len(m));
+        return 0;
+    }
+    CFG_SOURCE = path;
+    return 1;
+}
+
+# A string config value as a fresh NUL-terminated cstr, or `keep` when the key
+# is absent or empty (`rules_path =` must not become an empty rules path).
+fn config_str_value(v, keep) {
+    if (v == 0) { return keep; }
+    if (str_len(v) == 0) { return keep; }
+    return str_to_cstr(v);
 }
 
 # Apply a phylax.toml body (a Str) to the CFG_* globals. Returns 1 if it
@@ -1142,12 +1288,9 @@ fn load_config() {
 #
 # ⚠ Until 1.3.1 every lookup below passed a Str key (`str_from("scan")`) to
 # bayan's toml_get / toml_get_sections, which compare a C-string key, so none
-# ever matched: phylax.toml and ~/.config/phylax/config.toml were parsed and
-# then silently ignored (measured on 1.3.0). Values are stored as fresh
-# NUL-terminated copies (str_to_cstr): a TOML value Str is not guaranteed to
-# end at a NUL, and the CFG_* globals are declared as cstrs.
-# ⚠ Known: nothing in phylax READS the CFG_* globals yet, so the config file
-# still has no effect on a scan (roadmap). Tested in tests/test_cli.tcyr.
+# ever matched. Values are stored as fresh NUL-terminated copies (str_to_cstr):
+# a TOML value Str is not guaranteed to end at a NUL, and the CFG_* globals are
+# cstrs. Tested in tests/test_cli.tcyr.
 fn config_apply_toml(cfg_data) {
     if (cfg_data == 0) { return 0; }
     var sections = toml_parse(cfg_data);
@@ -1159,9 +1302,9 @@ fn config_apply_toml(cfg_data) {
         if (vec_len(scan_secs) > 0) {
             var pairs = toml_section_pairs(vec_get(scan_secs, 0));
             var rules = bayan_toml_get_by_cstr(pairs, "rules_path");
-            if (rules != 0) { CFG_RULES_PATH = str_to_cstr(rules); }
+            CFG_RULES_PATH = config_str_value(rules, CFG_RULES_PATH);
             var max_size = bayan_toml_get_by_cstr(pairs, "max_file_size");
-            if (max_size != 0) { CFG_MAX_FILE_SIZE = phylax_str_to_int(max_size); }
+            if (max_size != 0) { CFG_MAX_FILE_SIZE = config_parse_size(max_size); }
         }
     }
 
@@ -1171,7 +1314,7 @@ fn config_apply_toml(cfg_data) {
         if (vec_len(hoosh_secs) > 0) {
             var pairs = toml_section_pairs(vec_get(hoosh_secs, 0));
             var url = bayan_toml_get_by_cstr(pairs, "url");
-            if (url != 0) { CFG_HOOSH_URL = str_to_cstr(url); }
+            CFG_HOOSH_URL = config_str_value(url, CFG_HOOSH_URL);
         }
     }
 
@@ -1181,7 +1324,7 @@ fn config_apply_toml(cfg_data) {
         if (vec_len(daimon_secs) > 0) {
             var pairs = toml_section_pairs(vec_get(daimon_secs, 0));
             var url = bayan_toml_get_by_cstr(pairs, "url");
-            if (url != 0) { CFG_DAIMON_URL = str_to_cstr(url); }
+            CFG_DAIMON_URL = config_str_value(url, CFG_DAIMON_URL);
         }
     }
 
@@ -1244,14 +1387,11 @@ fn main() {
             return 1;
         }
 
-        var rules_path = arg_find_option("--rules");
+        # Flag, then config file, then default (config_* helpers).
+        var rules_path = config_rules_path(arg_find_option("--rules"));
         var do_triage = arg_has_flag("--triage");
-        # Normalize to Str — cmd_scan/hoosh_triage_finding str_cat it.
-        var hoosh_opt = arg_find_option("--hoosh-url");
-        var hoosh_url = str_from("http://localhost:8080");
-        if (hoosh_opt != 0) {
-            hoosh_url = str_from(hoosh_opt);
-        }
+        # A Str — cmd_scan/hoosh_triage_finding str_cat it.
+        var hoosh_url = config_hoosh_url(arg_find_option("--hoosh-url"));
         var block_size = arg_find_option("--block-size");
 
         var exit_code_str = arg_find_option("--exit-code");
@@ -1284,7 +1424,7 @@ fn main() {
         if (format == 0) {
             format = "markdown";
         }
-        var rules_path = arg_find_option("--rules");
+        var rules_path = config_rules_path(arg_find_option("--rules"));
 
         var path = vec_get(paths, 0);
         return cmd_report(path, format, rules_path);
@@ -1299,7 +1439,7 @@ fn main() {
         }
 
         var recursive = arg_has_flag("--recursive");
-        var rules_path = arg_find_option("--rules");
+        var rules_path = config_rules_path(arg_find_option("--rules"));
 
         # Parse extensions filter
         var extensions = 0;
@@ -1371,7 +1511,7 @@ fn main() {
     if (streq(cmd, "daemon") == 1) {
         var sock = arg_find_option("--socket");
         if (sock == 0) { sock = "/tmp/phylax.sock"; }
-        var rules = arg_find_option("--rules");
+        var rules = config_rules_path(arg_find_option("--rules"));
         return cmd_daemon(sock, rules);
     }
 

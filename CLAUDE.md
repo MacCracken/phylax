@@ -43,7 +43,7 @@ an explicit `include "lib/X.cyr"` in that module (see the `lib/math.cyr` include
 at the top of `src/analyze.cyr`), or distlib refuses and writes no sidecar.
 
 The test suite is split per-module under `tests/test_*.tcyr` (18 files, plus
-`tests/phylax-core.tcyr`; 483 assertions total as of 1.3.2, on x86_64 AND aarch64) so a
+`tests/phylax-core.tcyr`; 523 assertions total as of 1.3.3, on x86_64 AND aarch64) so a
 crash in one module doesn't poison the rest of the run. Add a new module's tests as
 `tests/test_<module>.tcyr`; CI picks up `tests/*.tcyr` automatically.
 
@@ -109,6 +109,17 @@ daimon (scan integration), aegis (quarantine), t-ron (output scanning complement
   gets its arguments as raw JSON TEXT and must RETURN a JSON cstr. Until 1.3.1 phylax passed Strs,
   bote registered none of its five tools, and `phylax_scan` crashed. `mcp_bote_e2e` in
   `tests/test_integration.tcyr` drives real JSON-RPC through bote — keep it passing.
+- **`str_substr(s, START, END)` takes an end index, not a length.** Until 1.3.3 phylax called it as
+  `(s, start, length)` in the `.yar` lexer, ssdeep digest parsing and TLSH distance — no `.yar`
+  rule ever loaded, and both similarity compares were wrong. With a nonzero start, pass
+  `start + len`. Grep new code for `str_substr(` and check every third argument.
+- **Pick the map constructor by key type:** `map_new()` is cstr-keyed, `map_new_str()` is
+  Str-keyed. A Str key in a cstr map hashes the header bytes and misses (the `.yar` `$name`
+  map and Finding metadata had this until 1.3.3).
+- **Config precedence is flag > config file > default**, through `config_rules_path`,
+  `config_hoosh_url` and `config_scan_limit` in `src/cli.cyr`; `phylax status` prints the
+  effective values. New config keys go through the same helpers and get a `config_precedence`
+  test plus a line in `phylax status`.
 - **Define no bare name the stdlib defines** (ADR 0002). A const/var collision is a hard error in a
   consumer (1.3.0: `F64_255` vs mabda's `const`). Prefix phylax-only names `PHYLAX_` / `phylax_`.
 - **sakshi on all operations** — structured logging for audit trail.
@@ -123,7 +134,7 @@ src/lib_core.cyr      — detection-only include list, matches [lib.core] profil
 src/<module>.cyr      — 17 modules (types, utils, analyze, strings, script, hashing,
                         pe, elf, archive, yara, queue, quarantine, report,
                         integration, cli)
-tests/test_*.tcyr     — per-module test files (18 files + phylax-core, 483 assertions)
+tests/test_*.tcyr     — per-module test files (18 files + phylax-core, 523 assertions)
 tests/phylax-core.tcyr — [lib.core] smoke test (proves core compiles standalone)
 tests/phylax.bcyr     — full benchmarks
 tests/phylax-core.bcyr — [lib.core] benchmarks

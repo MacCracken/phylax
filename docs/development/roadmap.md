@@ -93,6 +93,16 @@
   required, type, duplicate keys) — bote's schema enforcement moves each release
 - Suite 479 → **483**, on x86_64 and aarch64; binary 914 KB → 918 KB
 
+### v1.3.3 — config applied; `.yar` rules load (2026-11-04)
+- Config values now take effect: flag > config file > default for
+  `rules_path`, `max_file_size` (validated, clamped) and the hoosh URL;
+  `phylax status` shows them; `$HOME` overflow in the loader fixed
+- **No `.yar` rule had ever loaded**: the lexer passed lengths to
+  `str_substr`, which takes an end index; `$name` lookups used a cstr-keyed
+  map; `--rules` was re-added per file (k copies on file k) — all fixed
+- Same `str_substr` bug in `ssdeep_compare` / `tlsh_distance` — fixed
+- Suite 483 → **523**, on x86_64 and aarch64; 14 end-to-end config checks
+
 ## Backlog
 
 ### v0.9.1 — TAR Support
@@ -155,11 +165,15 @@
   yet"), so the aarch64 binary is 3.29 MB and grows with every dep (bote-core
   is 824 fns at 3.8.11; phylax calls a handful). Toolchain-side.
 
-### Config file has no effect — the `CFG_*` globals have no readers
-- Since 1.3.1 `config_apply_toml` reads `[scan] rules_path` / `max_file_size`,
-  `[hoosh] url` and `[daimon] url` correctly, but nothing in `src/cli.cyr`
-  consumes `CFG_RULES_PATH` / `CFG_MAX_FILE_SIZE` / `CFG_HOOSH_URL` /
-  `CFG_DAIMON_URL`. Wire them in as defaults that flags override.
+### ~~Config file has no effect~~ (DONE at 1.3.3)
+- The `CFG_*` values are applied with flag > config > default, and shown by
+  `phylax status`. `[daimon] url` is read and shown but no CLI command contacts
+  daimon — wire it only with a feature that needs it.
+
+### CLI rules files beyond `.yar`
+- `--rules` / `rules_path` take `.yar` only; TOML rules load through
+  `yara_engine_load_rules_toml` (library API). Dispatch on extension if wanted.
+- `phylax scan` prints `[ok]` for a file it skipped for size, after the warning.
 
 ### TOML rule pattern type `regex`
 - The TOML loader treats every pattern type other than `hex` as a literal

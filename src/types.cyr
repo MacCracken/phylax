@@ -9,7 +9,7 @@
 var VERSION = 0;
 
 fn _init_version() {
-    VERSION = str_from("1.3.2");
+    VERSION = str_from("1.3.3");
 }
 
 # ================================================================
@@ -245,7 +245,10 @@ fn finding_new(target, category, severity, rule_name, description) {
     store64(f + 16, severity);
     store64(f + 24, rule_name);
     store64(f + 32, description);
-    store64(f + 40, map_new());
+    # Metadata keys are Strs (str_from("sha256"), ...), so the map is
+    # Str-keyed. Until 1.3.3 it was map_new() (cstr-keyed): a consumer's
+    # map_get(meta, str_from("sha256")) could not find what phylax set.
+    store64(f + 40, map_new_str());
     store64(f + 48, 0);
     return f;
 }

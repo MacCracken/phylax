@@ -241,6 +241,93 @@ fn test_config_apply_toml() {
     assert(CFG_DAIMON_URL != 0, "[daimon] url is read");
     if (CFG_DAIMON_URL != 0) { assert_eq(streq(CFG_DAIMON_URL, "http://daimon.example:9001"), 1, "daimon url value"); }
     assert_eq(config_apply_toml(0), 0, "a null body is refused");
+    config_reset();
+    return 0;
+}
+
+# ----------------------------------------------------------------
+# --rules / config rules_path: a rules file is loaded into the (singleton)
+# YARA engine once. Until 1.3.3 run_scan added it again for EVERY file, so in a
+# directory scan file k carried k copies of each custom finding — invisible
+# only because .yar rules never parsed (see test_yara.tcyr). With config
+# supplying rules_path by default it would have hit every scan.
+# ----------------------------------------------------------------
+
+fn count_rule_findings(result, name) {
+    var fs = load64(result + 8);
+    var n = vec_len(fs);
+    var c = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        if (str_eq(load64(vec_get(fs, i) + 24), str_from(name))) { c = c + 1; }
+    }
+    return c;
+}
+
+fn test_custom_rules_load_once() {
+    test_group("custom_rules_once");
+    var rules = "/tmp/phylax-test-cli/once.yar";
+    var body = str_from("rule OnceMarker {\n  strings:\n    $m = \"once_marker_77\"\n");
+    write_fixture(rules, str_cat(body, str_from("  condition:\n    $m\n}\n")));
+    write_fixture("/tmp/phylax-test-cli/once.txt", str_from("xx once_marker_77 yy\n"));
+    var target = str_from("/tmp/phylax-test-cli/once.txt");
+    var before = yara_engine_rule_count(get_yara_engine());
+    for (var i = 0; i < 3; i = i + 1) {
+        G_SCAN_ALLOC_TOTAL = 0;
+        var r = run_scan(target, rules);
+        assert_eq(count_rule_findings(r, "OnceMarker"), 1, "each scan reports the custom rule exactly once");
+    }
+    assert_eq(yara_engine_rule_count(get_yara_engine()), before + 1, "the rules file went into the engine once");
+    return 0;
+}
+
+# ----------------------------------------------------------------
+# config precedence (1.3.3): a CLI flag wins, then the config file, then the
+# built-in default — what docs/guides/cli-reference.md always promised. Until
+# 1.3.3 the CFG_* globals were written and never read.
+# ----------------------------------------------------------------
+
+fn test_config_precedence() {
+    test_group("config_precedence");
+    config_reset();
+
+    # Nothing configured: flags pass through, defaults apply.
+    assert_eq(config_rules_path(0), 0, "no flag, no config: no custom rules");
+    assert_eq(streq(config_rules_path("/tmp/flag.yar"), "/tmp/flag.yar"), 1, "a --rules flag passes through");
+    assert(str_eq(config_hoosh_url(0), str_from("http://localhost:8080")), "hoosh url default");
+    assert_eq(config_scan_limit(), MAX_SCAN_FILE_SIZE, "scan size limit default (50 MB)");
+
+    # A config file supplies the defaults; flags still win.
+    var cfg = str_from("[scan]\nrules_path = \"/tmp/from-config.yar\"\nmax_file_size = 4096\n\n");
+    cfg = str_cat(cfg, str_from("[hoosh]\nurl = \"http://hoosh.example:9000\"\n"));
+    assert_eq(config_apply_toml(cfg), 1, "config parses");
+    assert_eq(streq(config_rules_path(0), "/tmp/from-config.yar"), 1, "no flag: config rules_path applies");
+    assert_eq(streq(config_rules_path("/tmp/flag.yar"), "/tmp/flag.yar"), 1, "--rules overrides config");
+    assert(str_eq(config_hoosh_url(0), str_from("http://hoosh.example:9000")), "no flag: config hoosh url applies");
+    assert(str_eq(config_hoosh_url("http://flag:1"), str_from("http://flag:1")), "--hoosh-url overrides config");
+    assert_eq(config_scan_limit(), 4096, "an unquoted integer max_file_size applies");
+
+    # max_file_size is validated, not trusted: phylax_str_to_int alone would
+    # read "1MB" as 1 byte.
+    config_reset();
+    config_apply_toml(str_from("[scan]\nmax_file_size = \"1MB\"\n"));
+    assert_eq(config_scan_limit(), MAX_SCAN_FILE_SIZE, "a non-numeric max_file_size is ignored");
+    config_reset();
+    config_apply_toml(str_from("[scan]\nmax_file_size = 0\n"));
+    assert_eq(config_scan_limit(), MAX_SCAN_FILE_SIZE, "a zero max_file_size is ignored");
+    config_reset();
+    config_apply_toml(str_from("[scan]\nmax_file_size = 999999999999\n"));
+    assert_eq(config_scan_limit(), PHYLAX_MAX_FILE_SIZE, "a max_file_size past the read cap is clamped to it");
+
+    # An empty string value is "not set", not an empty path.
+    config_reset();
+    config_apply_toml(str_from("[scan]\nrules_path = \"\"\n\n[hoosh]\nurl = \"\"\n"));
+    assert_eq(config_rules_path(0), 0, "an empty rules_path is not a rules file");
+    assert(str_eq(config_hoosh_url(0), str_from("http://localhost:8080")), "an empty hoosh url keeps the default");
+
+    # load_config records which file it applied.
+    config_reset();
+    assert_eq(CFG_SOURCE, 0, "config_reset clears the source");
+    config_reset();
     return 0;
 }
 
@@ -256,6 +343,8 @@ fn main() {
     test_watch_mask();
     test_daemon_listen();
     test_config_apply_toml();
+    test_custom_rules_load_once();
+    test_config_precedence();
 
     return assert_summary();
 }

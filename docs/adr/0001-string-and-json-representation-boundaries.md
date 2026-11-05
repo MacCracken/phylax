@@ -106,6 +106,12 @@ returns a JSON **cstr**. The registration side had the same mismatch:
 `phylax_register_tools` passed Str names, descriptions and schemas, so bote
 refused every tool (`registry_len` 0), and an inputSchema turned out to be a
 bote ToolSchema object rather than JSON text (`tool_schema_from_json`).
+**Map keys (1.3.3).** cyrius' `map_new()` is keyed by C string and
+`map_new_str()` by Str. The `.yar` parser's `$name` → index map and the Finding
+metadata map were both `map_new()` holding Str keys, so a lookup hashed a Str
+header's bytes and missed (no `$a and $b` condition ever matched). Both are
+`map_new_str()` now; choose the constructor by the key's representation.
+
 Each case is pinned by a test that fails on the old code: `yara_toml_rules`,
 `config_toml`, `mcp_scan_handler` and `mcp_bote_e2e`, which sends real JSON-RPC
 through bote's codec and dispatcher.

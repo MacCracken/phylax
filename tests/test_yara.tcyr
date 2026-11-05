@@ -99,12 +99,79 @@ fn test_yara_toml_rules() {
     return 0;
 }
 
+# ----------------------------------------------------------------
+# Native .yar parsing. Until 1.3.3 the lexer cut every token with
+# str_substr(src, start, LENGTH) — but the stdlib's str_substr takes an END
+# index (and always has, since cyrius 5.4.x). So any token not at offset 0 came
+# out wrong: `rule CustomMarker` lexed as "CustomM", a rule whose name was cut
+# to nothing was dropped, no string was read, and no .yar rule given to
+# `--rules` (or, from 1.3.3, the config's rules_path) ever loaded intact.
+# ----------------------------------------------------------------
+
+fn yar_rule_named(rules, name) {
+    var n = vec_len(rules);
+    for (var i = 0; i < n; i = i + 1) {
+        var r = vec_get(rules, i);
+        if (str_eq(load64(r), str_from(name))) { return r; }
+    }
+    return 0;
+}
+
+fn test_yara_native_rules() {
+    test_group("yara_native_rules");
+    var src = str_from("rule CustomMarker : tagA tagB {\n  meta:\n    description = \"custom marker\"\n");
+    src = str_cat(src, str_from("    severity = \"high\"\n  strings:\n    $m = \"marker_xyzzy_42\"\n"));
+    src = str_cat(src, str_from("    $n = \"second_needle\"\n  condition:\n    any of them\n}\n\n"));
+    src = str_cat(src, str_from("rule stix_sha256_0 {\n  meta:\n    severity = \"critical\"\n"));
+    src = str_cat(src, str_from("  condition:\n    true\n}\n\n"));
+    src = str_cat(src, str_from("rule BothNeedles {\n  strings:\n    $a = \"alpha_one\"\n    $b = \"beta_two\"\n"));
+    src = str_cat(src, str_from("  condition:\n    $a and $b\n}\n"));
+
+    var rules = yara_parse_rules(src);
+    assert_eq(vec_len(rules), 3, "all three rules parse");
+    var r0 = yar_rule_named(rules, "CustomMarker");
+    assert(r0 != 0, "rule name lexes whole (was 'CustomM')");
+    var stix = yar_rule_named(rules, "stix_sha256_0");
+    assert(stix != 0, "a name with digits and underscores parses (was dropped)");
+    if (r0 == 0) { return 0; }
+    assert_eq(load64(r0 + 16), SEVERITY_HIGH, "meta severity is read");
+    assert(str_eq(load64(r0 + 8), str_from("custom marker")), "meta description is read");
+    assert_eq(vec_len(load64(r0 + 24)), 2, "both tags are read");
+    assert_eq(vec_len(load64(r0 + 32)), 2, "both strings are read");
+    var r1 = yar_rule_named(rules, "stix_sha256_0");
+    if (r1 != 0) { assert_eq(load64(r1 + 16), SEVERITY_CRITICAL, "second rule's severity"); }
+
+    var eng = yara_engine_new();
+    var nr = vec_len(rules);
+    for (var i = 0; i < nr; i = i + 1) { yara_engine_add_rule(eng, vec_get(rules, i)); }
+    var hit = "nothing special but second_needle appears";
+    var f = yara_engine_scan(eng, hit, strlen(hit));
+    assert(yar_finding_named(f, "CustomMarker") == 1, "any of them: one of two strings matches");
+    var one = "alpha_one only";
+    var f_one = yara_engine_scan(eng, one, strlen(one));
+    assert_eq(yar_finding_named(f_one, "BothNeedles"), 0, "$a and $b: one is not enough");
+    var both = "alpha_one and beta_two";
+    var f_both = yara_engine_scan(eng, both, strlen(both));
+    assert_eq(yar_finding_named(f_both, "BothNeedles"), 1, "$a and $b: both match (map key type)");
+    return 0;
+}
+
+# 1 if any finding in `findings` is for rule `name`.
+fn yar_finding_named(findings, name) {
+    var n = vec_len(findings);
+    for (var i = 0; i < n; i = i + 1) {
+        if (str_eq(load64(vec_get(findings, i)), str_from(name))) { return 1; }
+    }
+    return 0;
+}
+
 fn main() {
     phylax_init();
 
     test_yara();
     test_yara_engine();
     test_yara_toml_rules();
+    test_yara_native_rules();
 
     return assert_summary();
 }

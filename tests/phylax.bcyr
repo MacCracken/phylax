@@ -130,6 +130,50 @@ fn bench_report_markdown() {
     return 0;
 }
 
+# 1.3.3: the paths whose str_substr / map-key fixes changed what they compute.
+# Inputs are prepared once in main(), outside the timed region.
+var G_SSD_A = 0;
+var G_SSD_B = 0;
+var G_TLSH_A = 0;
+var G_TLSH_B = 0;
+var G_YAR_SRC = 0;
+
+fn bench_ssdeep_compare() {
+    ssdeep_compare(G_SSD_A, G_SSD_B);
+    return 0;
+}
+
+fn bench_tlsh_distance() {
+    tlsh_distance(G_TLSH_A, G_TLSH_B);
+    return 0;
+}
+
+fn bench_yara_parse_rules() {
+    yara_parse_rules(G_YAR_SRC);
+    return 0;
+}
+
+fn bench_prepare() {
+    var a = alloc(4096);
+    var b = alloc(4096);
+    for (var i = 0; i < 4096; i = i + 1) {
+        store8(a + i, (i * 7 + 3) & 0xff);
+        store8(b + i, (i * 7 + 3) & 0xff);
+    }
+    for (var j = 2000; j < 2040; j = j + 1) { store8(b + j, 0x41); }
+    G_SSD_A = ssdeep_hash(a, 4096);
+    G_SSD_B = ssdeep_hash(b, 4096);
+    G_TLSH_A = tlsh_hash(a, 1024);
+    G_TLSH_B = tlsh_hash(b + 1024, 1024);
+    var y = str_from("rule CustomMarker : tagA tagB {\n  meta:\n    description = \"custom marker\"\n");
+    y = str_cat(y, str_from("    severity = \"high\"\n  strings:\n    $m = \"marker_xyzzy_42\"\n"));
+    y = str_cat(y, str_from("    $n = \"second_needle\"\n  condition:\n    any of them\n}\n\n"));
+    y = str_cat(y, str_from("rule BothNeedles {\n  strings:\n    $a = \"alpha_one\"\n    $b = \"beta_two\"\n"));
+    y = str_cat(y, str_from("  condition:\n    $a and $b\n}\n"));
+    G_YAR_SRC = y;
+    return 0;
+}
+
 fn main() {
     phylax_init();
 
@@ -152,6 +196,11 @@ fn main() {
     var b13 = bench_new("report_json_100"); bench_run(b13, &bench_report_json, 1000); vec_push(benches, b13);
     var b14 = bench_new("report_sarif_100"); bench_run(b14, &bench_report_sarif, 1000); vec_push(benches, b14);
     var b15 = bench_new("report_markdown_100"); bench_run(b15, &bench_report_markdown, 1000); vec_push(benches, b15);
+
+    bench_prepare();
+    var b16 = bench_new("ssdeep_compare"); bench_run(b16, &bench_ssdeep_compare, 10000); vec_push(benches, b16);
+    var b17 = bench_new("tlsh_distance"); bench_run(b17, &bench_tlsh_distance, 10000); vec_push(benches, b17);
+    var b18 = bench_new("yara_parse_rules"); bench_run(b18, &bench_yara_parse_rules, 10000); vec_push(benches, b18);
 
     bench_report_all(benches);
     return 0;

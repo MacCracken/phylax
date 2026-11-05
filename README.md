@@ -86,6 +86,13 @@ phylax rules validate --file threats.yar
 phylax status
 ```
 
+## Configuration
+
+`./phylax.toml` (or `~/.config/phylax/config.toml`) sets defaults that CLI flags
+override: `[scan] rules_path` (a `.yar` file), `[scan] max_file_size` (bytes),
+`[hoosh] url`. `phylax status` shows what is in effect. Details:
+[docs/guides/cli-reference.md](docs/guides/cli-reference.md#configuration).
+
 ## YARA Rules Format
 
 ```toml
@@ -113,7 +120,7 @@ Phylax is written in [Cyrius](https://github.com/MacCracken/cyrius) and compiles
 
 ```bash
 CYRIUS_DCE=1 cyrius build src/main.cyr build/phylax   # ~0.92 MB static binary (1.3.2)
-for t in tests/*.tcyr; do cyrius test "$t"; done      # 483 assertions across 19 files
+for t in tests/*.tcyr; do cyrius test "$t"; done      # 523 assertions across 19 files
 for t in tests/*.tcyr; do cyrius test --aarch64 "$t"; done   # the same suite on aarch64 (qemu)
 cyrius bench tests/phylax.bcyr                        # benchmark groups
 ```

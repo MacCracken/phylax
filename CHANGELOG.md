@@ -2,6 +2,169 @@
 
 All notable changes to Phylax will be documented in this file.
 
+## [1.3.3] - 2026-11-04
+
+**The config file now does something, and so does `--rules`.** `phylax.toml` /
+`~/.config/phylax/config.toml` were parsed (since 1.3.1) and then ignored:
+nothing read the values. Wiring them in showed that the main value,
+`rules_path`, could never have worked anyway. **No native `.yar` rule has ever
+loaded intact,** whether from `--rules` or anywhere else, because the lexer cut
+every token with the wrong arguments to `str_substr`. The same mistake broke
+ssdeep and TLSH comparison, and a key-type mismatch broke named strings in YARA
+conditions. All of it is fixed here, each with a test that fails on 1.3.2.
+No dependency or toolchain changes.
+
+### Fixed — config is applied (`src/cli.cyr`)
+
+The precedence `docs/guides/cli-reference.md` always documented ("CLI flags
+override config file values") is now what happens. A flag wins, then the config
+file, then the built-in default:
+
+| key | used by | default |
+|---|---|---|
+| `[scan] rules_path` | `scan`, `report`, `watch`, `daemon` (as `--rules`) | built-in rules only |
+| `[scan] max_file_size` | the per-file size limit for every scan | 50 MB |
+| `[hoosh] url` | `scan --triage` (as `--hoosh-url`) | `http://localhost:8080` |
+| `[daimon] url` | read and shown by `status`; no CLI command contacts daimon | — |
+
+- **`max_file_size` is validated.** It must be a whole number of bytes, given
+  quoted or bare. `phylax_str_to_int` alone would have read `"1MB"` as 1 byte. A
+  non-numeric, zero or negative value is ignored with a warning, and a value
+  past the 100 MB read cap (`PHYLAX_MAX_FILE_SIZE`) is clamped to it.
+- **Its default no longer silently shrinks scans.** `CFG_MAX_FILE_SIZE`
+  defaulted to 1 MB, which would have cut every scan's 50 MB limit to 1 MB the
+  moment anything read it. "Not set" is now 0, and the 50 MB default stands.
+- **An empty value counts as not set**, so `rules_path =` is not an empty rules
+  path.
+- **A file that does not parse** is reported (`config: could not parse <path>`)
+  instead of silently ignored. The first file found is applied; the two are not
+  merged.
+- **`phylax status` shows the config.** A new section reports which file was
+  applied (or "none (built-in defaults)") and the effective `rules_path`,
+  `max_file_size` and hoosh URL, plus the daimon URL when one is set.
+- **`load_config` no longer overflows on a long `$HOME`.** It copied `$HOME` into
+  a fixed 256-byte buffer with an unbounded `memcpy`, a heap overflow for a
+  `HOME` over 228 bytes. The buffer is now sized from `$HOME`.
+
+Measured end to end with real config files (14 checks). The rules file comes
+from the config, `--rules` overrides it, `max_file_size` skips a file, the
+`$HOME` config applies, `./phylax.toml` beats it, warnings appear, `status`
+reports all of it, and **a `--triage` scan POSTs to the config's hoosh URL**
+(seen on a local listener). The 1.3.2 binary fails 12 of the 14.
+
+### Fixed — `.yar` rules never loaded (`src/yara.cyr`, present since the port)
+
+- **The lexer passed a length where `str_substr` takes an end index.** The
+  stdlib's `str_substr` is `(s, start, end)`, and has been since cyrius 5.4.x;
+  the lexer called it as `(s, start, length)` at 11 sites. Any token not at
+  offset 0 came out wrong:
+  - `rule CustomMarker` lexed as `CustomM`;
+  - a rule whose name was cut to nothing, like the shipped `phylax-intel.yar`'s
+    `stix_sha256_0`, was dropped;
+  - no `strings:` entry and no `meta:` value was read.
+
+  `rules validate` still said "1 rule(s) valid", because it only counts rules,
+  and `rules list phylax-intel.yar` listed only the 7 built-ins. Now
+  `phylax-intel.yar` loads its rule, and a `.yar` file given to `--rules` (or to
+  the config's `rules_path`) loads its names, tags, meta, strings and conditions.
+- **`$name` references in conditions never resolved.** The pattern map was
+  `map_new()`, which is keyed by C string, but pattern ids are Strs (`"$a"`). A
+  lookup hashed the Str header's bytes and missed, so only the first string
+  resolved, through an index-0 fallback, and `$a and $b` never matched. The map
+  is now `map_new_str()`.
+- **`--rules` was re-added for every file.** `run_scan` read the rules file and
+  added its rules to the process-wide YARA engine on every call. In a directory
+  scan, file *k* therefore carried *k* copies of each custom finding, and the
+  daemon grew its engine on every request. This went unseen only because no rule
+  parsed; with the config supplying `rules_path` by default it would have hit
+  every scan. `load_custom_rules_once` now adds a given path once per process.
+
+### Fixed — similarity hashing (`src/hashing.cyr`)
+
+Same `str_substr` mistake. `ssdeep_compare` and `tlsh_distance` are exported in
+both dist bundles; phylax's own CLI does not call them.
+- **`ssdeep_compare` scored the wrong substrings.** `parse_ssdeep_digest` read
+  `3:abcdef:ghijk` as h1 `bcde` and h2 `""`, so scores were computed on a
+  truncated first half and an empty second half.
+- **`tlsh_distance` ignored the digest's last byte.** It decoded
+  `str_substr(digest, 2, len - 2)`, which dropped the last two hex characters, so
+  a difference there read as distance 0.
+
+### Fixed — Finding metadata map key type (`src/types.cyr`)
+
+The metadata map used `map_new()` (cstr-keyed) with Str keys
+(`str_from("sha256")`, …), so a consumer's `map_get(meta, str_from("sha256"))`
+could not find what phylax had set. hashmap's own docs note that such a map
+"silently loses ~3% of entries". It is now `map_new_str()`. Nothing inside
+phylax reads the map, so phylax's own output is unchanged.
+
+### Added
+
+- Tests, 483 → **523**:
+  - `config_precedence` (+16): flag, config and default for each key; quoted
+    and bare sizes; `"1MB"`, 0 and past-the-cap; empty values;
+  - `custom_rules_once` (+4): three scans give one finding each, and the engine
+    grows by one rule;
+  - `yara_native_rules` (+11): three rules with tags, meta, strings,
+    `any of them`, `$a and $b` and `true`;
+  - `ssdeep_digest_parse` (+6) and `tlsh_full_digest` (+3).
+
+  Each fails on the 1.3.2 sources: `yara` 3, `ssdeep` 3, `tlsh` 1, `cli` 3
+  (duplicates 1/2/3), and a compile error for the new config API.
+- Benches for the changed paths: `ssdeep_compare`, `tlsh_distance` and
+  `yara_parse_rules`.
+- `config_reset`, `config_rules_path`, `config_hoosh_url`, `config_scan_limit`,
+  `config_apply_toml` and `load_custom_rules_once` in `src/cli.cyr`. These are CLI
+  internals, not in the dist bundles.
+
+### Performance
+
+Neutral on every existing row. The A/B was interleaved, both builds pinned to one
+core, 5 rounds each: all rows within ±0.5% except `file_detection` (−1 ns) and
+`report_markdown_100` (+2.4%, in code this release did not touch).
+
+The three new benches, built against the 1.3.2 sources and against 1.3.3:
+
+| bench | 1.3.2 code | 1.3.3 | note |
+|---|---|---|---|
+| ssdeep_compare | 1.073 us | 1.756 us | +64%: it now scores the full fields; it was cheap because it was wrong |
+| tlsh_distance | 2.523 us | 2.573 us | +2%: one more byte decoded and compared |
+| yara_parse_rules | 18.232 us | 16.639 us | −8.7%: the lexer produces whole tokens |
+
+Binary: 918,272 → 918,728 B. Build warnings stay at 1.
+
+### Verification
+
+- **523 assertions across 19 files, on x86_64 and on aarch64 (qemu).**
+- CLI A/B against the 1.3.2 binary on a fixed corpus, with no config:
+  - `scan` and the plain `report` formats are unchanged (JSON compared field by
+    field, without the timing fields).
+  - `status` gains the Config section.
+  - `report --rules phylax-intel.yar` now adds the intel rule's finding to every
+    file, which is the fix working.
+- ⚠ **The 1.3.1 and 1.3.2 CLI A/B claims were re-checked here.** Their harness
+  ran inline in zsh, which does not word-split an unquoted `$c`, so each
+  multi-word command reached both binaries as a single argument ("Unknown
+  command") and compared two identical errors. Re-run correctly from bash with
+  the 1.3.0–1.3.2 binaries, 1.3.0 → 1.3.1 → 1.3.2 is in fact identical for
+  `scan`, all `report` formats (with and without `--rules`) and `status`, so
+  the conclusions stand; the checks behind them did not.
+- Both dist bundles consumed by scratch projects: 11/11 on x86_64 and aarch64.
+  Sidecars are unchanged (9 / 8). The lock is unchanged.
+- `fmt --check`, vet and deny clean; lint unchanged at 8; `check --with-deps`
+  ok; `deps --locked` clean; `distlib --check` 0; CI's security scan 0.
+
+### Known / not fixed
+
+- `--rules` takes `.yar` only. A TOML rules file goes through
+  `yara_engine_load_rules_toml` (library API), and the CLI does not dispatch on
+  extension.
+- A file skipped for size is still printed as `[ok]` by `phylax scan`, after its
+  `skipping oversized file` warning.
+- phylax's ssdeep score subtracts log2(block size), so identical digests score
+  below 100 (94 at block size 96), unlike reference ssdeep.
+- TOML rule `type = "regex"` is still matched literally (from 1.3.1).
+
 ## [1.3.2] - 2026-11-04
 
 **bote `3.8.6` → `3.8.11`.** Nothing else moves. cyrius stays 6.7.18. libro

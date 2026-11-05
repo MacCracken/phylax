@@ -46,10 +46,39 @@ fn test_tlsh() {
     assert_eq(tlsh_distance(h, 0), -1, "tlsh distance vs null = -1");
 }
 
+# ----------------------------------------------------------------
+# tlsh_distance decodes the hex body after "T1". Until 1.3.3 it took
+# str_substr(digest, 2, len - 2) — the stdlib's str_substr takes an END index —
+# which dropped the body's last two hex characters, so a difference in the
+# last byte read as distance 0.
+# ----------------------------------------------------------------
+
+fn test_tlsh_full_digest() {
+    test_group("tlsh_full_digest");
+    var data = alloc(512);
+    for (var i = 0; i < 512; i = i + 1) { store8(data + i, (i * 31 + 7) & 0xff); }
+    var h = tlsh_hash(data, 512);
+    assert(h != 0, "tlsh hash produced");
+    if (h == 0) { return 0; }
+    var d = load64(h);
+    var n = str_len(d);
+    var buf = alloc(n + 1);
+    memcpy(buf, str_data(d), n);
+    store8(buf + n, 0);
+    var last = load8(buf + n - 1);
+    if (last == 48) { store8(buf + n - 1, 49); } else { store8(buf + n - 1, 48); }
+    var h2 = alloc(16);
+    store64(h2, str_new(buf, n));
+    assert(tlsh_distance(h, h2) > 0, "a digest differing only in its last byte is not distance 0");
+    assert_eq(tlsh_distance(h, h), 0, "identical digests are distance 0");
+    return 0;
+}
+
 fn main() {
     phylax_init();
 
     test_tlsh();
+    test_tlsh_full_digest();
 
     return assert_summary();
 }

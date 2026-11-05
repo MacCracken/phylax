@@ -22,7 +22,7 @@ phylax scan [OPTIONS] <PATHS...>
 
 | Flag | Description |
 |------|-------------|
-| `--rules <file>` | Load custom YARA rules (.yar or TOML format) |
+| `--rules <file>` | Load custom YARA rules from a `.yar` file (default: `[scan] rules_path`; TOML rules are library-only) |
 | `--triage` | Enable LLM-assisted triage via Hoosh |
 | `--hoosh-url <url>` | Hoosh endpoint (default: `http://localhost:8080`) |
 | `--block-size <n>` | Block size for entropy analysis |
@@ -76,7 +76,7 @@ phylax report [OPTIONS] <PATH>
 | Flag | Description |
 |------|-------------|
 | `--format <fmt>` | Output format: `json`, `markdown`, `sarif` (default: `markdown`) |
-| `--rules <file>` | Load custom YARA rules |
+| `--rules <file>` | Load custom YARA rules from a `.yar` file (default: `[scan] rules_path`) |
 
 **Output Formats:**
 
@@ -106,7 +106,7 @@ phylax watch [OPTIONS] <PATHS...>
 |------|-------------|
 | `--recursive` | Watch directories recursively (one level of subdirectories) |
 | `--extensions <exts>` | Comma-separated file extensions to filter (e.g., `exe,dll,so`) |
-| `--rules <file>` | Load custom YARA rules |
+| `--rules <file>` | Load custom YARA rules from a `.yar` file (default: `[scan] rules_path`) |
 
 **Monitored Events:**
 
@@ -141,7 +141,7 @@ phylax daemon [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--socket <path>` | Unix socket path (default: `/tmp/phylax.sock`) |
-| `--rules <file>` | Load custom YARA rules |
+| `--rules <file>` | Load custom YARA rules from a `.yar` file (default: `[scan] rules_path`) |
 
 **Protocol:**
 
@@ -292,19 +292,37 @@ Consumers: daimon, aegis, t-ron
 
 ## Configuration
 
-Phylax loads configuration from TOML files in this order:
+Phylax reads one TOML config file, the first it finds:
 
 1. `./phylax.toml` (current directory)
 2. `$HOME/.config/phylax/config.toml`
 
-CLI flags override config file values.
+The two are not merged. **A CLI flag overrides the config file, and the config
+file overrides the built-in default:**
+
+| key | applies to | flag that overrides it | built-in default |
+|---|---|---|---|
+| `[scan] rules_path` | `scan`, `report`, `watch`, `daemon` | `--rules` | built-in rules only |
+| `[scan] max_file_size` | the per-file size limit of every scan | — | 52428800 (50 MB) |
+| `[hoosh] url` | `scan --triage` | `--hoosh-url` | `http://localhost:8080` |
+| `[daimon] url` | shown by `phylax status`; no CLI command contacts daimon | — | — |
+
+- `rules_path` names a native YARA (`.yar`) file. It is loaded once per run,
+  alongside the built-in rules.
+- `max_file_size` is a whole number of bytes, quoted or bare. A value that is
+  not a number, or is 0 or negative, is ignored with a warning. A value above
+  104857600 (100 MB, the largest file phylax reads) is clamped to it. Files over
+  the limit are skipped with a `skipping oversized file` warning.
+- An empty value (`rules_path = ""`) counts as not set.
+- A config file that does not parse is reported (`config: could not parse
+  <path>`) and nothing from it is applied.
 
 **Example `phylax.toml`:**
 
 ```toml
 [scan]
 rules_path = "/etc/phylax/rules.yar"
-max_file_size = 1048576
+max_file_size = 10485760
 
 [hoosh]
 url = "http://localhost:8080"
@@ -312,6 +330,19 @@ url = "http://localhost:8080"
 [daimon]
 url = "http://localhost:9090"
 ```
+
+`phylax status` shows which file was applied and the values in effect:
+
+```
+Config: phylax.toml
+  rules_path:    /etc/phylax/rules.yar
+  max_file_size: 10485760 bytes
+  hoosh url:     http://localhost:8080
+  daimon url:    http://localhost:9090 (no CLI command contacts daimon)
+```
+
+(Until 1.3.3 the config file was parsed but none of its values took effect,
+and `.yar` rules did not load; see CHANGELOG 1.3.3.)
 
 ## Built-in Rules
 

@@ -1019,6 +1019,12 @@ fn yar_is_digit(ch) {
 }
 
 # Read next token
+#
+# ⚠ The stdlib's str_substr is (s, START, END) — an end index, not a length.
+# Until 1.3.3 every token here was cut with str_substr(src, start, LENGTH), so
+# any token not at offset 0 came out wrong (`rule CustomMarker` lexed as
+# "CustomM"; a name cut to nothing dropped its rule; no string was read). No
+# .yar rule ever loaded intact. Tested in tests/test_yara.tcyr.
 fn yar_next_token(lex) {
     yar_skip_ws(lex);
     if (load64(lex + 8) >= load64(lex + 16)) {
@@ -1090,13 +1096,13 @@ fn yar_next_token(lex) {
                 var id_len = load64(lex + 8) - start;
                 var id = str_from("$");
                 if (id_len > 0) {
-                    id = str_cat(str_from("$"), str_substr(load64(lex), start, id_len));
+                    id = str_cat(str_from("$"), str_substr(load64(lex), start, start + id_len));
                 }
                 return yar_token_new(YAR_TOK_DOLLAR, id);
             }
         }
         var id_len = load64(lex + 8) - start;
-        var id = str_cat(str_from("$"), str_substr(load64(lex), start, id_len));
+        var id = str_cat(str_from("$"), str_substr(load64(lex), start, start + id_len));
         return yar_token_new(YAR_TOK_DOLLAR, id);
     }
 
@@ -1107,7 +1113,7 @@ fn yar_next_token(lex) {
         while (load64(lex + 8) < load64(lex + 16)) {
             var c = load8(load64(lex + 24) + load64(lex + 8));
             if (c == 34) {
-                var sval = str_substr(load64(lex), start, load64(lex + 8) - start);
+                var sval = str_substr(load64(lex), start, load64(lex + 8));
                 store64(lex + 8, load64(lex + 8) + 1);  # skip closing quote
                 return yar_token_new(YAR_TOK_STRING_LIT, sval);
             }
@@ -1118,7 +1124,7 @@ fn yar_next_token(lex) {
             }
         }
         # Unterminated string
-        var sval = str_substr(load64(lex), start, load64(lex + 8) - start);
+        var sval = str_substr(load64(lex), start, load64(lex + 8));
         return yar_token_new(YAR_TOK_STRING_LIT, sval);
     }
 
@@ -1136,14 +1142,14 @@ fn yar_next_token(lex) {
                         var d = hex_digit_value(load8(load64(lex + 24) + load64(lex + 8)));
                         if (d < 0) {
                             var tok = yar_token_new(YAR_TOK_NUMBER,
-                              str_substr(load64(lex), start, load64(lex + 8) - start));
+                              str_substr(load64(lex), start, load64(lex + 8)));
                             store64(tok + 16, val);
                             return tok;
                         }
                         val = (val << 4) | d;
                         store64(lex + 8, load64(lex + 8) + 1);
                     }
-                    var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+                    var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8)));
                     store64(tok + 16, val);
                     return tok;
                 }
@@ -1156,18 +1162,18 @@ fn yar_next_token(lex) {
                     val = val * 10 + (d - 48);
                     store64(lex + 8, load64(lex + 8) + 1);
                 } else {
-                    var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+                    var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8)));
                     store64(tok + 16, val);
                     return tok;
                 }
             } else {
-                var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+                var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8)));
                 store64(tok + 16, val);
                 return tok;
             }
         }
         # Handle suffix multipliers (KB, MB)
-        var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8) - start));
+        var tok = yar_token_new(YAR_TOK_NUMBER, str_substr(load64(lex), start, load64(lex + 8)));
         store64(tok + 16, val);
         return tok;
     }
@@ -1180,11 +1186,11 @@ fn yar_next_token(lex) {
                 store64(lex + 8, load64(lex + 8) + 1);
             } else {
                 store64(lex + 8, load64(lex + 8));
-                var word = str_substr(load64(lex), start, load64(lex + 8) - start);
+                var word = str_substr(load64(lex), start, load64(lex + 8));
                 return yar_classify_keyword(word);
             }
         }
-        var word = str_substr(load64(lex), start, load64(lex + 8) - start);
+        var word = str_substr(load64(lex), start, load64(lex + 8));
         return yar_classify_keyword(word);
     }
 
@@ -1233,7 +1239,7 @@ fn yar_parser_new(src) {
     store64(p, yar_lexer_new(src));
     store64(p + 8, yar_next_token(load64(p)));
     store64(p + 16, vec_new());
-    store64(p + 24, map_new());
+    store64(p + 24, map_new_str());  # pattern id (a Str: "$a") -> index
     return p;
 }
 
@@ -1275,7 +1281,11 @@ fn yar_parse_size(parser) {
 # Parse the strings section
 fn yar_parse_strings(parser) {
     store64(parser + 16, vec_new());
-    store64(parser + 24, map_new());
+    # Str-keyed: pattern ids are Strs ("$a"). Until 1.3.3 this was map_new(),
+    # a cstr-keyed map, so a Str key hashed its header's bytes and no `$name`
+    # in a condition ever resolved (only the first string, via the index-0
+    # fallback below). `$a and $b` therefore never matched.
+    store64(parser + 24, map_new_str());
 
     # Expect "strings" ":"
     # "strings" was already consumed; expect ":"
